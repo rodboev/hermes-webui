@@ -2322,7 +2322,7 @@ body.resizing .sidebar{transition:none!important;}
 .tool-card-more{background:none;border:none;color:var(--blue);font-size:10px;cursor:pointer;padding:3px 0 0;opacity:.7;display:block;}
 .tool-card-more:hover{opacity:1;}
 /* Subagent cards: indented with accent border */
-.tool-card-subagent{border-left:2px solid var(--accent-bg);margin-left:8px;}
+.tool-card.tool-card-subagent{border-left:2px solid var(--accent-bg);margin-left:8px;}
 /* Token usage badge below assistant messages */
 .msg-usage{font-size:11px;color:var(--muted);opacity:.6;margin-top:2px;padding-left:42px;}
 .msg-usage:hover{opacity:1;}
