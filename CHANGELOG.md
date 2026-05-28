@@ -12,6 +12,8 @@
 
 - Title-language detection no longer treats common English tech/jargon text such as "session die" or DAS/DER references as German just because of shared tokens. (Refs #3040)
 
+- Clarify prompt SSE fallback polling now preserves its owner session id, matching approval polling behavior so terminal events from another session cannot stop the active clarify fallback poller.
+
 ## [v0.51.152] — 2026-05-28 — Release DX (stage-batch34 — single-PR optional gateway-backed browser chat)
 
 ### Added

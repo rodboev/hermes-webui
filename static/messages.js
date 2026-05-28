@@ -3147,7 +3147,8 @@ function startClarifyPolling(sid) {
   });
 
   _clarifyEventSource.onerror = function() {
-    stopClarifyPolling();
+    if (_clarifyEventSource) { try { _clarifyEventSource.close(); } catch(_){} _clarifyEventSource = null; }
+    if (_clarifyHealthTimer) { clearInterval(_clarifyHealthTimer); _clarifyHealthTimer = null; }
     _startClarifyFallbackPoll(sid);
   };
 
@@ -3177,6 +3178,7 @@ function startClarifyPolling(sid) {
 }
 
 function _startClarifyFallbackPoll(sid) {
+  _clarifyPollingSessionId = sid || null;
   _clarifyFallbackTimer = setInterval(async () => {
     if (!S.session || S.session.session_id !== sid) {
       stopClarifyPolling(); _hideClarifyCardIfOwner(sid, true, 'session'); return;
