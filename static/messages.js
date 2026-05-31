@@ -2989,6 +2989,7 @@ function showClarifyCard(pending) {
     question,
     choices,
     sid: pending._session_id || (S.session && S.session.session_id) || null,
+    clarify_id: pending.clarify_id || null,
   });
   const card = _ensureClarifyCardDom();
   if (!card) return;
