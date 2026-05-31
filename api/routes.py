@@ -5247,9 +5247,24 @@ def handle_get(handler, parsed) -> bool:
         elif alive is False:
             running = False
             configured = True
-        else:  # alive is None → gateway not configured / unavailable
+        else:  # alive is None
+            # `alive is None` conflates two very different states:
+            #   (a) no gateway metadata at all → genuinely not configured
+            #   (b) gateway metadata EXISTS but is stale/inconclusive (e.g. a
+            #       freshly-started gateway that hasn't ticked yet, or a
+            #       cross-container gateway whose running-state went stale).
+            # Case (b) still proves a gateway is *configured* — the banner
+            # must not report "Gateway not configured" just because no
+            # conversation has happened yet and identity_map is empty (#3194).
+            details = health.get("details") or {}
+            has_gateway_metadata = bool(details.get("gateway_state")) or (
+                details.get("reason") in {
+                    "gateway_stale_running_state",
+                    "gateway_stale_stopped_state",
+                }
+            )
+            configured = True if has_gateway_metadata else bool(identity_map)
             running = bool(identity_map)
-            configured = bool(identity_map)
 
         platforms_set: set[str] = set()
         for meta in identity_map.values():
