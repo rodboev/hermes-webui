@@ -306,38 +306,45 @@ def _runtime_detail_subset(runtime_status: dict[str, Any] | None) -> dict[str, A
 
 _REMOTE_PROBE_TIMEOUT_S: float = 2.0
 _REMOTE_PROBE_CACHE_TTL_S: float = 5.0
-_REMOTE_PROBE_PATHS: tuple[str, ...] = ("/health", "/status", "/api/gateway/status")
+_REMOTE_PROBE_PATHS: tuple[str, ...] = ("/health/detailed", "/health", "/v1/health")
 
 _remote_probe_lock = threading.Lock()
 _remote_probe_cache: dict[str, Any] = {"url": None, "expires_at": 0.0, "result": None}
 
 
 def _remote_gateway_base_url() -> str | None:
-    raw = os.environ.get("HERMES_API_URL")
-    if not isinstance(raw, str):
-        return None
-    url = raw.strip()
-    if not url:
-        return None
-    return url.rstrip("/")
+    """Return an explicit remote gateway base URL, or None for local-only setups.
+
+    Priority: GATEWAY_HEALTH_URL > HERMES_GATEWAY_HEALTH_URL > HERMES_API_URL.
+    Returns ``None`` when no env var is set so the caller falls through to
+    local PID/state checks.
+    """
+    for var in ("GATEWAY_HEALTH_URL", "HERMES_GATEWAY_HEALTH_URL", "HERMES_API_URL"):
+        val = os.environ.get(var, "").strip()
+        if val:
+            return val.rstrip("/")
+    return None
 
 
-def _http_probe(url: str, timeout_s: float) -> tuple[bool, int | None, str | None]:
-    """GET ``url`` and return (ok, status_code, error_name).
+def _http_probe(url: str, timeout_s: float) -> tuple[bool, int | None, str | None, bytes | None]:
+    """GET ``url`` and return (ok, status_code, error_name, body).
 
     ``ok`` is True only for a 2xx response. 5xx and network errors are not OK.
     4xx is also treated as "responded" (the gateway is up, just answering 404
     on this particular path) so the caller can move on to the next path.
+    ``body`` is the raw response bytes for 2xx responses, None otherwise.
     """
     req = urllib_request.Request(url, method="GET")
     try:
         with urllib_request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 - trusted env var URL
             status = getattr(resp, "status", None) or resp.getcode()
-            return (200 <= int(status) < 300, int(status), None)
+            ok = 200 <= int(status) < 300
+            body = resp.read() if ok else None
+            return (ok, int(status), None, body)
     except urllib_error.HTTPError as exc:
-        return (False, int(exc.code), "HTTPError")
+        return (False, int(exc.code), "HTTPError", None)
     except Exception as exc:  # urllib_error.URLError, socket.timeout, ssl, etc.
-        return (False, None, type(exc).__name__)
+        return (False, None, type(exc).__name__, None)
 
 
 def _probe_remote_gateway(base_url: str, *, now: float | None = None) -> dict[str, Any]:
@@ -360,17 +367,25 @@ def _probe_remote_gateway(base_url: str, *, now: float | None = None) -> dict[st
     last_status: int | None = None
     last_error: str | None = None
     for path in _REMOTE_PROBE_PATHS:
-        ok, status, err = _http_probe(base_url + path, _REMOTE_PROBE_TIMEOUT_S)
+        ok, status, err, body = _http_probe(base_url + path, _REMOTE_PROBE_TIMEOUT_S)
         if ok:
+            details: dict[str, Any] = {
+                "state": "alive",
+                "reason": "remote_gateway",
+                "endpoint": base_url + path,
+                "status_code": status,
+            }
+            if body:
+                try:
+                    data = json.loads(body)
+                    if isinstance(data, dict) and "gateway_state" in data:
+                        details["gateway_state"] = data["gateway_state"]
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass
             payload = {
                 "alive": True,
                 "checked_at": _checked_at(),
-                "details": {
-                    "state": "alive",
-                    "reason": "remote_gateway",
-                    "endpoint": base_url + path,
-                    "status_code": status,
-                },
+                "details": details,
             }
             break
         # Remember the most informative failure signal we saw.
