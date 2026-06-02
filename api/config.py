@@ -704,6 +704,7 @@ _PROVIDER_DISPLAY = {
     "openrouter": "OpenRouter",
     "anthropic": "Anthropic",
     "openai": "OpenAI",
+    "openai-api": "OpenAI API",
     "openai-codex": "OpenAI Codex",
     "xai-oauth": "xAI Grok OAuth",
     "copilot": "GitHub Copilot",
@@ -786,12 +787,6 @@ _PROVIDER_ALIASES = {
     # lets the agent's auxiliary client take the ``no-key-required``
     # OpenAI-compat path. See #1384.
     "local": "custom",
-    # hermes-agent's built-in OpenAI provider (activated by OPENAI_API_KEY /
-    # OPENAI_BASE_URL env vars) registers as ``openai-api`` in
-    # ``hermes_cli.auth.PROVIDER_REGISTRY``.  Without this alias, GPT models
-    # from that slug fall through the group builder and are invisible in the
-    # picker.  Same shape as #815 and #1384.
-    "openai-api": "openai",
 }
 
 
@@ -1062,6 +1057,12 @@ _PROVIDER_MODELS = {
         {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
     ],
     "openai": [
+        {"id": "gpt-5.5",      "label": "GPT-5.5"},
+        {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
+        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "gpt-5.4",      "label": "GPT-5.4"},
+    ],
+    "openai-api": [
         {"id": "gpt-5.5",      "label": "GPT-5.5"},
         {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
         {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},

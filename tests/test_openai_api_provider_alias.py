@@ -1,33 +1,56 @@
-"""openai-api → openai provider alias.
+"""openai-api as a first-class picker provider.
 
-hermes-agent reports its built-in OpenAI provider as ``openai-api``
-(the slug in ``hermes_cli.auth.PROVIDER_REGISTRY``).  Without an alias,
-GPT models from that provider slug are invisible in the WebUI model
-picker because the slug doesn't match the ``openai`` group key in
-``_PROVIDER_MODELS``.
+hermes-agent registers its built-in OpenAI provider as ``openai-api`` in
+``hermes_cli.auth.PROVIDER_REGISTRY``.  The WebUI must recognise this
+slug in ``_PROVIDER_DISPLAY`` and ``_PROVIDER_MODELS`` so that GPT
+models appear in the picker AND the session ``model_provider`` stays
+``openai-api`` on the send path (where the agent resolves it against
+its own registry).
 
-Same shape as #815 (``z.ai`` → ``zai``) and #1384 (``local`` →
-``custom``).
+An alias-only approach (``openai-api`` → ``openai``) fixes display but
+breaks the send path because ``openai`` is not a registered provider in
+the agent.  See PR review discussion on #3444.
 """
 
 import api.config as cfg
 
 
-class TestOpenaiApiProviderAlias:
-    """``_resolve_provider_alias`` must rewrite ``openai-api`` → ``openai``."""
+class TestOpenaiApiPickerProvider:
+    """openai-api must be a first-class picker provider, not an alias."""
 
-    def test_openai_api_resolves_to_openai(self):
-        assert cfg._resolve_provider_alias("openai-api") == "openai"
+    def test_provider_display_registered(self):
+        assert "openai-api" in cfg._PROVIDER_DISPLAY
 
-    def test_openai_api_case_insensitive(self):
-        assert cfg._resolve_provider_alias("OPENAI-API") == "openai"
-        assert cfg._resolve_provider_alias("OpenAI-API") == "openai"
+    def test_provider_models_registered(self):
+        assert "openai-api" in cfg._PROVIDER_MODELS
+        assert len(cfg._PROVIDER_MODELS["openai-api"]) > 0
 
-    def test_alias_table_contains_entry(self):
-        assert cfg._PROVIDER_ALIASES.get("openai-api") == "openai", (
-            "_PROVIDER_ALIASES must map 'openai-api' → 'openai'"
-        )
+    def test_not_aliased(self):
+        assert "openai-api" not in cfg._PROVIDER_ALIASES
+
+    def test_canonicalise_preserves_slug(self):
+        assert cfg._canonicalise_provider_id("openai-api") == "openai-api"
 
     def test_openai_canonical_unchanged(self):
-        """The canonical slug 'openai' must pass through unchanged."""
-        assert cfg._resolve_provider_alias("openai") == "openai"
+        assert cfg._canonicalise_provider_id("openai") == "openai"
+
+    def test_openai_codex_unchanged(self):
+        assert cfg._canonicalise_provider_id("openai-codex") == "openai-codex"
+
+
+class TestOpenaiApiSendPath:
+    """The send path must preserve openai-api, not collapse it to openai."""
+
+    def test_resolve_model_provider_preserves_openai_api(self, monkeypatch):
+        monkeypatch.setattr(cfg, "cfg", {
+            "model": {"provider": "openai-api", "default": "gpt-5.5"},
+        })
+        _model, provider, _base_url = cfg.resolve_model_provider("gpt-5.5")
+        assert provider == "openai-api"
+
+    def test_model_with_provider_context_preserves_openai_api(self, monkeypatch):
+        monkeypatch.setattr(cfg, "cfg", {
+            "model": {"provider": "openai-api", "default": "gpt-5.5"},
+        })
+        result = cfg.model_with_provider_context("gpt-5.5", "openai-api")
+        assert "openai" not in result or "openai-api" in result
