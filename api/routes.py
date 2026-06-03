@@ -6440,6 +6440,7 @@ def handle_post(handler, parsed) -> bool:
         with _get_session_agent_lock(body["session_id"]):
             s.title = str(body["title"]).strip()[:80] or "Untitled"
             s.save()
+        _sync_session_title_to_insights(s)
         publish_session_list_changed("session_rename")
         return j(handler, {"session": s.compact()})
 
