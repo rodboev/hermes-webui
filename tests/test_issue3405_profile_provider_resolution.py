@@ -24,13 +24,8 @@ Coverage:
 8. Missing/empty profile config results in no injection
 9. Streaming worker enrichment tests
 """
-import os
-import pathlib
 from pathlib import Path
 from unittest.mock import patch
-
-
-REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 
 
 class TestProfileProviderResolution:
