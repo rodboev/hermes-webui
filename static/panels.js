@@ -58,7 +58,9 @@ function syncAppTitlebar() {
     mainText = S.session.title || (typeof t === 'function' ? t('untitled') : 'Untitled');
     const vis = Array.isArray(S.messages) ? S.messages.filter(m => m && m.role && m.role !== 'tool') : [];
     if (typeof t === 'function') subText = t('n_messages', vis.length);
-    if (S.session.is_cli_session) sourceLabel = S.session.source_label || S.session.source_tag || S.session.raw_source || '';
+    sourceLabel = S.session.source_label || S.session.source_tag || S.session.raw_source || '';
+    // Recovered sidecars stamp source_label 'WebUI' (api/session_recovery.py); don't badge a native session as its own source (#3338).
+    if (/^webui$/i.test(sourceLabel)) sourceLabel = '';
   } else {
     const key = APP_TITLEBAR_KEYS[panel];
     mainText = key && typeof t === 'function' ? t(key) : (panel.charAt(0).toUpperCase() + panel.slice(1));

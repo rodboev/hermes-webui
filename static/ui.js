@@ -5513,7 +5513,9 @@ function syncTopbar(){
   const vis=S.messages.filter(m=>m&&m.role&&m.role!=='tool');
   const _topbarMeta=$('topbarMeta');
   if(_topbarMeta){
-    const sourceLabel=(S.session&&S.session.is_cli_session&&(S.session.source_label||S.session.source_tag||S.session.raw_source))||'';
+    let sourceLabel=(S.session&&(S.session.source_label||S.session.source_tag||S.session.raw_source))||'';
+    // Recovered sidecars stamp source_label 'WebUI' (api/session_recovery.py); don't badge a native session as its own source (#3338).
+    if(/^webui$/i.test(sourceLabel)) sourceLabel='';
     const metaText=t('n_messages',vis.length);
     _topbarMeta.textContent=metaText;
     if(sourceLabel){
