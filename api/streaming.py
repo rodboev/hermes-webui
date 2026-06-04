@@ -4720,6 +4720,11 @@ def _run_agent_streaming(
 
             def on_interim_assistant(text, **cb_kwargs):
                 nonlocal _current_reasoning_idx
+                # Advance the per-message reasoning index unconditionally (#3587):
+                # even if this callback fires with empty text, a new assistant
+                # segment is starting and subsequent reasoning must be attributed
+                # to the next message.
+                _current_reasoning_idx += 1
                 if text is None:
                     return
                 visible = str(text).strip()
@@ -4730,10 +4735,6 @@ def _run_agent_streaming(
                     'text': visible,
                     'already_streamed': already_streamed,
                 })
-                # A new assistant segment is starting after tool results; advance the
-                # per-message reasoning index so subsequent reasoning deltas are
-                # attributed to the next assistant message (#3587).
-                _current_reasoning_idx += 1
 
             # Pre-initialise the activity counter here so on_tool (which
             # closes over it) never captures an unbound name even if this
