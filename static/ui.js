@@ -7247,6 +7247,14 @@ function renderMessages(options){
   }
 }
 
+const _MEMORY_SKILL_TOOLS = new Set(['memory', 'skill_manage']);
+const _MEMORY_SKILL_WRITE_ACTIONS = new Set(['save', 'create', 'update', 'upsert']);
+function _isMemorySkillWrite(tc) {
+  if (!tc || !_MEMORY_SKILL_TOOLS.has(tc.name)) return false;
+  if (tc.done === false || tc.is_error) return false;
+  const action = tc.args && (tc.args.action || tc.args.command || '');
+  return _MEMORY_SKILL_WRITE_ACTIONS.has(String(action).toLowerCase());
+}
 function _toolDisplayName(tc){
   const name=(tc&&tc.name)||'tool';
   if(name==='subagent_progress') return 'Subagent';
@@ -7379,6 +7387,7 @@ function buildToolCard(tc){
         </div>`:''}
       </div>`:''}
     </div>`;
+  row._tcData = tc;
   return row;
 }
 
@@ -7428,9 +7437,16 @@ function _syncToolCallGroupSummary(group){
   const label=group.querySelector('.tool-call-group-label');
   const durationEl=group.querySelector('.tool-call-group-duration');
   if(label){
+    const allRows = Array.from(group.querySelectorAll('.tool-card-row'));
+    const memCount = allRows.filter(c => c._tcData && _isMemorySkillWrite(c._tcData) && c._tcData.name === 'memory').length;
+    const skillCount = allRows.filter(c => c._tcData && _isMemorySkillWrite(c._tcData) && c._tcData.name === 'skill_manage').length;
+    const otherCount = toolCount - memCount - skillCount;
+    let suffix = '';
+    if (memCount) suffix += `, ${memCount} ${memCount===1?'memory':'memories'} saved`;
+    if (skillCount) suffix += `, ${skillCount} ${skillCount===1?'skill':'skills'} updated`;
     if(group.getAttribute('data-live-tool-call-group')==='1'){
-      label.textContent=toolCount?`Activity: ${toolCount} tool${toolCount===1?'':'s'}`:'Activity · Running';
-    }else if(toolCount) label.textContent=`Activity: ${toolCount} tool${toolCount===1?'':'s'}`;
+      label.textContent=otherCount?`Activity: ${otherCount} tool${otherCount===1?'':'s'}${suffix}`:(suffix?'Activity'+suffix:'Activity · Running');
+    }else if(otherCount||suffix) label.textContent=otherCount?`Activity: ${otherCount} tool${otherCount===1?'':'s'}${suffix}`:'Activity'+suffix;
     else label.textContent='Activity';
     label.setAttribute('data-sweep-label', label.textContent);
   }
