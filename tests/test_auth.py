@@ -1,14 +1,13 @@
 """Unit tests for cookie security hardening (Issue #1909, Slice 3).
 
 Covers:
-- SameSite=Strict on the auth cookie
+- SameSite=Lax on the auth cookie
 - _is_loopback() helper
 - _is_secure_context() priority logic:
     1. HERMES_WEBUI_SECURE override
     2. Direct TLS (getpeercert)
     3. HERMES_WEBUI_TRUST_FORWARDED_PROTO opt-in for X-Forwarded-Proto
-    4. Non-loopback default-Secure
-    5. Loopback plain-HTTP → not Secure
+    4. Otherwise -> not Secure (plain HTTP, regardless of client address)
 """
 
 import http.cookies
@@ -91,11 +90,11 @@ def test_is_loopback_rfc1918_not_loopback():
     assert _is_loopback('192.168.1.1') is False
 
 
-# ── samesite=Strict tests ────────────────────────────────────────────────────
+# ── samesite=Lax tests ──────────────────────────────────────────────────────
 
 
-def test_samesite_strict_in_cookie(monkeypatch):
-    """set_auth_cookie must emit SameSite=Strict."""
+def test_samesite_lax_in_cookie(monkeypatch):
+    """set_auth_cookie must emit SameSite=Lax."""
     monkeypatch.delenv('HERMES_WEBUI_SECURE', raising=False)
     handler = _MockHandler()
     set_auth_cookie(handler, 'test-token-value')
@@ -105,7 +104,7 @@ def test_samesite_strict_in_cookie(monkeypatch):
     c = http.cookies.SimpleCookie()
     c.load(cookie_header)
     assert COOKIE_NAME in c
-    assert c[COOKIE_NAME]['samesite'].lower() == 'strict'
+    assert c[COOKIE_NAME]['samesite'].lower() == 'lax'
 
 
 # ── _is_secure_context tests ─────────────────────────────────────────────────
@@ -119,12 +118,28 @@ def test_secure_not_set_for_loopback(monkeypatch):
     assert _is_secure_context(handler) is False
 
 
-def test_secure_set_for_non_loopback(monkeypatch):
-    """Non-loopback client with no TLS and no env vars → secure by default."""
+def test_plain_http_non_loopback_not_secure(monkeypatch):
+    """Plain HTTP from a LAN IP must NOT set Secure. Regression test for PR #3562."""
     monkeypatch.delenv('HERMES_WEBUI_SECURE', raising=False)
     monkeypatch.delenv('HERMES_WEBUI_TRUST_FORWARDED_PROTO', raising=False)
     handler = _MockHandler(client_address=('10.0.0.1', 9999))
-    assert _is_secure_context(handler) is True
+    assert _is_secure_context(handler) is False
+
+
+def test_plain_http_rfc1918_class_a_not_secure(monkeypatch):
+    """192.168.x.x over plain HTTP must not be secure."""
+    monkeypatch.delenv('HERMES_WEBUI_SECURE', raising=False)
+    monkeypatch.delenv('HERMES_WEBUI_TRUST_FORWARDED_PROTO', raising=False)
+    handler = _MockHandler(client_address=('192.168.1.50', 9999))
+    assert _is_secure_context(handler) is False
+
+
+def test_plain_http_tailscale_not_secure(monkeypatch):
+    """Tailscale CGNAT range (100.64.x.x) over plain HTTP must not be secure."""
+    monkeypatch.delenv('HERMES_WEBUI_SECURE', raising=False)
+    monkeypatch.delenv('HERMES_WEBUI_TRUST_FORWARDED_PROTO', raising=False)
+    handler = _MockHandler(client_address=('100.64.0.1', 9999))
+    assert _is_secure_context(handler) is False
 
 
 def test_trust_forwarded_proto_opt_in(monkeypatch):
@@ -160,7 +175,7 @@ def test_hermes_webui_secure_override_on(monkeypatch):
 def test_hermes_webui_secure_override_off(monkeypatch):
     """HERMES_WEBUI_SECURE=0 forces secure False regardless of other conditions."""
     monkeypatch.setenv('HERMES_WEBUI_SECURE', '0')
-    # Non-loopback address would normally yield True, but override wins
+    # Explicit override must win even for non-loopback addresses
     handler = _MockHandler(client_address=('10.0.0.1', 9999))
     assert _is_secure_context(handler) is False
 

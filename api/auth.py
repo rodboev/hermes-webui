@@ -559,12 +559,11 @@ def _is_secure_context(handler=None) -> bool:
     """Return True if cookies should carry the Secure flag.
 
     Priority order:
-    1. ``HERMES_WEBUI_SECURE`` env var: 1/true/yes → True; 0/false/no → False.
-    2. Direct TLS socket (handler.request.getpeercert present) → True.
+    1. ``HERMES_WEBUI_SECURE`` env var: 1/true/yes -> True; 0/false/no -> False.
+    2. Direct TLS socket (handler.request.getpeercert present) -> True.
     3. ``HERMES_WEBUI_TRUST_FORWARDED_PROTO=1`` opt-in: trust
        ``X-Forwarded-Proto: https`` header from a known reverse proxy.
-    4. Non-loopback client address → default Secure on.
-    5. Loopback with no TLS → False.
+    4. Otherwise -> False (loopback or non-loopback, plain HTTP is not secure).
 
     .. warning::
        ``X-Forwarded-Proto`` is only trustworthy behind a reverse proxy.
@@ -584,10 +583,6 @@ def _is_secure_context(handler=None) -> bool:
         if trust_fwd in ('1', 'true', 'yes'):
             if handler.headers.get('X-Forwarded-Proto', '') == 'https':
                 return True
-        _ca = getattr(handler, 'client_address', None)
-        client_ip = _ca[0] if _ca else '127.0.0.1'
-        if not _is_loopback(client_ip):
-            return True
     return False
 
 
@@ -596,7 +591,7 @@ def set_auth_cookie(handler, cookie_value) -> None:
     cookie = http.cookies.SimpleCookie()
     cookie[COOKIE_NAME] = cookie_value
     cookie[COOKIE_NAME]['httponly'] = True
-    cookie[COOKIE_NAME]['samesite'] = 'Strict'
+    cookie[COOKIE_NAME]['samesite'] = 'Lax'
     cookie[COOKIE_NAME]['path'] = '/'
     cookie[COOKIE_NAME]['max-age'] = str(_resolve_session_ttl())
     if _is_secure_context(handler):
