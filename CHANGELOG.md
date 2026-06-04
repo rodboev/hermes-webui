@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **"Refresh Models" button on Settings > Providers no longer 404s** (#3546). The frontend's `_refreshProviderModels` was POSTing to `/api/models/refresh`, but no route handled that path, so every click showed "Error: Not found". The backend's `invalidate_provider_models_cache` already existed; only the HTTP route was missing. The success path now also calls `_refreshModelDropdownsAfterProviderChange()` so the model picker rebuilds immediately after the cache bust. (@rodboev)
+
 ## [v0.51.252] — 2026-06-03 — Release HT (stage-q24 — selection-bleed fix + compatibility docs)
 
 ### Fixed
