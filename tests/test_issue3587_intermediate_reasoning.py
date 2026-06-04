@@ -1,0 +1,177 @@
+"""Regression tests for issue #3587: intermediate assistant message reasoning lost.
+
+During multi-turn streaming (assistant reasons → calls tool → reasons again →
+responds), the flat _reasoning_text accumulator was written only to the LAST
+assistant message on settlement. Intermediate assistant messages (before tool
+calls) permanently lost their reasoning traces.
+
+Fix: replace the flat accumulator with a per-message dict (_reasoning_segments),
+track assistant message transitions via on_interim_assistant, and iterate forward
+through s.messages on settlement so each assistant message receives its own
+reasoning segment.
+"""
+
+import pathlib
+import re
+
+REPO = pathlib.Path(__file__).parent.parent
+
+
+def read(rel):
+    return (REPO / rel).read_text(encoding='utf-8')
+
+
+# ── 1. Flat accumulator is replaced ──────────────────────────────────────────
+
+
+class TestAccumulatorReplaced:
+    """The flat string accumulator must be replaced by a per-message dict."""
+
+    def test_bare_string_declaration_removed(self):
+        src = read('api/streaming.py')
+        # The old declaration was exactly: _reasoning_text = ''
+        # It must no longer exist as a bare string assignment (the comment that
+        # mentions it by name is allowed, but the assignment itself must be gone).
+        assert "_reasoning_text = ''" not in src, (
+            "_reasoning_text = '' bare declaration must be replaced by the "
+            "per-message _reasoning_segments dict (#3587)"
+        )
+
+    def test_segments_dict_declared(self):
+        src = read('api/streaming.py')
+        assert '_reasoning_segments' in src, (
+            "_reasoning_segments dict must be declared in api/streaming.py"
+        )
+        assert '_current_reasoning_idx' in src, (
+            "_current_reasoning_idx counter must be declared in api/streaming.py"
+        )
+
+    def test_segments_dict_is_dict_type(self):
+        src = read('api/streaming.py')
+        # Declaration must be an empty dict, not a string
+        assert re.search(r'_reasoning_segments\s*(?::\s*dict\s*)?\=\s*\{\}', src), (
+            "_reasoning_segments must be initialized as an empty dict"
+        )
+
+
+# ── 2. on_reasoning indexes into per-message dict ────────────────────────────
+
+
+class TestOnReasoningPerMessageIndexing:
+    """The on_reasoning callback must index into _reasoning_segments using
+    _current_reasoning_idx instead of appending to a flat string."""
+
+    def _on_reasoning_body(self):
+        src = read('api/streaming.py')
+        m = re.search(
+            r'def on_reasoning\(text\):\s*\n(.*?)(?=\n\s{12}def |\n\s{8}def )',
+            src, re.DOTALL,
+        )
+        assert m, "on_reasoning function not found in api/streaming.py"
+        return m.group(1)
+
+    def test_on_reasoning_uses_segments_not_flat_string(self):
+        body = self._on_reasoning_body()
+        assert '_reasoning_segments' in body, (
+            "on_reasoning must accumulate into _reasoning_segments, not a flat string"
+        )
+        assert "_reasoning_text +=" not in body, (
+            "on_reasoning must not use the old flat _reasoning_text += pattern"
+        )
+
+    def test_on_reasoning_indexes_by_current_idx(self):
+        body = self._on_reasoning_body()
+        assert '_current_reasoning_idx' in body, (
+            "on_reasoning must reference _current_reasoning_idx to attribute "
+            "reasoning deltas to the correct assistant message"
+        )
+
+    def test_stream_reasoning_text_mirror_still_present(self):
+        """cancel_stream() uses STREAM_REASONING_TEXT for its own partial-message
+        persist path; this mirror must remain even after the per-message fix."""
+        body = self._on_reasoning_body()
+        assert 'STREAM_REASONING_TEXT' in body, (
+            "on_reasoning must still mirror to STREAM_REASONING_TEXT so "
+            "cancel_stream() can persist reasoning on mid-stream cancellation"
+        )
+
+
+# ── 3. on_interim_assistant advances the index ───────────────────────────────
+
+
+class TestInterimAssistantAdvancesIndex:
+    """on_interim_assistant fires when a new assistant segment starts after tool
+    results. It must increment _current_reasoning_idx so subsequent reasoning
+    deltas are attributed to the next assistant message."""
+
+    def _interim_body(self):
+        src = read('api/streaming.py')
+        m = re.search(
+            r'def on_interim_assistant\(text.*?\):\s*\n(.*?)(?=\n\s{12}def |\n\s{8}def )',
+            src, re.DOTALL,
+        )
+        assert m, "on_interim_assistant function not found in api/streaming.py"
+        return m.group(1)
+
+    def test_interim_assistant_increments_idx(self):
+        body = self._interim_body()
+        assert '_current_reasoning_idx' in body, (
+            "on_interim_assistant must increment _current_reasoning_idx to "
+            "advance the per-message reasoning segment pointer (#3587)"
+        )
+        assert re.search(r'_current_reasoning_idx\s*\+=\s*1', body), (
+            "on_interim_assistant must use += 1 to advance the segment index"
+        )
+
+
+# ── 4. Settlement loop iterates forward, not reversed+break ──────────────────
+
+
+class TestSettlementLoopForward:
+    """The settlement loop must iterate forward through s.messages so each
+    assistant message can be matched to its own reasoning segment by index.
+    The old reversed()+break pattern only wrote reasoning to the last message."""
+
+    def _settlement_block(self):
+        """Extract the reasoning-persistence settlement block from streaming.py."""
+        src = read('api/streaming.py')
+        # Anchor on the comment that appears just before the settlement block
+        start = src.find('# #3587: use per-message segments')
+        assert start >= 0, (
+            "Settlement block comment '#3587: use per-message segments' not found; "
+            "the block may have been moved or the comment changed"
+        )
+        # Grab enough context to cover the loop
+        return src[start:start + 1500]
+
+    def test_settlement_does_not_reverse_iterate_with_break(self):
+        block = self._settlement_block()
+        # The old pattern was: for _rm in reversed(s.messages): ... break
+        # Both conditions must be gone from the settlement block.
+        has_reversed_break = (
+            'reversed(s.messages)' in block and
+            re.search(r'\bbreak\b', block)
+        )
+        assert not has_reversed_break, (
+            "Settlement loop must not use reversed(s.messages)+break; "
+            "that pattern writes reasoning only to the last assistant message"
+        )
+
+    def test_settlement_iterates_forward_with_counter(self):
+        block = self._settlement_block()
+        # Forward iteration with an assistant counter
+        assert 'for _rm in s.messages' in block, (
+            "Settlement loop must iterate forward (for _rm in s.messages) "
+            "to match each assistant message to its reasoning segment"
+        )
+        assert '_asst_count' in block, (
+            "Settlement loop must use an assistant message counter (_asst_count) "
+            "to index into _reasoning_segments"
+        )
+
+    def test_settlement_reads_from_segments_dict(self):
+        block = self._settlement_block()
+        assert '_reasoning_segments.get' in block, (
+            "Settlement loop must read from _reasoning_segments.get(idx) "
+            "to retrieve the per-message reasoning trace"
+        )
