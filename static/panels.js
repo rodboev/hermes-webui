@@ -7213,7 +7213,7 @@ async function _refreshProviderModels(providerId, btn){
       showToast(res.error||'Failed to refresh models');
     }
   }catch(e){
-    showToast('Error: '+e.message);
+    showToast(e.status===404?'Refresh not available for this provider.':(e.message||'Failed to refresh models'));
   }finally{
     btn.disabled=false;
     btn.innerHTML=orig;
