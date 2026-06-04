@@ -1321,9 +1321,9 @@
   .approval-card.visible .approval-inner{transform:translateY(0);opacity:1;}
   .approval-header{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;font-weight:600;color:var(--error);}
   .approval-collapse{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:1px solid var(--border2);border-radius:999px;background:var(--surface);color:var(--muted);font:inherit;padding:0;cursor:pointer;}
-  .approval-collapse:hover,.approval-collapse:focus-visible{color:var(--text);border-color:var(--accent-bg-strong);outline:none;}
+  .approval-collapse:hover{color:var(--text);border-color:var(--accent-bg-strong);}
   .approval-collapse svg{width:14px;height:14px;display:block;}
-  .approval-collapse:focus{outline:2px solid var(--blue);outline-offset:2px;}
+  .approval-collapse:focus-visible{outline:2px solid var(--blue);outline-offset:2px;}
   .approval-card.collapsed{max-height:56px;bottom:8px;}
   .approval-card.collapsed .approval-inner{max-height:48px;overflow:hidden;padding:10px 14px;}
   .approval-card.collapsed .approval-header{margin-bottom:0;}
