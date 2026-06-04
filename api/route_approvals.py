@@ -3,7 +3,6 @@
 State-extraction prelude to the routes.py split tracked in #1907.
 Extracts approval state, not handlers, by design.
 """
-import logging
 import queue
 import threading
 import uuid

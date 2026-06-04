@@ -4,8 +4,6 @@ Verifies that api.route_approvals is self-contained and that api.routes
 re-exports the same live objects (not copies) so existing callers are
 unaffected by the move.
 """
-import pytest
-
 
 def test_route_approvals_imports():
     from api.route_approvals import submit_pending, _approval_sse_subscribers

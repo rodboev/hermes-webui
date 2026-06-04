@@ -2918,7 +2918,7 @@ from api.oauth import (
 
 # Approval system -- state and helpers live in api.route_approvals; imported
 # here for backward compatibility so existing call sites continue to resolve.
-from api.route_approvals import (
+from api.route_approvals import (  # noqa: F401 — re-exports for backward compat
     _submit_pending_raw,
     approve_session,
     approve_permanent,
