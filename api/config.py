@@ -184,9 +184,10 @@ def _discover_python(agent_dir: Path) -> str:
             return str(venv_py_win)
 
     # Local .venv inside this repo
-    local_venv = REPO_ROOT / ".venv" / "bin" / "python"
-    if local_venv.exists():
-        return str(local_venv)
+    for subdir, binary in (("bin", "python"), ("Scripts", "python.exe")):
+        local_venv = REPO_ROOT / ".venv" / subdir / binary
+        if local_venv.exists():
+            return str(local_venv)
 
     # Fall back to system python3
     import shutil
