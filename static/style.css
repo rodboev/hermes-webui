@@ -3844,38 +3844,42 @@ main.main > #mainPlugin{display:none;}
 
 /* ── CLI / Agent session items in sidebar ── */
 .session-item.cli-session {
-  padding-right: 40px; /* make room for the session actions trigger */
+  padding-right: 6px;
 }
-.session-item.cli-session::after {
-  content: attr(data-source);
+/* Source chip (pill) in the sidebar title row */
+.session-source-chip {
   font-size: 9px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: .04em;
   color: var(--accent-text);
-  opacity: .5;
-  margin-left: auto;
+  opacity: .65;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(128, 128, 128, 0.12);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
   flex-shrink: 0;
-  pointer-events: none; /* don't block clicks on session-actions beneath */
+  line-height: 1.4;
+  white-space: nowrap;
 }
-.session-item.cli-session:not(.read-only-session):hover::after {
-  display: none; /* hide badge on hover so the session menu trigger stays clear */
+.session-item:not(.read-only-session):hover .session-source-chip {
+  display: none;
 }
-.session-item.cli-session.read-only-session:hover::after {
-  opacity: .75;
+.session-item.read-only-session:hover .session-source-chip {
+  opacity: .85;
 }
-.session-item.cli-session.menu-open::after {
+.session-item.menu-open .session-source-chip {
   display: none;
 }
 /* Source-specific colors for gateway sessions */
 .session-item.cli-session[data-source-key="telegram"] { border-left-color: rgba(0, 136, 204, 0.55); }
-.session-item.cli-session[data-source-key="telegram"]::after { color: rgba(0, 136, 204, 0.55); }
+.session-source-chip[data-source-key="telegram"] { color: rgba(0, 136, 204, 0.85); background: rgba(0, 136, 204, 0.12); }
 .session-item.cli-session[data-source-key="discord"] { border-left-color: #5865F2; }
-.session-item.cli-session[data-source-key="discord"]::after { color: #5865F2; }
+.session-source-chip[data-source-key="discord"] { color: #5865F2; background: rgba(88, 101, 242, 0.12); }
 .session-item.cli-session[data-source-key="slack"] { border-left-color: #4A154B; }
-.session-item.cli-session[data-source-key="slack"]::after { color: #4A154B; }
+.session-source-chip[data-source-key="slack"] { color: #4A154B; background: rgba(74, 21, 75, 0.12); }
 .session-item.cli-session[data-source-key="claude_code"] { border-left-color: rgba(217, 119, 6, 0.65); }
-.session-item.cli-session[data-source-key="claude_code"]::after { color: rgba(217, 119, 6, 0.85); }
+.session-source-chip[data-source-key="claude_code"] { color: rgba(217, 119, 6, 0.85); background: rgba(217, 119, 6, 0.12); }
 
 /* ═══════════════════════════════════════════════════════════════════
    Messages redesign — additive overrides for the transcript area.
