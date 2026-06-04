@@ -344,7 +344,7 @@ def read_importable_agent_session_rows(
     db_path: Path,
     limit: int = 200,
     log=None,
-    exclude_sources: tuple[str, ...] | None = ("cron", "webui"),
+    exclude_sources: tuple[str, ...] | None = ("webui",),
 ) -> list[dict]:
     """Return agent sessions projected as importable conversations.
 
@@ -354,11 +354,11 @@ def read_importable_agent_session_rows(
     segments as separate conversations, so both the regular ``/api/sessions``
     path and the gateway SSE watcher use this shared projection.
 
-    By default, omit background/internal sources such as ``cron`` from the WebUI
-    sidebar. This mirrors Hermes Agent CLI's session-list behaviour: interactive
-    views should stay focused on user-facing conversations, while callers that
-    need a source-specific diagnostic view can opt out by passing
-    ``exclude_sources=None``.
+    By default, only the internal ``webui`` source is excluded so that the
+    sidebar stays free of its own session reflections. Cron sessions are now
+    surfaced under a dedicated "Scheduled" tab so users can review background
+    runs. Callers that need to suppress additional sources can pass a custom
+    tuple; pass ``exclude_sources=None`` to receive every source.
     """
     db_path = Path(db_path)
     if not db_path.exists():

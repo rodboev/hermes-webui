@@ -1077,13 +1077,21 @@ function _isCliSession(session) {
   return session.is_cli_session === true;
 }
 
+function _isCronSession(session) {
+  if (!session) return false;
+  if (session.session_source === 'cron') return true;
+  const raw = (session.raw_source || session.source_tag || session.source || session.source_label || '').toLowerCase();
+  return raw === 'cron';
+}
+
 function _sessionSourceLabel(filter, count) {
   const n = Number(count) || 0;
+  if (filter === 'cron') return `${t('session_source_tab_cron') || 'Scheduled'} (${n})`;
   return filter === 'cli' ? `CLI sessions (${n})` : `WebUI sessions (${n})`;
 }
 
 function _setSessionSourceFilter(filter) {
-  const next = filter === 'cli' ? 'cli' : 'webui';
+  const next = filter === 'cli' ? 'cli' : filter === 'cron' ? 'cron' : 'webui';
   if (_sessionSourceFilter === next) return;
   _sessionSourceFilter = next;
   _activeProject = null;
@@ -1096,7 +1104,7 @@ function _setSessionSourceFilter(filter) {
 function _restoreSessionSourceFilter() {
   try {
     const raw = localStorage.getItem('hermes-session-source-filter');
-    if (raw === 'cli' || raw === 'webui') _sessionSourceFilter = raw;
+    if (raw === 'cli' || raw === 'webui' || raw === 'cron') _sessionSourceFilter = raw;
   } catch (_e) {}
 }
 
@@ -4056,14 +4064,20 @@ function renderSessionListFromCache(){
     (activeSidForSidebar&&s.session_id===activeSidForSidebar) ||
     (S.session&&s.session_id===S.session.session_id&&(S.session.message_count||0)>0)
   );
-  const webuiSessionCount = withMessages.filter(s=>!_isCliSession(s)).length;
+  const webuiSessionCount = withMessages.filter(s=>!_isCliSession(s)&&!_isCronSession(s)).length;
   const cliSessionCount = withMessages.filter(s=>_isCliSession(s)).length;
+  const cronSessionCount = withMessages.filter(s=>_isCronSession(s)).length;
   if(_sessionSourceFilter==='cli' && !window._showCliSessions && cliSessionCount===0){
+    _sessionSourceFilter='webui';
+  }
+  if(_sessionSourceFilter==='cron' && !window._showCliSessions && cronSessionCount===0){
     _sessionSourceFilter='webui';
   }
   const sourceFiltered = _sessionSourceFilter==='cli'
     ? withMessages.filter(s=>_isCliSession(s))
-    : withMessages.filter(s=>!_isCliSession(s));
+    : _sessionSourceFilter==='cron'
+      ? withMessages.filter(s=>_isCronSession(s))
+      : withMessages.filter(s=>!_isCliSession(s)&&!_isCronSession(s));
   // The server is authoritative for profile scoping (#1611): it filters by
   // active profile when no query param is set, and returns the aggregate when
   // we send ?all_profiles=1. The renamed-root cross-alias (a row tagged
@@ -4115,11 +4129,12 @@ function renderSessionListFromCache(){
   list.appendChild(batchBar);
   if(_sessionSelectMode&&_selectedSessions.size>0){batchBar.style.display='flex';_renderBatchActionBar();}
   else{batchBar.style.display='none';}
-  if(window._showCliSessions || cliSessionCount>0){
+  if(window._showCliSessions || cliSessionCount>0 || cronSessionCount>0){
     const sourceTabs=document.createElement('div');
     sourceTabs.className='session-source-tabs';
-    for(const filter of ['webui','cli']){
-      const count=filter==='cli'?cliSessionCount:webuiSessionCount;
+    const tabFilters=[['webui',webuiSessionCount],['cli',cliSessionCount]];
+    if(cronSessionCount>0) tabFilters.push(['cron',cronSessionCount]);
+    for(const [filter,count] of tabFilters){
       const btn=document.createElement('button');
       btn.type='button';
       btn.className='session-source-tab'+(_sessionSourceFilter===filter?' active':'');
@@ -4842,7 +4857,7 @@ function renderSessionListFromCache(){
       return _swipeTracking;
     };
     const _canSwipeDeleteSession=()=>{
-      return _isSessionSwipeTarget()&&!_isMessagingSession(s)&&!_isCliSession(s);
+      return _isSessionSwipeTarget()&&!_isMessagingSession(s)&&!_isCliSession(s)&&!_isCronSession(s);
     };
     const _paintSessionSwipe=(signedDx)=>{
       const rawOffset=signedDx*.55;

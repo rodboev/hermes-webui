@@ -1544,7 +1544,7 @@ def test_cron_sessions_hidden_from_sidebar_by_default():
 
 
 def test_importable_agent_rows_can_opt_into_cron_source():
-    """Diagnostic callers can opt out of the default cron exclusion explicitly."""
+    """Cron sessions are included by default; callers can still exclude them explicitly."""
     conn = _ensure_state_db()
     try:
         _insert_agent_session_row(conn, session_id='cron_diag_20260427', source='cron', title='Cron Diagnostic')
@@ -1552,14 +1552,14 @@ def test_importable_agent_rows_can_opt_into_cron_source():
         from api.agent_sessions import read_importable_agent_session_rows
 
         default_rows = read_importable_agent_session_rows(_get_state_db_path(), limit=None)
-        assert 'cron_diag_20260427' not in {row.get('id') for row in default_rows}
+        assert 'cron_diag_20260427' in {row.get('id') for row in default_rows}
 
-        diagnostic_rows = read_importable_agent_session_rows(
+        excluded_rows = read_importable_agent_session_rows(
             _get_state_db_path(),
             limit=None,
-            exclude_sources=None,
+            exclude_sources=("cron", "webui"),
         )
-        assert 'cron_diag_20260427' in {row.get('id') for row in diagnostic_rows}
+        assert 'cron_diag_20260427' not in {row.get('id') for row in excluded_rows}
     finally:
         try:
             _remove_test_sessions(conn, 'cron_diag_20260427')
