@@ -19,6 +19,11 @@ def test_update_banner_outside_main_chat():
 def test_update_banner_inside_main_element():
     src = INDEX.read_text(encoding="utf-8")
     main_pos = src.find('<main class="main">')
+    main_end = src.find('</main>')
     banner_pos = src.find('id="updateBanner"')
     assert main_pos != -1, "<main class='main'> not found"
-    assert banner_pos > main_pos, "#updateBanner must be inside <main>"
+    assert main_end != -1, "</main> not found"
+    assert main_pos < banner_pos < main_end, (
+        "#updateBanner must be inside <main class='main'>, "
+        "not before it or after the closing </main>"
+    )
