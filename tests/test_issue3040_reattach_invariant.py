@@ -180,7 +180,9 @@ def test_attachLiveStream_reconnect_seeds_from_INFLIGHT_not_querySelector():
         "The reconnect path must distinguish a fresh open from a re-attach."
     )
     # The seed must NOT use querySelector to read DOM content for the initial text.
-    seed_up_to_assistantText = seed_section[: seed_section.find("let assistantText")]
+    idx = seed_section.find("let assistantText")
+    assert idx != -1, "let assistantText not found in seed section — capture window too narrow or variable renamed"
+    seed_up_to_assistantText = seed_section[:idx]
     assert "querySelector" not in seed_up_to_assistantText, (
         "attachLiveStream() reads DOM via querySelector before seeding assistantText. "
         "Use INFLIGHT state exclusively; DOM queries are unreliable for off-screen sessions."
