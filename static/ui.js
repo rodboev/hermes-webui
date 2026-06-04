@@ -7445,8 +7445,8 @@ function _syncToolCallGroupSummary(group){
     if (memCount) suffix += `, ${memCount} ${memCount===1?'memory':'memories'} saved`;
     if (skillCount) suffix += `, ${skillCount} ${skillCount===1?'skill':'skills'} updated`;
     if(group.getAttribute('data-live-tool-call-group')==='1'){
-      label.textContent=otherCount?`Activity: ${otherCount} tool${otherCount===1?'':'s'}${suffix}`:(suffix?'Activity'+suffix:'Activity · Running');
-    }else if(otherCount||suffix) label.textContent=otherCount?`Activity: ${otherCount} tool${otherCount===1?'':'s'}${suffix}`:'Activity'+suffix;
+      label.textContent=otherCount?`Activity: ${otherCount} tool${otherCount===1?'':'s'}${suffix}`:(suffix?'Activity: '+suffix.slice(2):'Activity · Running');
+    }else if(otherCount||suffix) label.textContent=otherCount?`Activity: ${otherCount} tool${otherCount===1?'':'s'}${suffix}`:'Activity: '+suffix.slice(2);
     else label.textContent='Activity';
     label.setAttribute('data-sweep-label', label.textContent);
   }
