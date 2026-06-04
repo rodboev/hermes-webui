@@ -1254,7 +1254,6 @@ def _apply_update_inner(target):
         return {'ok': False, 'message': f'Pull failed: {detail}'}
 
     # Pop stash if we stashed
-    stash_conflict = False
     if stashed:
         _, pop_ok = _run_git(['stash', 'pop'], path)
         if not pop_ok:
@@ -1265,13 +1264,20 @@ def _apply_update_inner(target):
                     'message': (
                         'Updated successfully, but failed to clean up a '
                         'stash-pop conflict. Manual intervention needed: '
-                        'run git reset --merge and git stash drop in '
-                        + str(path)
+                        'run git reset --merge in ' + str(path)
                     ),
                     'stash_conflict': True,
                 }
-            _run_git(['stash', 'drop'], path)
-            stash_conflict = True
+            return {
+                'ok': False,
+                'message': (
+                    f'{target} updated to the latest version, but your local '
+                    'modifications conflict with upstream changes. Your changes '
+                    'are preserved in stash@{0}. To re-apply them: '
+                    'git -C ' + str(path) + ' stash pop, then resolve conflicts.'
+                ),
+                'stash_conflict': True,
+            }
 
     # Invalidate cache
     with _cache_lock:
@@ -1290,16 +1296,9 @@ def _apply_update_inner(target):
     # and the restart land at roughly the same time.
     _schedule_restart()
 
-    result = {
+    return {
         'ok': True,
         'message': f'{target} updated successfully',
         'target': target,
         'restart_scheduled': True,
     }
-    if stash_conflict:
-        result['message'] = (
-            f'{target} updated successfully, but local modifications were '
-            'discarded because they conflicted with upstream changes.'
-        )
-        result['stash_conflict'] = True
-    return result
