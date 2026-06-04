@@ -11598,67 +11598,112 @@ function renderMessages(options){
       currentAssistantTurn.dataset.recycleKey=rawIdx;
       inner.appendChild(currentAssistantTurn);
     }
-    const seg=document.createElement('div');
-    seg.className='assistant-segment';
-    seg.dataset.msgIdx=rawIdx;
-    seg.dataset.sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
-    seg.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
-    seg.dataset.rawText=String(content).trim();
-    if(m._activityBurstId!==undefined&&m._activityBurstId!==null) seg.setAttribute('data-activity-burst-id',String(m._activityBurstId));
-    if(Number.isFinite(Number(m._liveSegmentSeq))) seg.setAttribute('data-live-segment-seq',String(Number(m._liveSegmentSeq)));
-    const messageBelongsInWorklog=!S.busy&&isCompactWorklogMode()&&_assistantMessageBelongsInWorklog(m, rawIdx, toolCallAssistantIdxs, displayContent, {isTurnFinalAssistant});
-    if(messageBelongsInWorklog){
-      seg.classList.add('assistant-segment-worklog-source');
-      seg.setAttribute('aria-hidden','true');
-      seg.hidden=true;
+    const sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
+    const messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
+    const rawText=String(content).trim();
+    if(isInterleavedTranscriptBubbles()&&!m._live){
+      const toolResultsByTid={};
+      S.messages.forEach(rm=>{
+        if(!rm||rm.role!=='tool') return;
+        const tid=rm.tool_call_id||rm.tool_use_id||'';
+        if(tid) toolResultsByTid[tid]=_cliToolResultSnippet(rm.content);
+      });
+      const blocks=_assistantTurnBlocks(currentAssistantTurn);
+      let lastBubble=null;
+      for(const part of walkMessageParts(m, toolResultsByTid)){
+        const bubble=document.createElement('div');
+        bubble.className='assistant-segment interleaved-bubble interleaved-bubble-'+part.type;
+        bubble.dataset.msgIdx=rawIdx;
+        bubble.dataset.sessionMsgIdx=sessionMsgIdx;
+        bubble.dataset.messageAnchorKey=messageAnchorKey;
+        bubble.dataset.rawText=rawText;
+        if(part.type==='comment'){
+          const html=renderMd(part.content);
+          bubble.insertAdjacentHTML('beforeend',`<div class="msg-body">${html}</div>`);
+        }else if(part.type==='thinking'){
+          bubble.insertAdjacentHTML('beforeend', _thinkingCardHtml(part.content));
+        }else if(part.type==='cli-action'){
+          const name=(part.content&&(part.content.name||(part.content.function&&part.content.function.name)))||'tool';
+          bubble.insertAdjacentHTML('beforeend',`<div class="interleaved-action-label">${esc(name)}</div>`);
+        }else if(part.type==='result'){
+          bubble.insertAdjacentHTML('beforeend',`<div class="interleaved-result-snippet"><pre>${esc(part.content)}</pre></div>`);
+        }
+        blocks.appendChild(bubble);
+        lastBubble=bubble;
+      }
+      if(!lastBubble){
+        lastBubble=document.createElement('div');
+        lastBubble.className='assistant-segment assistant-segment-anchor';
+        lastBubble.dataset.msgIdx=rawIdx;
+        lastBubble.dataset.sessionMsgIdx=sessionMsgIdx;
+        lastBubble.dataset.messageAnchorKey=messageAnchorKey;
+        lastBubble.dataset.rawText=rawText;
+        blocks.appendChild(lastBubble);
+      }
+      assistantSegments.set(rawIdx, lastBubble);
+    } else {
+      const seg=document.createElement('div');
+      seg.className='assistant-segment';
+      seg.dataset.msgIdx=rawIdx;
+      seg.dataset.sessionMsgIdx=sessionMsgIdx;
+      seg.dataset.messageAnchorKey=messageAnchorKey;
+      seg.dataset.rawText=rawText;
+      if(m._activityBurstId!==undefined&&m._activityBurstId!==null) seg.setAttribute('data-activity-burst-id',String(m._activityBurstId));
+      if(Number.isFinite(Number(m._liveSegmentSeq))) seg.setAttribute('data-live-segment-seq',String(Number(m._liveSegmentSeq)));
+      const messageBelongsInWorklog=!S.busy&&isCompactWorklogMode()&&_assistantMessageBelongsInWorklog(m, rawIdx, toolCallAssistantIdxs, displayContent, {isTurnFinalAssistant});
+      if(messageBelongsInWorklog){
+        seg.classList.add('assistant-segment-worklog-source');
+        seg.setAttribute('aria-hidden','true');
+        seg.hidden=true;
+      }
+      if(m._live){
+        currentAssistantTurn.id='liveAssistantTurn';
+        // Stamp the session id on the live turn so finalizeThinkingCard()
+        // and other late callbacks can verify they're operating on the
+        // right session's DOM (the user may have switched tabs/sessions
+        // while this stream is still streaming). See #1366.
+        if(S.session) currentAssistantTurn.dataset.sessionId=S.session.session_id;
+        seg.setAttribute('data-live-assistant','1');
+      }
+      if(_ERR_MSG_RE.test(String(content||'').trim())) seg.dataset.error='1';
+      // A turn whose visible content is empty but which carries a separate
+      // `reasoning` field (e.g. a run-journal-recovered anchor: empty content +
+      // reasoning + `_recovered_from_run_journal`) extracts NO inline thinkingText
+      // and would render no Thinking Card at all — collapsing to an empty hidden
+      // anchor. A session made entirely of such rows then paints blank (only date
+      // separators) — the #3875 reporter's exact case (Compact tool activity OFF,
+      // i.e. legacy mode). Surface the message's reasoning payload as the Thinking
+      // Card source for these empty-content turns so the turn is never blank.
+      //
+      // LEGACY-MODE ONLY (!isSimplifiedToolCalling()): the simplified/Worklog path
+      // already derives reasoning above (line ~8149 via
+      // _worklogReasoningTextFromMessage, which strips an exact visible-answer echo
+      // so reasoning duplicating a sibling answer is not re-shown). Repopulating the
+      // raw reasoning here would bypass that echo-strip and re-render the duplicate
+      // as a Worklog Thinking card (Codex gate catch). In legacy mode there is no
+      // Worklog folding, so the raw payload is the correct Thinking-card source.
+      // Stays OUT of the inline-content `thinkingText` extraction block (#2565) and
+      // only fires for empty-content/no-inline-thinking turns, so answer-bearing
+      // messages are unchanged.
+      if(!isUser&&!m._live&&!isSimplifiedToolCalling()&&!thinkingText&&!String(content||'').trim()&&!filesHtml&&!statusHtml){
+        const _reasoningPayload=_assistantReasoningPayloadText(m);
+        if(_reasoningPayload) thinkingText=_reasoningPayload;
+      }
+      if(thinkingText&&window._showThinking!==false){
+        if((isCompactWorklogMode()||isTransparentStream())&&_assistantThinkingBelongsInWorklog(m, rawIdx, toolCallAssistantIdxs)) assistantThinking.set(rawIdx, thinkingText);
+        else if(window._showThinking!==false) seg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText));
+      }
+      const hasVisibleBody=!!(String(content||'').trim()||filesHtml||statusHtml);
+      if(statusHtml){
+        seg.insertAdjacentHTML('beforeend', statusHtml);
+      }else if(hasVisibleBody){
+        seg.insertAdjacentHTML('beforeend', `${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`);
+      }else if(!(thinkingText&&window._showThinking!==false&&!isSimplifiedToolCalling())){
+        seg.classList.add('assistant-segment-anchor');
+      }
+      _assistantTurnBlocks(currentAssistantTurn).appendChild(seg);
+      assistantSegments.set(rawIdx, seg);
     }
-    if(m._live){
-      currentAssistantTurn.id='liveAssistantTurn';
-      // Stamp the session id on the live turn so finalizeThinkingCard()
-      // and other late callbacks can verify they're operating on the
-      // right session's DOM (the user may have switched tabs/sessions
-      // while this stream is still streaming). See #1366.
-      if(S.session) currentAssistantTurn.dataset.sessionId=S.session.session_id;
-      seg.setAttribute('data-live-assistant','1');
-    }
-    if(_ERR_MSG_RE.test(String(content||'').trim())) seg.dataset.error='1';
-    // A turn whose visible content is empty but which carries a separate
-    // `reasoning` field (e.g. a run-journal-recovered anchor: empty content +
-    // reasoning + `_recovered_from_run_journal`) extracts NO inline thinkingText
-    // and would render no Thinking Card at all — collapsing to an empty hidden
-    // anchor. A session made entirely of such rows then paints blank (only date
-    // separators) — the #3875 reporter's exact case (Compact tool activity OFF,
-    // i.e. legacy mode). Surface the message's reasoning payload as the Thinking
-    // Card source for these empty-content turns so the turn is never blank.
-    //
-    // LEGACY-MODE ONLY (!isSimplifiedToolCalling()): the simplified/Worklog path
-    // already derives reasoning above (line ~8149 via
-    // _worklogReasoningTextFromMessage, which strips an exact visible-answer echo
-    // so reasoning duplicating a sibling answer is not re-shown). Repopulating the
-    // raw reasoning here would bypass that echo-strip and re-render the duplicate
-    // as a Worklog Thinking card (Codex gate catch). In legacy mode there is no
-    // Worklog folding, so the raw payload is the correct Thinking-card source.
-    // Stays OUT of the inline-content `thinkingText` extraction block (#2565) and
-    // only fires for empty-content/no-inline-thinking turns, so answer-bearing
-    // messages are unchanged.
-    if(!isUser&&!m._live&&!isSimplifiedToolCalling()&&!thinkingText&&!String(content||'').trim()&&!filesHtml&&!statusHtml){
-      const _reasoningPayload=_assistantReasoningPayloadText(m);
-      if(_reasoningPayload) thinkingText=_reasoningPayload;
-    }
-    if(thinkingText&&window._showThinking!==false){
-      if((isCompactWorklogMode()||isTransparentStream())&&_assistantThinkingBelongsInWorklog(m, rawIdx, toolCallAssistantIdxs)) assistantThinking.set(rawIdx, thinkingText);
-      else if(window._showThinking!==false) seg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText));
-    }
-    const hasVisibleBody=!!(String(content||'').trim()||filesHtml||statusHtml);
-    if(statusHtml){
-      seg.insertAdjacentHTML('beforeend', statusHtml);
-    }else if(hasVisibleBody){
-      seg.insertAdjacentHTML('beforeend', `${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`);
-    }else if(!(thinkingText&&window._showThinking!==false&&!isSimplifiedToolCalling())){
-      seg.classList.add('assistant-segment-anchor');
-    }
-    _assistantTurnBlocks(currentAssistantTurn).appendChild(seg);
-    assistantSegments.set(rawIdx, seg);
   }
 
   function _insertCompressionLikeNode(node, anchorIndex){

@@ -7441,6 +7441,7 @@ _SETTINGS_DEFAULTS = {
     "notifications_enabled": False,  # browser notification when tab is in background
     "show_thinking": True,  # show/hide thinking/reasoning blocks in chat view
     "simplified_tool_calling": True,  # legacy compatibility; Worklog renderer remains enabled
+    "interleaved_transcript_bubbles": False,  # render assistant turns as interleaved comment/action bubbles (default off)
     "terminal_auto_expand_on_output": False,  # auto-expand terminal panel when output arrives while collapsed
     "workspace_todos_tab": False,  # show a Todos tab in the workspace panel (right side)
     "api_redact_enabled": True,  # redact sensitive data (API keys, secrets) from API responses
@@ -7650,6 +7651,7 @@ _SETTINGS_BOOL_KEYS = {
     "session_jump_buttons",
     "render_user_markdown",
     "session_endless_scroll",
+    "interleaved_transcript_bubbles",
     "auto_scroll_follow",
     "worklog_details_expanded_default",
     "auth_disabled_acknowledged",

@@ -7307,6 +7307,8 @@ function _preferencesPayloadFromUi(){
   if(showTpsCb) payload.show_tps=showTpsCb.checked;
   const fadeTextCb=$('settingsFadeTextEffect');
   if(fadeTextCb) payload.fade_text_effect=fadeTextCb.checked;
+  const interleavedBubblesCb=$('settingsInterleavedTranscriptBubbles');
+  if(interleavedBubblesCb) payload.interleaved_transcript_bubbles=interleavedBubblesCb.checked;
   const terminalAutoExpandCb=$('settingsTerminalAutoExpand');
   if(terminalAutoExpandCb) payload.terminal_auto_expand_on_output=terminalAutoExpandCb.checked;
   const workspaceTodosTabCb=$('settingsWorkspaceTodosTab');
@@ -7394,6 +7396,11 @@ function _schedulePreferencesAutosave(){
 async function _autosavePreferencesSettings(payload){
   try{
     const saved=await api('/api/settings',{method:'POST',body:JSON.stringify(payload)});
+    if(payload&&payload.interleaved_transcript_bubbles!==undefined){
+      window._interleavedTranscriptBubbles=!!(saved&&saved.interleaved_transcript_bubbles);
+      if(typeof clearMessageRenderCache==='function') clearMessageRenderCache();
+      if(typeof renderMessages==='function') renderMessages();
+    }
     if(payload&&payload.terminal_auto_expand_on_output!==undefined){
       window._terminalAutoExpandOnOutput=!!(saved&&saved.terminal_auto_expand_on_output);
     }
@@ -7761,6 +7768,12 @@ async function loadSettingsPanel(){
         window._fadeTextEffect=fadeTextCb.checked;
         _schedulePreferencesAutosave();
       },{once:false});
+    }
+    const interleavedBubblesCb=$('settingsInterleavedTranscriptBubbles');
+    if(interleavedBubblesCb){
+      interleavedBubblesCb.checked=!!settings.interleaved_transcript_bubbles;
+      window._interleavedTranscriptBubbles=interleavedBubblesCb.checked;
+      interleavedBubblesCb.addEventListener('change',_schedulePreferencesAutosave,{once:false});
     }
     const terminalAutoExpandCb=$('settingsTerminalAutoExpand');
     if(terminalAutoExpandCb){terminalAutoExpandCb.checked=!!settings.terminal_auto_expand_on_output;window._terminalAutoExpandOnOutput=terminalAutoExpandCb.checked;terminalAutoExpandCb.addEventListener('change',_schedulePreferencesAutosave,{once:false});}
