@@ -12184,8 +12184,10 @@ def _handle_file_reveal(handler, body):
             vscode_cfg = {}
         container_prefix = vscode_cfg.get("container_path_prefix", "")
         host_prefix = vscode_cfg.get("host_path_prefix", "")
-        if container_prefix and host_prefix and target_str.startswith(container_prefix):
-            target_str = host_prefix + target_str[len(container_prefix):]
+        if container_prefix and host_prefix:
+            _norm = container_prefix.rstrip('/') + '/'
+            if target_str.startswith(_norm) or target_str == container_prefix.rstrip('/'):
+                target_str = host_prefix + target_str[len(container_prefix):]
 
         system = platform.system()
         if system == "Darwin":
@@ -12267,8 +12269,10 @@ def _handle_file_open_vscode(handler, body):
             vscode_cfg = {}
         container_prefix = vscode_cfg.get("container_path_prefix", "")
         host_prefix = vscode_cfg.get("host_path_prefix", "")
-        if container_prefix and host_prefix and target_str.startswith(container_prefix):
-            target_str = host_prefix + target_str[len(container_prefix):]
+        if container_prefix and host_prefix:
+            _norm = container_prefix.rstrip('/') + '/'
+            if target_str.startswith(_norm) or target_str == container_prefix.rstrip('/'):
+                target_str = host_prefix + target_str[len(container_prefix):]
 
         cmd = vscode_cfg.get("command", "code")
         # Resolve the command to an absolute path so subprocess.Popen finds it
