@@ -4782,7 +4782,7 @@ def _run_agent_streaming(
                 return True
 
             def on_tool(*cb_args, **cb_kwargs):
-                nonlocal _reasoning_segments, _current_reasoning_idx
+                nonlocal _reasoning_segments
                 event_type = None
                 name = None
                 preview = None
