@@ -540,21 +540,31 @@ def check_auth(handler, parsed) -> bool:
     return False
 
 
+def _is_loopback(addr: str) -> bool:
+    """Return True if *addr* is a loopback address (127.x.x.x, ::1, or ::ffff:127.x.x.x)."""
+    import ipaddress as _ipaddress
+    try:
+        return _ipaddress.ip_address(addr).is_loopback
+    except ValueError:
+        return False
+
+
 def _is_secure_context(handler=None) -> bool:
     """Return True if cookies should carry the Secure flag.
 
-    Behaviour is overridable via HERMES_WEBUI_SECURE env var for
-    reverse-proxy setups where TLS terminates at a frontend proxy
-    (nginx, Cloudflare, etc.) and Python only sees plain HTTP.
-    1/true/yes → force Secure on; 0/false/no → force Secure off.
-    When unset, fall back to heuristics: direct TLS socket (getpeercert)
-    or X-Forwarded-Proto header from the request.
+    Priority order:
+    1. ``HERMES_WEBUI_SECURE`` env var: 1/true/yes → True; 0/false/no → False.
+    2. Direct TLS socket (handler.request.getpeercert present) → True.
+    3. ``HERMES_WEBUI_TRUST_FORWARDED_PROTO=1`` opt-in: trust
+       ``X-Forwarded-Proto: https`` header from a known reverse proxy.
+    4. Non-loopback client address → default Secure on.
+    5. Loopback with no TLS → False.
 
     .. warning::
-       The ``X-Forwarded-Proto`` header is only trustworthy when a
-       reverse proxy (nginx, Cloudflare, etc.) is deployed in front
-       of the application.  Without a proxy, any client can forge the
-       header and cause the Secure flag to be set on plain HTTP.
+       ``X-Forwarded-Proto`` is only trustworthy behind a reverse proxy.
+       It is ignored unless ``HERMES_WEBUI_TRUST_FORWARDED_PROTO=1`` is
+       set explicitly, preventing header-injection attacks on plain-HTTP
+       deployments.
     """
     env = os.getenv('HERMES_WEBUI_SECURE', '').strip().lower()
     if env in ('1', 'true', 'yes'):
@@ -564,7 +574,13 @@ def _is_secure_context(handler=None) -> bool:
     if handler is not None:
         if getattr(handler.request, 'getpeercert', None) is not None:
             return True
-        if handler.headers.get('X-Forwarded-Proto', '') == 'https':
+        trust_fwd = os.getenv('HERMES_WEBUI_TRUST_FORWARDED_PROTO', '').strip().lower()
+        if trust_fwd in ('1', 'true', 'yes'):
+            if handler.headers.get('X-Forwarded-Proto', '') == 'https':
+                return True
+        _ca = getattr(handler, 'client_address', None)
+        client_ip = _ca[0] if _ca else '127.0.0.1'
+        if not _is_loopback(client_ip):
             return True
     return False
 
@@ -574,7 +590,7 @@ def set_auth_cookie(handler, cookie_value) -> None:
     cookie = http.cookies.SimpleCookie()
     cookie[COOKIE_NAME] = cookie_value
     cookie[COOKIE_NAME]['httponly'] = True
-    cookie[COOKIE_NAME]['samesite'] = 'Lax'
+    cookie[COOKIE_NAME]['samesite'] = 'Strict'
     cookie[COOKIE_NAME]['path'] = '/'
     cookie[COOKIE_NAME]['max-age'] = str(_resolve_session_ttl())
     if _is_secure_context(handler):
