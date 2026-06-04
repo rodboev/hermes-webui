@@ -27,12 +27,12 @@ def test_cmdUse_function_defined():
 
 def test_forced_skill_directive_declared():
     src = read("static/commands.js")
-    assert "let _forcedSkillDirective=null;" in src, "_forcedSkillDirective must be declared at module scope"
+    assert "let _forcedSkillDirectivePending=null;" in src, "_forcedSkillDirectivePending must be declared at module scope"
 
 
 def test_forced_skill_directive_set_in_cmdUse():
     src = read("static/commands.js")
-    assert "_forcedSkillDirective =" in src, "_forcedSkillDirective must be assigned inside cmdUse"
+    assert "_forcedSkillDirectivePending = new Promise" in src, "_forcedSkillDirectivePending must be set to a Promise inside cmdUse"
 
 
 def test_use_entry_has_noEcho():
@@ -52,17 +52,21 @@ def test_use_entry_has_subArgs_skills():
     assert "subArgs:'skills'" in entry, "/use entry must have subArgs:'skills' for autocomplete"
 
 
-def test_directive_cleared_in_finally_block():
+def test_directive_consumed_at_injection_site():
+    """_forcedSkillDirectivePending is cleared at the consume site, not in finally."""
     src = read("static/messages.js")
-    assert "_forcedSkillDirective=null;" in src, "_forcedSkillDirective must be cleared in messages.js"
-    # Confirm it appears in the finally block alongside _sendInProgress
-    assert "_sendInProgress=false; _sendInProgressSid=null; _forcedSkillDirective=null;" in src, \
-        "_forcedSkillDirective=null must appear in the same finally line as _sendInProgress=false"
+    finally_part = src.split("finally")[1] if "finally" in src else ""
+    assert "_forcedSkillDirectivePending = null;" not in finally_part, \
+        "_forcedSkillDirectivePending must NOT be cleared in the finally block"
+    assert "const _directive = await _forcedSkillDirectivePending;" in src, \
+        "consume site must await the pending promise"
+    assert "_forcedSkillDirectivePending = null;" in src, \
+        "_forcedSkillDirectivePending must be cleared somewhere in messages.js"
 
 
 def test_directive_injection_before_empty_guard():
     src = read("static/messages.js")
-    inject_pos = src.index("typeof _forcedSkillDirective==='string'")
+    inject_pos = src.index("_forcedSkillDirectivePending")
     guard_pos = src.index("if(!msgText){setComposerStatus('Nothing to send');return;}")
     assert inject_pos < guard_pos, "directive injection must appear before the if(!msgText) guard"
 
@@ -71,3 +75,23 @@ def test_directive_text_uses_match_name():
     src = read("static/commands.js")
     assert "match.name" in src, "directive must use match.name (canonical casing), not raw user input"
     assert "[USER OVERRIDE] You MUST consult skill '" in src, "directive text must match the specified format"
+
+
+def test_pending_promise_set_synchronously():
+    """_forcedSkillDirectivePending must be set before the first await in cmdUse."""
+    src = read("static/commands.js")
+    fn_start = src.index("async function cmdUse(args)")
+    fn_body = src[fn_start:]
+    pending_pos = fn_body.index("_forcedSkillDirectivePending = new Promise")
+    first_await = fn_body.index("await ")
+    assert pending_pos < first_await, \
+        "_forcedSkillDirectivePending must be set before the first await to close the race window"
+
+
+def test_directive_survives_local_slash_commands():
+    """The consume block must appear after the slash-command early-return, not before."""
+    src = read("static/messages.js")
+    early_return = src.index("autoResize();hideCmdDropdown();return;")
+    consume = src.index("_forcedSkillDirectivePending")
+    assert early_return < consume, \
+        "slash-command early-return must precede the directive consume block"

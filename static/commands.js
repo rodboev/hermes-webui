@@ -95,7 +95,7 @@ function getMatchingCommands(prefix){
   return matches;
 }
 
-let _forcedSkillDirective=null;
+let _forcedSkillDirectivePending=null;
 let _slashModelCache=null;
 let _slashModelCachePromise=null;
 let _slashPersonalityCache=null;
@@ -880,19 +880,26 @@ async function cmdUse(args){
     renderMessages();
     return;
   }
+  let resolve;
+  _forcedSkillDirectivePending = new Promise(r => { resolve = r; });
   try{
     const data = await api('/api/skills');
     const skills = data.skills || [];
     const match = skills.find(s => (s.name||'').toLowerCase() === args.toLowerCase());
     if(!match){
+      resolve(null);
+      _forcedSkillDirectivePending = null;
       const msg = {role:'assistant', content:`No skill named \`${args}\`. Use \`/skills\` to see available skills.`};
       S.messages.push(msg); renderMessages(); return;
     }
-    _forcedSkillDirective = `[USER OVERRIDE] You MUST consult skill '${match.name}' via skill_view before responding to the next message.`;
+    const directive = `[USER OVERRIDE] You MUST consult skill '${match.name}' via skill_view before responding to the next message.`;
+    resolve(directive);
     S.messages.push({role:'assistant', content:`Next turn: skill \`${match.name}\` will be forced.`});
     renderMessages();
     showToast(`Skill \`${match.name}\` will be used for next turn.`);
   }catch(e){
+    resolve(null);
+    _forcedSkillDirectivePending = null;
     showToast('Failed to load skills: '+e.message);
   }
 }
