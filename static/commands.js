@@ -17,6 +17,7 @@ const COMMANDS=[
   {name:'theme',     desc:t('cmd_theme'), fn:cmdTheme, arg:'name',  noEcho:true},
   {name:'personality', desc:t('cmd_personality'), fn:cmdPersonality, arg:'name', subArgs:'personalities'},
   {name:'skills',    desc:t('cmd_skills'),   fn:cmdSkills,   arg:'query'},
+  {name:'use',       desc:t('cmd_use'),      fn:cmdUse,      arg:'skill-name', subArgs:'skills', noEcho:true},
   {name:'stop',      desc:t('cmd_stop'),     fn:cmdStop,      noEcho:true},
   {name:'goal',      desc:t('cmd_goal'),     fn:cmdGoal,      arg:'[status|pause|resume|clear|text]', subArgs:['status','pause','resume','clear']},
   {name:'queue',     desc:t('cmd_queue'),    fn:cmdQueue,     arg:'message', noEcho:true},
@@ -94,6 +95,7 @@ function getMatchingCommands(prefix){
   return matches;
 }
 
+let _forcedSkillDirective=null;
 let _slashModelCache=null;
 let _slashModelCachePromise=null;
 let _slashPersonalityCache=null;
@@ -867,6 +869,29 @@ async function cmdSkills(args){
     S.messages.push({role:'assistant', content: header + lines.join('\n')});
     renderMessages();
     showToast(t('type_slash'));
+  }catch(e){
+    showToast('Failed to load skills: '+e.message);
+  }
+}
+
+async function cmdUse(args){
+  if(!args){
+    S.messages.push({role:'assistant',content:'Usage: `/use <skill-name>` — forces the agent to consult that skill before its next response.'});
+    renderMessages();
+    return;
+  }
+  try{
+    const data = await api('/api/skills');
+    const skills = data.skills || [];
+    const match = skills.find(s => (s.name||'').toLowerCase() === args.toLowerCase());
+    if(!match){
+      const msg = {role:'assistant', content:`No skill named \`${args}\`. Use \`/skills\` to see available skills.`};
+      S.messages.push(msg); renderMessages(); return;
+    }
+    _forcedSkillDirective = `[USER OVERRIDE] You MUST consult skill '${match.name}' via skill_view before responding to the next message.`;
+    S.messages.push({role:'assistant', content:`Next turn: skill \`${match.name}\` will be forced.`});
+    renderMessages();
+    showToast(`Skill \`${match.name}\` will be used for next turn.`);
   }catch(e){
     showToast('Failed to load skills: '+e.message);
   }
