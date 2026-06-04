@@ -6832,7 +6832,7 @@ def handle_post(handler, parsed) -> bool:
             bad(handler, str(exc), status=500)
         return True
 
-    if parsed.path == "/api/prompts":
+        if parsed.path == "/api/prompts":
         text = str(body.get("text") or "").strip()
         label = str(body.get("label") or "").strip()
         if not text:

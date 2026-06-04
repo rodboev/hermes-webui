@@ -644,7 +644,7 @@ async function toggleSavedPromptsPopup(){
     empty.className='saved-prompts-empty';
     empty.textContent=(typeof t==='function'&&t('saved_prompts_empty'))||'No saved prompts yet.';
     popup.appendChild(empty);
-  }else{
+    }else{
     for(const p of prompts){
       const row=document.createElement('div');
       row.className='saved-prompt-row';
