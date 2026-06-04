@@ -38,7 +38,7 @@ def test_append_turn_journal_event_fsyncs_jsonl_and_preserves_payload(tmp_path):
     assert event["session_id"] == "sid-1"
     assert event["created_at"] > 0
     journal_dir = tmp_path / "_turn_journal"
-    shards = list(journal_dir.glob(f"sid-1.{os.getpid()}.jsonl"))
+    shards = list(journal_dir.glob(f"sid-1~{os.getpid()}.jsonl"))
     assert len(shards) == 1, f"expected one pid-scoped shard, found: {list(journal_dir.iterdir())}"
     lines = shards[0].read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
@@ -265,8 +265,8 @@ def test_iter_turn_journal_session_ids_deduplicates_pid_shards(tmp_path):
     journal_dir.mkdir()
 
     # Create two pid-scoped shards for the same session, plus a legacy file for another session
-    (journal_dir / "sess-a.1001.jsonl").write_text("", encoding="utf-8")
-    (journal_dir / "sess-a.1002.jsonl").write_text("", encoding="utf-8")
+    (journal_dir / "sess-a~1001.jsonl").write_text("", encoding="utf-8")
+    (journal_dir / "sess-a~1002.jsonl").write_text("", encoding="utf-8")
     (journal_dir / "sess-b.jsonl").write_text("", encoding="utf-8")
 
     ids = iter_turn_journal_session_ids(tmp_path)

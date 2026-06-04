@@ -36,7 +36,7 @@ def _journal_path(session_id: str, session_dir: Path | None = None) -> Path:
     if not sid or "/" in sid or "\\" in sid or not _SESSION_ID_RE.fullmatch(sid):
         raise ValueError("invalid session_id")
     root = Path(session_dir) if session_dir is not None else _default_session_dir()
-    return root / TURN_JOURNAL_DIR_NAME / f"{sid}.{os.getpid()}.jsonl"
+    return root / TURN_JOURNAL_DIR_NAME / f"{sid}~{os.getpid()}.jsonl"
 
 
 def _make_turn_id() -> str:
@@ -84,7 +84,6 @@ def append_turn_journal_event(
     payload["session_id"] = str(session_id)
     payload.setdefault("turn_id", _make_turn_id())
     payload.setdefault("created_at", time.time())
-    event_name = str(payload.get("event") or "").strip()
     if event_name in _TERMINAL_EVENTS:
         payload.setdefault("terminal", True)
 
@@ -119,11 +118,10 @@ def read_turn_journal(session_id: str, *, session_dir: Path | None = None) -> di
     journal_dir = root / TURN_JOURNAL_DIR_NAME
     events: list[dict] = []
     malformed: list[dict] = []
-    # Collect pid-scoped shards (sid.<pid>.jsonl) plus legacy (sid.jsonl)
-    # Post-filter: only keep shards where the suffix after sid. is purely numeric,
-    # otherwise glob("sid.*.jsonl") would also match "sid.subsid.pid.jsonl".
-    raw_shards = list(journal_dir.glob(f"{sid}.*.jsonl")) if journal_dir.exists() else []
-    shards: list[Path] = [p for p in raw_shards if p.stem[len(sid) + 1:].isdigit()]
+    # Collect pid-scoped shards ({sid}~{pid}.jsonl) plus legacy ({sid}.jsonl).
+    # The ~ separator cannot appear in session IDs (_SESSION_ID_RE allows only [A-Za-z0-9_.-]),
+    # so the glob is unambiguous even for dotted-numeric session IDs like "sess.123".
+    shards: list[Path] = list(journal_dir.glob(f"{sid}~*.jsonl")) if journal_dir.exists() else []
     legacy = journal_dir / f"{sid}.jsonl"
     if legacy.exists():
         shards.append(legacy)
@@ -235,10 +233,10 @@ def iter_turn_journal_session_ids(session_dir: Path) -> list[str]:
     for path in journal_dir.glob("*.jsonl"):
         if not path.is_file():
             continue
-        stem = path.stem  # e.g. "sid-1.12345" or "sid-1"
-        parts = stem.rsplit(".", 1)
-        if len(parts) == 2 and parts[1].isdigit():
-            session_ids.add(parts[0])
+        stem = path.stem  # e.g. "sid-1~12345" or "sid-1"
+        tilde = stem.find("~")
+        if tilde > 0:
+            session_ids.add(stem[:tilde])
         else:
             session_ids.add(stem)
     return sorted(session_ids)
