@@ -2,9 +2,10 @@
 
 When ``_load_cli_sessions_uncached`` passed ``exclude_sources=None`` to
 ``read_importable_agent_session_rows``, the 20-row window filled with cron
-entries, hiding Discord/Telegram sessions entirely.  The fix removes that
-override so the default ``("cron", "webui")`` exclusion applies to the main
-pass; the cron second-pass already recovers cron sessions independently.
+entries, hiding Discord/Telegram sessions entirely.  The fix narrows the
+exclusion to ``("cron",)`` so cron rows stay out of the main pass (the cron
+second-pass recovers them independently) while ``source='webui'`` rows remain
+visible for sidecar-less recovery.
 """
 
 import pathlib
@@ -131,3 +132,72 @@ def test_cron_sessions_recovered_by_second_pass(tmp_path):
 
     cron_sessions = [s for s in result if s["source_tag"] == "cron"]
     assert len(cron_sessions) > 0, "Cron sessions should be recovered by the second pass"
+
+
+def test_webui_sidecarless_sessions_not_excluded(tmp_path):
+    """WebUI sessions in state.db without JSON sidecars must remain visible.
+
+    The exclude_sources must only filter cron, not webui. A source='webui'
+    row with messages but no JSON sidecar file needs to appear in the sidebar
+    so the session_recovery path can materialize the sidecar on demand.
+    """
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            source TEXT,
+            session_source TEXT,
+            title TEXT,
+            model TEXT,
+            started_at REAL NOT NULL,
+            message_count INTEGER DEFAULT 0,
+            parent_session_id TEXT,
+            ended_at REAL,
+            end_reason TEXT
+        );
+        CREATE INDEX idx_sessions_started ON sessions(started_at);
+        CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT,
+            role TEXT,
+            content TEXT,
+            timestamp REAL
+        );
+        CREATE INDEX idx_messages_session ON messages(session_id, timestamp);
+        """
+    )
+    now = time.time()
+    conn.execute(
+        """
+        INSERT INTO sessions
+        (id, source, session_source, title, model, started_at, message_count,
+         parent_session_id, ended_at, end_reason)
+        VALUES ('webui_orphan_001', 'webui', 'webui', 'Lost sidecar session',
+                'claude-sonnet-4.6', ?, 3, NULL, NULL, NULL)
+        """,
+        (now,),
+    )
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, timestamp)"
+            " VALUES (?, 'webui_orphan_001', 'user', 'message', ?)",
+            (f"webui_msg_{i}", now + i),
+        )
+    conn.commit()
+    conn.close()
+
+    with (
+        mock.patch("api.models.get_claude_code_sessions", return_value=[]),
+        mock.patch("api.models.get_last_workspace", return_value=tmp_path),
+        mock.patch("api.models.ensure_cron_project", return_value="cron-project-id"),
+        mock.patch("api.models.Session.load_metadata_only", return_value=None),
+    ):
+        result = models._load_cli_sessions_uncached(tmp_path, db, _cli_profile=None)
+
+    webui_ids = {s["session_id"] for s in result if s["source_tag"] == "webui"}
+    assert "webui_orphan_001" in webui_ids, (
+        "WebUI sidecar-less sessions must not be excluded from the main pass. "
+        "The exclude_sources should be ('cron',), not ('cron', 'webui')."
+    )

@@ -3478,6 +3478,7 @@ def _load_cli_sessions_uncached(hermes_home: Path, db_path: Path, _cli_profile) 
         db_path,
         limit=CLI_VISIBLE_SESSION_LIMIT,
         log=logger,
+        exclude_sources=("cron",),
     ):
         sid = row['id']
         raw_ts = row['last_activity'] or row['started_at']
