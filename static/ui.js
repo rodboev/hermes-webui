@@ -8366,6 +8366,44 @@ function _thinkingCardHtml(text, open){
   const classes=`thinking-card${shouldOpen?' open':''}`;
   return `<div class="${classes}"><div class="thinking-card-header" onclick="this.parentElement.classList.toggle('open')"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span><span class="thinking-card-btn-row">${copyBtn}<span class="thinking-card-toggle">${li('chevron-right',12)}</span></span></div><div class="thinking-card-body"><pre>${esc(clean)}</pre></div></div>`;
 }
+function isInterleavedTranscriptBubbles(){
+  return window._interleavedTranscriptBubbles===true;
+}
+
+/**
+ * Generator: yields {type, content} sub-parts from one assistant message.
+ *   type: 'comment'    — prose text (string)
+ *   type: 'thinking'   — reasoning/thinking text (string)
+ *   type: 'cli-action' — tool call (tc object from tool_calls / content tool_use)
+ *   type: 'result'     — tool result snippet (string, may be empty)
+ */
+function* walkMessageParts(m, toolResultsByTid){
+  if(!m||m.role!=='assistant') return;
+  const thinking=m.reasoning_content||m.reasoning||m.thinking||m._reasoning||'';
+  if(thinking) yield {type:'thinking', content:thinking};
+  // Anthropic content-array format
+  if(Array.isArray(m.content)){
+    for(const part of m.content){
+      if(!part||typeof part!=='object') continue;
+      if(part.type==='text'&&part.text) yield {type:'comment', content:part.text};
+      if(part.type==='tool_use'){
+        yield {type:'cli-action', content:part};
+        const result=(toolResultsByTid&&toolResultsByTid[part.id])||'';
+        if(result) yield {type:'result', content:result};
+      }
+    }
+    return;
+  }
+  // OpenAI / top-level format
+  const text=typeof m.content==='string'?m.content:'';
+  if(text) yield {type:'comment', content:text};
+  for(const tc of (m.tool_calls||[])){
+    yield {type:'cli-action', content:tc};
+    const tid=tc.id||tc.call_id||'';
+    const result=(toolResultsByTid&&tid&&toolResultsByTid[tid])||'';
+    if(result) yield {type:'result', content:result};
+  }
+}
 function isSimplifiedToolCalling(){
   return window._simplifiedToolCalling!==false;
 }
@@ -11620,7 +11658,6 @@ function renderMessages(options){
         if(part.type==='comment'){
           const html=renderMd(part.content);
           bubble.insertAdjacentHTML('beforeend',`<div class="msg-body">${html}</div>`);
-<<<<<<< HEAD
         } else if(part.type==='thinking'){
           if(window._showThinking!==false) bubble.insertAdjacentHTML('beforeend', _thinkingCardHtml(part.content));
         } else if(part.type==='cli-action'){
