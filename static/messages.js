@@ -461,6 +461,7 @@ async function send(){
   else if(uploaded.length)msgText=`${text}\n\n[Attached files: ${uploadedPaths.join(', ')}]`;
   if(typeof _forcedSkillDirective==='string'&&_forcedSkillDirective){
     msgText=`${_forcedSkillDirective}\n\n${msgText||''}`.trim();
+    _forcedSkillDirective=null;
   }
   if(!msgText){setComposerStatus('Nothing to send');return;}
 
@@ -634,7 +635,7 @@ async function send(){
   // Open SSE stream and render tokens live
   attachLiveStream(activeSid, streamId, uploadedNames);
 
-  }finally{ _sendInProgress=false; _sendInProgressSid=null; _forcedSkillDirective=null; }
+  }finally{ _sendInProgress=false; _sendInProgressSid=null; }
 }
 
 const LIVE_STREAMS={};
