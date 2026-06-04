@@ -366,6 +366,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/></svg>
           <span data-i18n="settings_tab_system">System</span>
         </button>
+        <button type="button" class="side-menu-item" data-settings-section="help" onclick="switchSettingsSection('help')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span data-i18n="settings_tab_help">Help</span>
+        </button>
       </div>
     </div>
   <div class="resize-handle" id="sidebarResize"></div>
@@ -1332,6 +1336,24 @@
               <div class="mcp-restart-hint" data-i18n="mcp_tools_runtime_note">Tool inventory only uses already-known active MCP runtime data; the WebUI does not start or probe servers.</div>
             </div>
             <button class="sm-btn" onclick="saveSettings()" style="margin-top:12px;width:100%;padding:8px;font-weight:600" data-i18n="settings_save_btn">Save Settings</button>
+          </div>
+          <div class="settings-pane" id="settingsPaneHelp">
+            <div class="settings-section-head">
+              <div>
+                <div class="settings-section-title" data-i18n="settings_tab_help">Help</div>
+                <div class="settings-section-meta" data-i18n="settings_help_meta">Resources and support for Hermes WebUI.</div>
+              </div>
+            </div>
+            <div class="settings-field" style="margin-top:8px">
+              <label data-i18n="settings_help_docs_label">Documentation</label>
+              <div style="font-size:12px;color:var(--muted);margin-bottom:8px" data-i18n="settings_help_docs_desc">Guides, configuration reference, and the full Hermes WebUI README.</div>
+              <a href="https://get-hermes.ai/" target="_blank" rel="noopener noreferrer" class="sm-btn" style="display:inline-block;text-decoration:none;padding:7px 14px;font-weight:600" data-i18n="settings_help_docs_link">Open Documentation</a>
+            </div>
+            <div class="settings-field" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+              <label data-i18n="settings_help_issue_label">Having an issue?</label>
+              <div style="font-size:12px;color:var(--muted);margin-bottom:8px" data-i18n="settings_help_issue_desc">Search existing reports or open a new one on GitHub.</div>
+              <a href="https://github.com/nesquena/hermes-webui/issues" target="_blank" rel="noopener noreferrer" class="sm-btn" style="display:inline-block;text-decoration:none;padding:7px 14px;font-weight:600" data-i18n="settings_help_issue_link">Open GitHub Issues</a>
+            </div>
           </div>
       </div>
     </div>
