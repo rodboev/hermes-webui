@@ -1212,6 +1212,7 @@ const LOCALES = {
     profile_gateway_running: 'Gateway running',
     profile_gateway_stopped: 'Gateway stopped',
     profile_active: 'ACTIVE',
+    profile_hidden_from_chat: 'Hidden from chat',
     profile_no_configuration: 'No configuration',
     profile_skill_count: (count) => `${count} skill${count === 1 ? '' : 's'}`,
     profile_use: 'Use',

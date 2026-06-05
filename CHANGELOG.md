@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Profiles can now opt out of the chat picker with `visible: false` in `profile.yaml`.** Hidden profiles remain available in the Profiles management panel, where they are labeled as hidden from chat. (#3623, @rodboev)
+
 ## [v0.51.272] — 2026-06-05 — Release IN (stage-p3a — conflict-safe self-update recovery)
 
 ### Fixed
