@@ -16,7 +16,6 @@ import shutil
 import sys
 import threading
 from contextlib import contextmanager
-from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -1107,18 +1106,11 @@ def list_profiles_api() -> list:
 
 def _profile_visible_from_meta(profile_path: Path) -> bool:
     """Return False only for an explicit boolean ``visible: false`` in profile.yaml."""
-    meta_path = Path(profile_path) / 'profile.yaml'
     try:
-        stat = meta_path.stat()
-    except OSError:
-        return True
-    return _profile_visible_from_meta_cached(str(meta_path), stat.st_mtime_ns, stat.st_size)
-
-
-@lru_cache(maxsize=256)
-def _profile_visible_from_meta_cached(meta_path: str, mtime_ns: int, size: int) -> bool:
-    try:
-        data = yaml.safe_load(Path(meta_path).read_text(encoding='utf-8'))
+        meta_path = Path(profile_path) / 'profile.yaml'
+        if not meta_path.exists():
+            return True
+        data = yaml.safe_load(meta_path.read_text(encoding='utf-8'))
     except Exception:
         return True
     if not isinstance(data, dict):
