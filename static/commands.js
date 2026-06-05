@@ -881,25 +881,33 @@ async function cmdUse(args){
     return;
   }
   let resolve;
-  _forcedSkillDirectivePending = new Promise(r => { resolve = r; });
+  const pending = {sessionId:S.session&&S.session.session_id||null,promise:null};
+  pending.promise = new Promise(r => { resolve = r; });
+  _forcedSkillDirectivePending = pending;
+  const isCurrentSession = () => !pending.sessionId || (S.session&&S.session.session_id)===pending.sessionId;
   try{
     const data = await api('/api/skills');
     const skills = data.skills || [];
     const match = skills.find(s => (s.name||'').toLowerCase() === args.toLowerCase());
     if(!match){
       resolve(null);
-      _forcedSkillDirectivePending = null;
-      const msg = {role:'assistant', content:`No skill named \`${args}\`. Use \`/skills\` to see available skills.`};
-      S.messages.push(msg); renderMessages(); return;
+      if(_forcedSkillDirectivePending===pending)_forcedSkillDirectivePending = null;
+      if(isCurrentSession()){
+        const msg = {role:'assistant', content:`No skill named \`${args}\`. Use \`/skills\` to see available skills.`};
+        S.messages.push(msg); renderMessages();
+      }
+      return;
     }
     const directive = `[USER OVERRIDE] You MUST consult skill '${match.name}' via skill_view before responding to the next message.`;
     resolve(directive);
-    S.messages.push({role:'assistant', content:`Next turn: skill \`${match.name}\` will be forced.`});
-    renderMessages();
+    if(isCurrentSession()){
+      S.messages.push({role:'assistant', content:`Next turn: skill \`${match.name}\` will be forced.`});
+      renderMessages();
+    }
     showToast(`Skill \`${match.name}\` will be used for next turn.`);
   }catch(e){
     resolve(null);
-    _forcedSkillDirectivePending = null;
+    if(_forcedSkillDirectivePending===pending)_forcedSkillDirectivePending = null;
     showToast('Failed to load skills: '+e.message);
   }
 }

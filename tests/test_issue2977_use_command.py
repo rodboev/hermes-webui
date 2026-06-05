@@ -32,7 +32,8 @@ def test_forced_skill_directive_declared():
 
 def test_forced_skill_directive_set_in_cmdUse():
     src = read("static/commands.js")
-    assert "_forcedSkillDirectivePending = new Promise" in src, "_forcedSkillDirectivePending must be set to a Promise inside cmdUse"
+    assert "pending.promise = new Promise" in src, "cmdUse must create a pending Promise"
+    assert "_forcedSkillDirectivePending = pending;" in src, "cmdUse must publish the pending directive before awaiting"
 
 
 def test_use_entry_has_noEcho():
@@ -58,7 +59,7 @@ def test_directive_consumed_at_injection_site():
     finally_part = src.split("finally")[1] if "finally" in src else ""
     assert "_forcedSkillDirectivePending = null;" not in finally_part, \
         "_forcedSkillDirectivePending must NOT be cleared in the finally block"
-    assert "const _directive = await _forcedSkillDirectivePending;" in src, \
+    assert "const _directive = await _pending.promise;" in src, \
         "consume site must await the pending promise"
     assert "_forcedSkillDirectivePending = null;" in src, \
         "_forcedSkillDirectivePending must be cleared somewhere in messages.js"
@@ -82,7 +83,7 @@ def test_pending_promise_set_synchronously():
     src = read("static/commands.js")
     fn_start = src.index("async function cmdUse(args)")
     fn_body = src[fn_start:]
-    pending_pos = fn_body.index("_forcedSkillDirectivePending = new Promise")
+    pending_pos = fn_body.index("_forcedSkillDirectivePending = pending;")
     first_await = fn_body.index("await ")
     assert pending_pos < first_await, \
         "_forcedSkillDirectivePending must be set before the first await to close the race window"
@@ -95,3 +96,21 @@ def test_directive_survives_local_slash_commands():
     consume = src.index("_forcedSkillDirectivePending")
     assert early_return < consume, \
         "slash-command early-return must precede the directive consume block"
+
+
+def test_directive_pending_captures_session_id():
+    src = read("static/commands.js")
+    assert "const pending = {sessionId:S.session&&S.session.session_id||null,promise:null};" in src, \
+        "cmdUse must capture the session where /use was issued"
+    assert "const isCurrentSession = () => !pending.sessionId || (S.session&&S.session.session_id)===pending.sessionId;" in src, \
+        "async /use completion must avoid writing status messages into a different session"
+
+
+def test_directive_only_consumed_by_matching_session():
+    src = read("static/messages.js")
+    assert "const _pending=_forcedSkillDirectivePending;" in src, \
+        "send() must snapshot the pending directive before awaiting it"
+    assert "if(!_pending.sessionId||_pending.sessionId===activeSid){" in src, \
+        "send() must only consume /use directives issued for the active session"
+    assert "if(_forcedSkillDirectivePending===_pending)_forcedSkillDirectivePending = null;" in src, \
+        "send() must not clear a newer pending directive created while awaiting"
