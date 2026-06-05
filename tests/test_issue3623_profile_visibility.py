@@ -31,7 +31,7 @@ def _install_fake_hermes_profiles(monkeypatch, rows):
     monkeypatch.setitem(sys.modules, "hermes_cli.profiles", profiles_mod)
 
 
-def test_profile_yaml_visible_false_is_exposed_as_hidden(monkeypatch, tmp_path):
+def test_api_visible_flag_from_profile_yaml(monkeypatch, tmp_path):
     import api.profiles as profiles
 
     profiles._profile_visible_from_meta_cached.cache_clear()
@@ -68,23 +68,11 @@ def test_profile_yaml_visible_false_is_exposed_as_hidden(monkeypatch, tmp_path):
         "string-false": True,
     }
 
-
-def test_profile_yaml_visibility_cache_invalidates_when_file_changes(tmp_path):
-    import api.profiles as profiles
-
-    profiles._profile_visible_from_meta_cached.cache_clear()
-    profile = tmp_path / "profiles" / "worker-coder"
-    profile.mkdir(parents=True)
-    meta = profile / "profile.yaml"
-
-    meta.write_text("visible: false\n", encoding="utf-8")
-    assert profiles._profile_visible_from_meta(profile) is False
-
-    meta.write_text("visible: true\n", encoding="utf-8")
-    assert profiles._profile_visible_from_meta(profile) is True
+    (hidden / "profile.yaml").write_text("visible: true\n", encoding="utf-8")
+    assert profiles._profile_visible_from_meta(hidden) is True
 
 
-def test_default_profile_fallback_stays_visible(monkeypatch):
+def test_default_profile_is_visible(monkeypatch):
     import api.profiles as profiles
 
     monkeypatch.setattr(profiles, "_get_profile_skills_stats", lambda _path: (0, 0))
@@ -107,7 +95,7 @@ def _run_node(script: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_profile_dropdown_filters_hidden_profiles_but_preserves_active():
+def test_dropdown_filters_hidden_profiles():
     _run_node(
         r"""
         const fs = require('fs');
@@ -178,7 +166,7 @@ def test_profile_dropdown_filters_hidden_profiles_but_preserves_active():
     )
 
 
-def test_profiles_management_panel_renders_all_profiles_and_marks_hidden():
+def test_profiles_panel_marks_hidden_profiles():
     _run_node(
         r"""
         const fs = require('fs');
