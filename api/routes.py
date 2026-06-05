@@ -2226,17 +2226,25 @@ def _resolve_effective_session_model_for_display(session) -> str:
     effective model for the response payload only and leave disk state alone.
     """
     original_model = getattr(session, "model", None) or ""
+    requested_provider = getattr(session, "model_provider", None)
+    _pp_provider, _pp_default = _read_profile_model_config(session, requested_provider)
     effective_model, _provider, _changed = _resolve_compatible_session_model_state(
         original_model or None,
-        getattr(session, "model_provider", None),
+        requested_provider,
+        profile_provider=_pp_provider,
+        profile_default_model=_pp_default,
     )
     return effective_model or original_model
 
 def _resolve_effective_session_model_provider_for_display(session) -> str | None:
     original_model = getattr(session, "model", None) or ""
+    requested_provider = getattr(session, "model_provider", None)
+    _pp_provider, _pp_default = _read_profile_model_config(session, requested_provider)
     _model, provider, _changed = _resolve_compatible_session_model_state(
         original_model or None,
-        getattr(session, "model_provider", None),
+        requested_provider,
+        profile_provider=_pp_provider,
+        profile_default_model=_pp_default,
     )
     return provider
 
