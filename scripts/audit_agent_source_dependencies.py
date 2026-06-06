@@ -130,7 +130,8 @@ def _runtime_import_findings(root: Path) -> list[Finding]:
     for path in _iter_python_files(root):
         rel = path.relative_to(root).as_posix()
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=rel)
         except (SyntaxError, UnicodeDecodeError):
             continue
         for node in ast.walk(tree):
@@ -161,7 +162,46 @@ def _runtime_import_findings(root: Path) -> list[Finding]:
                         text=_line_text(path, node.lineno),
                     )
                 )
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                findings.extend(_embedded_python_import_findings(rel, node.lineno, node.value.value))
     return sorted(findings, key=lambda item: (item.path, item.line, item.anchor))
+
+
+def _embedded_python_import_findings(rel: str, base_line: int, source: str) -> list[Finding]:
+    if "import " not in source:
+        return []
+    try:
+        tree = ast.parse(source, filename=f"{rel}:embedded")
+    except SyntaxError:
+        return []
+    lines = source.splitlines()
+    findings: list[Finding] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _module_root(alias.name) in AGENT_MODULE_ROOTS:
+                    line = base_line + node.lineno
+                    findings.append(
+                        Finding(
+                            path=rel,
+                            line=line,
+                            kind=_import_kind(alias.name),
+                            anchor=alias.name,
+                            text=lines[node.lineno - 1].strip() if node.lineno - 1 < len(lines) else "",
+                        )
+                    )
+        elif isinstance(node, ast.ImportFrom) and node.module and _module_root(node.module) in AGENT_MODULE_ROOTS:
+            line = base_line + node.lineno
+            findings.append(
+                Finding(
+                    path=rel,
+                    line=line,
+                    kind=_import_kind(node.module),
+                    anchor=node.module,
+                    text=lines[node.lineno - 1].strip() if node.lineno - 1 < len(lines) else "",
+                )
+            )
+    return findings
 
 
 def _findings_by_kind(findings: Iterable[Finding], kinds: set[str]) -> tuple[Finding, ...]:

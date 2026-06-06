@@ -117,6 +117,7 @@ def test_audit_reports_runtime_auxiliary_and_model_metadata_imports():
     assert ("api/streaming.py", "agent.auxiliary_client") in anchors
     assert ("api/streaming.py", "agent.model_metadata") in anchors
     assert ("api/config.py", "hermes_cli.models") in anchors
+    assert ("api/providers.py", "agent.account_usage") in anchors
 
 
 def test_audit_reports_runtime_state_and_provider_imports():
@@ -137,6 +138,7 @@ def test_audit_keeps_client_package_candidates_visible():
     assert ("api/streaming.py", "hermes_constants") in anchors
     assert ("api/routes.py", "agent.skill_utils") in anchors
     assert ("api/routes.py", "hermes_cli.plugins") in anchors
+    assert ("api/providers.py", "agent.credential_pool") in anchors
 
 
 def test_markdown_output_is_utf8_safe_on_windows_stdout():
@@ -144,3 +146,11 @@ def test_markdown_output_is_utf8_safe_on_windows_stdout():
 
     assert "# Agent Source Dependency Audit" in markdown
     assert "runtime_agent_execution" in markdown
+
+
+def test_contract_index_links_agent_api_contract():
+    contracts = (REPO / "docs" / "CONTRACTS.md").read_text(encoding="utf-8")
+
+    assert "docs/architecture/agent-api-contract.md" in contracts
+    assert "issue #2491" in contracts
+    assert "source mounts can be removed" in contracts
