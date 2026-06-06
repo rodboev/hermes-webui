@@ -1226,7 +1226,6 @@ class _AccountUsageProbeWorker:
     def __init__(self, home: Path):
         self.home = Path(home)
         self.last_used = time.monotonic()
-        self._generation = 0
         self._lock = threading.RLock()
         self._proc: subprocess.Popen[str] | None = None
 
@@ -1234,7 +1233,6 @@ class _AccountUsageProbeWorker:
         with self._lock:
             proc = self._proc
             self._proc = None
-            self._generation += 1
         self._close_process(proc)
 
     @staticmethod
@@ -1261,7 +1259,7 @@ class _AccountUsageProbeWorker:
     def fetch(self, provider: str, *, api_key: str | None = None) -> Any:
         with self._lock:
             self.last_used = time.monotonic()
-            proc = self._ensure_process(provider, api_key)
+            proc = self._ensure_process(provider)
             if proc is None or proc.stdin is None or proc.stdout is None:
                 return None
 
@@ -1312,12 +1310,11 @@ class _AccountUsageProbeWorker:
                 return None
             return _account_usage_payload_to_snapshot(payload)
 
-    def _ensure_process(self, provider: str, api_key: str | None) -> subprocess.Popen[str] | None:
+    def _ensure_process(self, provider: str) -> subprocess.Popen[str] | None:
         if self._proc is not None and self._proc.poll() is None:
             return self._proc
         old_proc = self._proc
         self._proc = None
-        self._generation += 1
         self._close_process(old_proc)
         try:
             from api.config import PYTHON_EXE
@@ -1387,8 +1384,27 @@ def _close_account_usage_probe_workers() -> None:
     with _account_usage_worker_pool_lock:
         workers = list(_account_usage_worker_pool.values())
         _account_usage_worker_pool.clear()
+    _close_account_usage_probe_worker_list(workers)
+
+
+def _close_account_usage_probe_worker_list(workers: list[_AccountUsageProbeWorker]) -> None:
     for worker in workers:
         worker.close()
+
+
+def _close_account_usage_probe_workers_async() -> None:
+    with _account_usage_worker_pool_lock:
+        workers = list(_account_usage_worker_pool.values())
+        _account_usage_worker_pool.clear()
+    if not workers:
+        return
+    thread = threading.Thread(
+        target=_close_account_usage_probe_worker_list,
+        args=(workers,),
+        daemon=True,
+        name="account-usage-worker-close",
+    )
+    thread.start()
 
 
 atexit.register(_close_account_usage_probe_workers)
@@ -1419,12 +1435,11 @@ def invalidate_account_usage_status_cache(provider_id: str | None = None) -> Non
     with _account_usage_status_cache_lock:
         if not normalized:
             _account_usage_status_cache.clear()
-            _close_account_usage_probe_workers()
-            return
-        for key in list(_account_usage_status_cache):
-            if key[0] == normalized:
-                _account_usage_status_cache.pop(key, None)
-    _close_account_usage_probe_workers()
+        else:
+            for key in list(_account_usage_status_cache):
+                if key[0] == normalized:
+                    _account_usage_status_cache.pop(key, None)
+    _close_account_usage_probe_workers_async()
 
 
 def _set_cached_account_usage(
@@ -2318,7 +2333,6 @@ def remove_provider_key(provider_id: str) -> dict[str, Any]:
     # Clean those up so _provider_has_key() returns False after removal.
     if result.get("ok"):
         _clean_provider_key_from_config(provider_id)
-        invalidate_account_usage_status_cache(provider_id)
 
     return result
 
