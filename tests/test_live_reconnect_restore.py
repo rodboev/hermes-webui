@@ -59,6 +59,9 @@ def test_restored_reconnect_display_deactivates_after_new_text_arrives():
 
     assert "let _restoredReconnectDisplayActive=restoredLiveTurn;" in messages_src[option_pos : option_pos + 140]
     assert "if(!_restoredReconnectDisplayActive||!assistantBody) return false;" in helper_block
+    assert "function _normalizedRestoredMarkdownText(markdown)" in messages_src
+    assert "scratch.innerHTML=renderMd(source);" in messages_src
+    assert "const targetText=_normalizedRestoredMarkdownText(target);" in helper_block
     assert "_restoredReconnectDisplayActive=false;" in helper_block
     divergent_block = helper_block[helper_block.index("_restoredReconnectDisplayActive=false;") :]
     matching_block = helper_block[helper_block.index("if(targetText===currentText){") : helper_block.index("_restoredReconnectDisplayActive=false;")]

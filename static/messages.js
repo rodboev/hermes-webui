@@ -1128,11 +1128,18 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
   function _normalizedRestoredText(text){
     return String(text||'').replace(/\s+/g,' ').trim();
   }
+  function _normalizedRestoredMarkdownText(markdown){
+    const source=String(markdown||'');
+    if(typeof document==='undefined'||typeof renderMd!=='function') return _normalizedRestoredText(source);
+    const scratch=document.createElement('div');
+    scratch.innerHTML=renderMd(source);
+    return _normalizedRestoredText(scratch.textContent||'');
+  }
   function _renderRestoredReconnectDisplay(displayText, fade=false){
     if(!_restoredReconnectDisplayActive||!assistantBody) return false;
     const target=String(displayText||'');
     const currentText=_normalizedRestoredText(assistantBody.textContent||'');
-    const targetText=_normalizedRestoredText(target);
+    const targetText=_normalizedRestoredMarkdownText(target);
     if(!currentText||!targetText) return false;
     assistantBody.classList.toggle('stream-fade-active',!!fade);
     if(targetText===currentText){
