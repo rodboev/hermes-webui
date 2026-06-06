@@ -5,6 +5,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 DOCKERFILE = (REPO / "Dockerfile").read_text(encoding="utf-8")
 DOCKER_DOCS = (REPO / "docs" / "docker.md").read_text(encoding="utf-8")
+DOCKER_INIT = (REPO / "docker_init.bash").read_text(encoding="utf-8")
+CHANGELOG = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
 def test_dockerfile_gpu_libraries_are_opt_in():
@@ -45,6 +47,7 @@ def test_docker_docs_cover_intel_amd_dri_mapping():
     assert "video" in DOCKER_DOCS
     assert "render" in DOCKER_DOCS
     assert "vainfo" in DOCKER_DOCS
+    assert "preserves Docker-provided supplemental groups" in DOCKER_DOCS
 
 
 def test_docker_docs_cover_nvidia_host_runtime_guidance():
@@ -59,3 +62,20 @@ def test_docker_docs_cover_nvidia_host_runtime_guidance():
 def test_docker_docs_do_not_claim_native_gpu_passthrough_verification():
     assert "not a claim that native GPU passthrough was verified" in DOCKER_DOCS
     assert "depends on host drivers" in DOCKER_DOCS
+
+
+def test_docker_init_preserves_supplemental_device_groups_for_runtime_user():
+    root_phase = DOCKER_INIT[:DOCKER_INIT.index("exec su -s /bin/bash")]
+
+    assert "for gid in $(id -G)" in root_phase
+    assert "groupadd -g \"$gid\"" in root_phase
+    assert "usermod -a -G \"$group_name\" hermeswebui" in root_phase
+    assert "Docker --group-add supplemental groups" in root_phase
+
+
+def test_changelog_mentions_optional_gpu_runtime_path():
+    unreleased = CHANGELOG[CHANGELOG.index("## [Unreleased]"):CHANGELOG.index("## [v0.51.293]")]
+
+    assert "Optional GPU runtime image path" in unreleased
+    assert "INSTALL_GPU_LIBS=1" in unreleased
+    assert "supplemental device groups" in unreleased

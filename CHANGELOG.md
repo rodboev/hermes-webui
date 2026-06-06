@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Optional GPU runtime image path for Docker users.** `INSTALL_GPU_LIBS=1` now builds an opt-in image with VA-API user-space libraries, Docker docs cover Intel/AMD `/dev/dri` and NVIDIA runtime passthrough, and the container init preserves supplemental device groups when dropping to the `hermeswebui` runtime user. (#3243)
+
 ## [v0.51.293] — 2026-06-06 — Release JI (stage-s5 — thinking card no longer renders twice)
 
 ### Fixed

@@ -113,7 +113,9 @@ services:
 ```
 
 `vainfo` should list the VA-API driver and supported profiles when the host
-driver stack and container permissions are correct.
+driver stack and container permissions are correct. The container entrypoint
+preserves Docker-provided supplemental groups before it drops privileges to the
+`hermeswebui` runtime user, so the WebUI process keeps access to `/dev/dri`.
 
 ### NVIDIA
 
