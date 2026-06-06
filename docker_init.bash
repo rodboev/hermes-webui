@@ -278,6 +278,10 @@ if [ "A${whoami}" == "Aroot" ]; then
       groupadd -g "$gid" "$group_name" 2>/dev/null || true
       group_name="$(getent group "$gid" | cut -d: -f1 || true)"
     fi
+    if [ -z "$group_name" ]; then
+      echo "!! WARNING: Could not create supplemental group for GID $gid; GPU device access may be unavailable"
+      continue
+    fi
     if [ -n "$group_name" ]; then
       usermod -a -G "$group_name" hermeswebui 2>/dev/null || echo "!! WARNING: Could not add hermeswebui to supplemental group $group_name ($gid)"
     fi

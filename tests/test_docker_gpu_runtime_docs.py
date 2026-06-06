@@ -69,6 +69,7 @@ def test_docker_init_preserves_supplemental_device_groups_for_runtime_user():
 
     assert "for gid in $(id -G)" in root_phase
     assert "groupadd -g \"$gid\"" in root_phase
+    assert "Could not create supplemental group for GID $gid" in root_phase
     assert "usermod -a -G \"$group_name\" hermeswebui" in root_phase
     assert "Docker --group-add supplemental groups" in root_phase
 
