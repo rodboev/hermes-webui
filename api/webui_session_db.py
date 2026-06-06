@@ -204,8 +204,11 @@ class WebUIJsonSessionDB:
     @staticmethod
     def _sort_timestamp(row: dict[str, Any]) -> float:
         for key in ("last_message_at", "updated_at", "created_at"):
+            value = row.get(key)
+            if value is None or value == "":
+                continue
             try:
-                return float(row.get(key) or 0)
+                return float(value)
             except (TypeError, ValueError):
                 continue
         return 0.0
@@ -241,3 +244,7 @@ def update_metadata(sid: str, fields: dict[str, Any]) -> dict[str, Any]:
 
 def archive(sid: str, archived: bool = True) -> dict[str, Any]:
     return WebUIJsonSessionDB().archive(sid, archived)
+
+
+def write_session(session: dict[str, Any]) -> dict[str, Any]:
+    return WebUIJsonSessionDB().write_session(session)

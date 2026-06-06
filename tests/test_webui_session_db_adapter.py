@@ -123,6 +123,19 @@ def test_read_only_operations_do_not_mutate_files(session_dir):
     assert after_stat.st_size == before_stat.st_size
 
 
+def test_sort_timestamp_falls_back_past_missing_values():
+    assert WebUIJsonSessionDB._sort_timestamp({"last_message_at": None, "updated_at": 25.0}) == 25.0
+    assert WebUIJsonSessionDB._sort_timestamp({"last_message_at": "", "created_at": "15.5"}) == 15.5
+
+
+def test_module_level_write_session_wrapper(session_dir):
+    payload, _path = _write_json_session(session_dir, sid="wrapper_session")
+    written = session_db.write_session(payload)
+
+    assert written == payload
+    assert session_db.read_session(payload["session_id"]) == payload
+
+
 def test_unified_session_db_flag_default_remains_false(monkeypatch, tmp_path):
     cfg_path = tmp_path / "missing-config.yaml"
     monkeypatch.setattr(config, "_get_config_path", lambda: cfg_path)
