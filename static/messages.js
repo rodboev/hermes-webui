@@ -824,6 +824,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
   if(!activeSid||!streamId) return;
   const reconnecting=!!options.reconnecting;
   const restoredLiveTurn=reconnecting&&!!options.restoredLiveTurn;
+  let _restoredReconnectDisplayActive=restoredLiveTurn;
   if(!INFLIGHT[activeSid]) INFLIGHT[activeSid]={messages:[...S.messages],uploaded:[...uploaded],toolCalls:[]};
   else {
     if(uploaded.length) INFLIGHT[activeSid].uploaded=[...uploaded];
@@ -1108,10 +1109,11 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
   }
   function _replayRestoredLiveToolCardsIfMissing(){
     if(!restoredLiveTurn||!_isActiveSession()) return false;
-    const inner=(typeof _assistantTurnBlocks==='function')?_assistantTurnBlocks($('liveAssistantTurn')):null;
-    if(inner&&inner.querySelector('.tool-card-row[data-live-tid]')) return true;
     const calls=_knownReconnectToolCalls();
-    if(!calls.length) return false;
+    if(!calls.length){
+      const inner=(typeof _assistantTurnBlocks==='function')?_assistantTurnBlocks($('liveAssistantTurn')):null;
+      return !!(inner&&inner.querySelector('.tool-card-row[data-live-tid]'));
+    }
     if(typeof replayLiveToolCardsFromState==='function') return replayLiveToolCardsFromState(calls);
     if(typeof placeLiveToolCardsHost==='function') placeLiveToolCardsHost();
     let replayed=false;
@@ -1127,7 +1129,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     return String(text||'').replace(/\s+/g,' ').trim();
   }
   function _renderRestoredReconnectDisplay(displayText, fade=false){
-    if(!restoredLiveTurn||!assistantBody) return false;
+    if(!_restoredReconnectDisplayActive||!assistantBody) return false;
     const target=String(displayText||'');
     const currentText=_normalizedRestoredText(assistantBody.textContent||'');
     const targetText=_normalizedRestoredText(target);
@@ -1135,9 +1137,11 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     if(fade) _streamFadeVisibleText=target;
     assistantBody.classList.toggle('stream-fade-active',!!fade);
     if(targetText===currentText) return true;
+    _restoredReconnectDisplayActive=false;
+    assistantBody.classList.remove('stream-fade-active');
     assistantBody.innerHTML=renderMd ? renderMd(target) : esc(target);
     _sanitizeSmdLinks(assistantBody);
-    return true;
+    return false;
   }
 
   // ── Shared SSE handler wiring (used for initial connection and reconnect) ──
