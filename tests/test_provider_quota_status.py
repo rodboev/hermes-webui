@@ -1451,6 +1451,64 @@ def test_account_usage_worker_idle_cleanup_closes_stale_process(monkeypatch, tmp
     assert launched[0][2].terminated is True
 
 
+def test_busy_account_usage_worker_uses_one_shot_fallback(monkeypatch, tmp_path):
+    import api.providers as providers
+
+    worker = providers._AccountUsageProbeWorker(tmp_path)
+    calls = []
+
+    def fake_one_shot(provider, home, *, api_key=None):
+        calls.append((provider, Path(home), api_key))
+        return SimpleNamespace(provider=provider, source="usage_api", windows=(), details=(), available=True)
+
+    monkeypatch.setattr(providers, "_fetch_account_usage_once_for_home", fake_one_shot)
+    locked = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        with worker._lock:
+            locked.set()
+            release.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert locked.wait(timeout=5)
+    try:
+        snapshot = worker.fetch("anthropic", api_key="sk-test")
+    finally:
+        release.set()
+        holder.join(timeout=5)
+        worker.close()
+
+    assert snapshot.provider == "anthropic"
+    assert calls == [("anthropic", tmp_path, "sk-test")]
+
+
+def test_account_usage_cleanup_removes_null_proc_worker(monkeypatch, tmp_path):
+    import api.providers as providers
+    import subprocess
+
+    launched = []
+
+    def fake_popen(*args, **kwargs):
+        proc = _FakeAccountUsageWorkerProcess()
+        launched.append(proc)
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    providers._close_account_usage_probe_workers()
+    try:
+        providers._agent_fetch_account_usage_for_home("openai-codex", tmp_path)
+        worker = providers._account_usage_worker_pool[str(tmp_path)]
+        worker.close()
+        providers._cleanup_account_usage_probe_workers()
+        assert str(tmp_path) not in providers._account_usage_worker_pool
+    finally:
+        providers._close_account_usage_probe_workers()
+
+    assert len(launched) == 1
+
+
 def test_provider_key_mutation_invalidates_warm_account_usage_workers(monkeypatch, tmp_path):
     import api.providers as providers
 

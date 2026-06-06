@@ -1257,58 +1257,65 @@ class _AccountUsageProbeWorker:
             pass
 
     def fetch(self, provider: str, *, api_key: str | None = None) -> Any:
-        with self._lock:
-            self.last_used = time.monotonic()
-            proc = self._ensure_process(provider)
-            if proc is None or proc.stdin is None or proc.stdout is None:
-                return None
+        if not self._lock.acquire(blocking=False):
+            return _fetch_account_usage_once_for_home(provider, self.home, api_key=api_key)
+        try:
+            return self._fetch_locked(provider, api_key=api_key)
+        finally:
+            self._lock.release()
 
-            request = json.dumps({
-                "provider": provider,
-                "api_key": api_key or "",
-                "env_var": _provider_env_var_for((provider or "").strip().lower()),
-            }) + "\n"
-            result: dict[str, Any] = {}
+    def _fetch_locked(self, provider: str, *, api_key: str | None = None) -> Any:
+        self.last_used = time.monotonic()
+        proc = self._ensure_process(provider)
+        if proc is None or proc.stdin is None or proc.stdout is None:
+            return None
 
-            def round_trip() -> None:
-                try:
-                    proc.stdin.write(request)
-                    proc.stdin.flush()
-                    result["line"] = proc.stdout.readline()
-                except Exception as exc:
-                    result["error"] = exc
+        request = json.dumps({
+            "provider": provider,
+            "api_key": api_key or "",
+            "env_var": _provider_env_var_for((provider or "").strip().lower()),
+        }) + "\n"
+        result: dict[str, Any] = {}
 
-            thread = threading.Thread(target=round_trip, daemon=True)
-            thread.start()
-            thread.join(_ACCOUNT_USAGE_SUBPROCESS_TIMEOUT_SECONDS)
-            self.last_used = time.monotonic()
-            if thread.is_alive():
-                self.close()
-                thread.join(timeout=1.0)
-                logger.debug("Account usage worker for %s timed out", provider)
-                return None
-            if result.get("error") is not None:
-                exc = result["error"]
-                self.close()
-                logger.debug(
-                    "Account usage worker for %s failed",
-                    provider,
-                    exc_info=(type(exc), exc, exc.__traceback__),
-                )
-                return None
-
-            line = str(result.get("line") or "").strip()
-            if not line:
-                self.close()
-                logger.debug("Account usage worker for %s exited before responding", provider)
-                return None
+        def round_trip() -> None:
             try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                self.close()
-                logger.debug("Account usage worker for %s returned invalid JSON", provider)
-                return None
-            return _account_usage_payload_to_snapshot(payload)
+                proc.stdin.write(request)
+                proc.stdin.flush()
+                result["line"] = proc.stdout.readline()
+            except Exception as exc:
+                result["error"] = exc
+
+        thread = threading.Thread(target=round_trip, daemon=True)
+        thread.start()
+        thread.join(_ACCOUNT_USAGE_SUBPROCESS_TIMEOUT_SECONDS)
+        self.last_used = time.monotonic()
+        if thread.is_alive():
+            self.close()
+            thread.join(timeout=1.0)
+            logger.debug("Account usage worker for %s timed out", provider)
+            return None
+        if result.get("error") is not None:
+            exc = result["error"]
+            self.close()
+            logger.debug(
+                "Account usage worker for %s failed",
+                provider,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            return None
+
+        line = str(result.get("line") or "").strip()
+        if not line:
+            self.close()
+            logger.debug("Account usage worker for %s exited before responding", provider)
+            return None
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            self.close()
+            logger.debug("Account usage worker for %s returned invalid JSON", provider)
+            return None
+        return _account_usage_payload_to_snapshot(payload)
 
     def _ensure_process(self, provider: str) -> subprocess.Popen[str] | None:
         if self._proc is not None and self._proc.poll() is None:
@@ -1348,6 +1355,72 @@ class _AccountUsageProbeWorker:
         return self._proc
 
 
+def _launch_account_usage_worker_process(
+    home: Path,
+    provider: str,
+    *,
+    stdin: Any = subprocess.PIPE,
+    stdout: Any = subprocess.PIPE,
+) -> subprocess.Popen[str] | None:
+    try:
+        from api.config import PYTHON_EXE
+    except Exception:
+        PYTHON_EXE = sys.executable or "python3"
+
+    kwargs: dict[str, Any] = {
+        "stdin": stdin,
+        "stdout": stdout,
+        "stderr": subprocess.DEVNULL,
+        "text": True,
+        "bufsize": 1,
+    }
+    if hasattr(os, "fork"):  # POSIX
+        kwargs["preexec_fn"] = _account_usage_preexec_fn
+
+    try:
+        return subprocess.Popen(
+            [
+                PYTHON_EXE,
+                "-c",
+                _ACCOUNT_USAGE_PARENT_DEATHSIG_BOOTSTRAP + _ACCOUNT_USAGE_SUBPROCESS_CODE,
+                "--worker",
+            ],
+            env=_account_usage_subprocess_env(home, provider, None),
+            **kwargs,
+        )
+    except Exception:
+        logger.debug("Account usage worker for %s failed to launch", provider, exc_info=True)
+        return None
+
+
+def _fetch_account_usage_once_for_home(provider: str, home: Path, *, api_key: str | None = None) -> Any:
+    proc = _launch_account_usage_worker_process(Path(home), provider)
+    if proc is None or proc.stdin is None or proc.stdout is None:
+        _AccountUsageProbeWorker._close_process(proc)
+        return None
+    request = json.dumps({
+        "provider": provider,
+        "api_key": api_key or "",
+        "env_var": _provider_env_var_for((provider or "").strip().lower()),
+    }) + "\n"
+    try:
+        stdout, _stderr = proc.communicate(request, timeout=_ACCOUNT_USAGE_SUBPROCESS_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _AccountUsageProbeWorker._close_process(proc)
+        return None
+    except Exception:
+        _AccountUsageProbeWorker._close_process(proc)
+        return None
+    try:
+        line = str(stdout or "").splitlines()[0]
+        payload = json.loads(line.strip())
+    except json.JSONDecodeError:
+        return None
+    except IndexError:
+        return None
+    return _account_usage_payload_to_snapshot(payload)
+
+
 def _get_account_usage_probe_worker(home: Path) -> _AccountUsageProbeWorker:
     key = str(Path(home))
     with _account_usage_worker_pool_lock:
@@ -1370,7 +1443,7 @@ def _cleanup_account_usage_probe_workers(
             if worker._lock.acquire(blocking=False):
                 try:
                     proc = worker._proc
-                    is_dead = proc is not None and proc.poll() is not None
+                    is_dead = proc is None or proc.poll() is not None
                     if is_dead or cutoff - worker.last_used >= idle_seconds:
                         stale.append((key, worker))
                         _account_usage_worker_pool.pop(key, None)
