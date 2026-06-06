@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parents[1]
+AUDIT_SCRIPT = REPO / "scripts" / "audit_agent_source_dependencies.py"
+
+
+def _run_audit() -> dict[str, object]:
+    proc = subprocess.run(
+        [sys.executable, str(AUDIT_SCRIPT), str(REPO)],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(proc.stdout)
+
+
+def _class_by_id(report: dict[str, object]) -> dict[str, dict[str, object]]:
+    classes = report["dependency_classes"]
+    assert isinstance(classes, list)
+    return {item["id"]: item for item in classes}
+
+
+def _anchors(dep_class: dict[str, object]) -> set[tuple[str, str]]:
+    findings = dep_class["findings"]
+    assert isinstance(findings, list)
+    return {
+        (str(finding["path"]), str(finding["anchor"]))
+        for finding in findings
+    }
+
+
+def _texts(dep_class: dict[str, object]) -> list[str]:
+    findings = dep_class["findings"]
+    assert isinstance(findings, list)
+    return [str(finding["text"]) for finding in findings]
+
+
+def test_audit_reports_expected_dependency_classes():
+    report = _run_audit()
+
+    assert report["schema_version"] == 1
+    classes = _class_by_id(report)
+    assert set(classes) == {
+        "docker_agent_source_volume",
+        "startup_dependency_install",
+        "runtime_auxiliary_model_metadata",
+        "runtime_session_state",
+        "runtime_gateway_provider",
+        "webui_local_or_client_package",
+    }
+    for dep_class in classes.values():
+        assert dep_class["finding_count"] > 0
+        assert dep_class["findings"]
+        assert dep_class["replacement_surface"]
+
+
+def test_audit_reports_compose_source_volume_anchors():
+    classes = _class_by_id(_run_audit())
+    anchors = _anchors(classes["docker_agent_source_volume"])
+    texts = _texts(classes["docker_agent_source_volume"])
+
+    assert ("docker-compose.two-container.yml", "hermes-agent-src") in anchors
+    assert ("docker-compose.three-container.yml", "hermes-agent-src") in anchors
+    assert any("hermes-agent-src:/opt/hermes" in text for text in texts)
+    assert any(
+        "hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro" in text
+        for text in texts
+    )
+
+
+def test_audit_reports_startup_install_dependencies():
+    classes = _class_by_id(_run_audit())
+    anchors = _anchors(classes["startup_dependency_install"])
+    texts = _texts(classes["startup_dependency_install"])
+
+    assert ("api/startup.py", "HERMES_WEBUI_AGENT_DIR") in anchors
+    assert ("api/startup.py", "auto_install_agent_deps") in anchors
+    assert ("server.py", "auto_install_agent_deps") in anchors
+    assert any("uv pip install" in text and "[all]" in text for text in texts)
+
+
+def test_audit_reports_runtime_auxiliary_and_model_metadata_imports():
+    classes = _class_by_id(_run_audit())
+    anchors = _anchors(classes["runtime_auxiliary_model_metadata"])
+
+    assert ("api/streaming.py", "agent.auxiliary_client") in anchors
+    assert ("api/streaming.py", "agent.model_metadata") in anchors
+    assert ("api/config.py", "hermes_cli.models") in anchors
+
+
+def test_audit_reports_runtime_state_and_provider_imports():
+    classes = _class_by_id(_run_audit())
+    state_anchors = _anchors(classes["runtime_session_state"])
+    provider_anchors = _anchors(classes["runtime_gateway_provider"])
+
+    assert ("api/streaming.py", "hermes_state") in state_anchors
+    assert ("api/state_sync.py", "hermes_state") in state_anchors
+    assert ("api/streaming.py", "hermes_cli.runtime_provider") in provider_anchors
+    assert ("api/routes.py", "hermes_cli.runtime_provider") in provider_anchors
+
+
+def test_audit_keeps_client_package_candidates_visible():
+    classes = _class_by_id(_run_audit())
+    anchors = _anchors(classes["webui_local_or_client_package"])
+
+    assert ("api/streaming.py", "hermes_constants") in anchors
+    assert ("api/routes.py", "agent.skill_utils") in anchors
+    assert ("api/routes.py", "hermes_cli.plugins") in anchors
