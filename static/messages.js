@@ -78,7 +78,7 @@ const _persistentStateToastSeen=new Set();
 
 function enhanceMarkdownTables(root){
   if(!root||!root.querySelectorAll) return;
-  const scope=root.matches&&root.matches('.msg-body')?root:root;
+  const scope=root;
   const tables=scope.querySelectorAll('.msg-body table:not([data-markdown-table-enhanced])');
   const sortLabel=typeof t==='function'?t('markdown_table_sort_column'):'Sort column';
   const filterLabel=typeof t==='function'?t('markdown_table_filter'):'Filter table';
@@ -113,7 +113,10 @@ function enhanceMarkdownTables(root){
       const button=document.createElement('button');
       button.type='button';
       button.className='markdown-table-sort';
-      button.setAttribute('aria-label',sortLabel);
+      const columnName=_markdownTableText(cell.textContent)||String(colIdx+1);
+      const columnSortLabel=`${sortLabel}: ${columnName}`;
+      button.setAttribute('aria-label',columnSortLabel);
+      button.title=columnSortLabel;
       button.setAttribute('aria-sort','none');
       const label=document.createElement('span');
       label.className='markdown-table-sort-label';
