@@ -7,8 +7,8 @@ multi-provider support).
 
 from __future__ import annotations
 
-import base64
 import atexit
+import base64
 import hashlib
 import json
 import logging
@@ -2291,6 +2291,7 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
     # Using invalidate_models_cache() instead of reload_config() to avoid
     # disrupting active streaming sessions that may be reading config.cfg.
     invalidate_models_cache()
+    invalidate_account_usage_status_cache(provider_id)
 
     return {
         "ok": True,
@@ -2317,6 +2318,7 @@ def remove_provider_key(provider_id: str) -> dict[str, Any]:
     # Clean those up so _provider_has_key() returns False after removal.
     if result.get("ok"):
         _clean_provider_key_from_config(provider_id)
+        invalidate_account_usage_status_cache(provider_id)
 
     return result
 

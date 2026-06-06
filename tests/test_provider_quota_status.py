@@ -1451,6 +1451,27 @@ def test_account_usage_worker_idle_cleanup_closes_stale_process(monkeypatch, tmp
     assert launched[0][2].terminated is True
 
 
+def test_provider_key_mutation_invalidates_warm_account_usage_workers(monkeypatch, tmp_path):
+    import api.providers as providers
+
+    invalidated = []
+
+    monkeypatch.setattr(providers, "_get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(providers, "invalidate_models_cache", lambda: None)
+    monkeypatch.setattr(
+        providers,
+        "invalidate_account_usage_status_cache",
+        lambda provider_id=None: invalidated.append(provider_id),
+    )
+
+    updated = providers.set_provider_key("anthropic", "sk-test-quota-worker")
+    removed = providers.set_provider_key("anthropic", None)
+
+    assert updated["ok"] is True
+    assert removed["ok"] is True
+    assert invalidated == ["anthropic", "anthropic"]
+
+
 def test_account_usage_worker_uses_controlled_pipe_stdin(monkeypatch):
     """Account-usage probe workers must not inherit process stdin."""
     import api.providers as providers
