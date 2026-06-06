@@ -5698,12 +5698,22 @@ function _normalizeHealthServerIdentity(rawIdentity){
   return Number.isFinite(numeric) ? String(numeric) : null;
 }
 
+function _healthResponseServerIdentity(data){
+  if(!data||typeof data!=='object') return null;
+  const serverStartedAt=_normalizeHealthServerIdentity(data.server_started_at);
+  const hasUptimeSeconds=data.uptime_seconds!==null&&data.uptime_seconds!==undefined;
+  const uptimeSeconds=hasUptimeSeconds?Number(data.uptime_seconds):NaN;
+  const normalizedUptime=Number.isFinite(uptimeSeconds)&&uptimeSeconds>=0 ? uptimeSeconds : null;
+  if(serverStartedAt===null&&normalizedUptime===null) return null;
+  return {serverStartedAt,uptimeSeconds:normalizedUptime};
+}
+
 async function _readHealthServerIdentity() {
   try {
     const r=await fetch(new URL('health', document.baseURI||location.href).href,{cache:'no-store'});
     if(!r.ok) return null;
     const data=await r.json();
-    return _normalizeHealthServerIdentity(data&&data.server_started_at);
+    return _healthResponseServerIdentity(data);
   } catch (_) {
     return null;
   }
@@ -5748,7 +5758,18 @@ async function _waitForServerThenReload(opts){
   opts=opts||{};
   const interval=opts.interval||500;
   const maxMs=opts.maxMs||15000;
-  const baselineServerIdentity=_normalizeHealthServerIdentity(opts.baselineServerIdentity);
+  const baselineServerIdentity=(()=>{
+    const rawIdentity=opts.baselineServerIdentity;
+    if(!rawIdentity||typeof rawIdentity!=='object'){
+      const normalizedServerStartedAt=_normalizeHealthServerIdentity(rawIdentity);
+      return normalizedServerStartedAt===null ? null : {serverStartedAt:normalizedServerStartedAt,uptimeSeconds:null};
+    }
+    const normalizedIdentity={
+      serverStartedAt:_normalizeHealthServerIdentity(rawIdentity.serverStartedAt),
+      uptimeSeconds:Number.isFinite(Number(rawIdentity.uptimeSeconds))&&Number(rawIdentity.uptimeSeconds)>=0 ? Number(rawIdentity.uptimeSeconds) : null,
+    };
+    return normalizedIdentity.serverStartedAt===null&&normalizedIdentity.uptimeSeconds===null ? null : normalizedIdentity;
+  })();
   window._restartingForUpdate=true;
   const msgEl=$('reconnectMsg');
   const banner=$('reconnectBanner');
@@ -5765,16 +5786,22 @@ async function _waitForServerThenReload(opts){
         let data={};
         try{ data=await r.json(); }catch(_){}
         if(data && data.status==='ok'){
-          const nextServerIdentity=_normalizeHealthServerIdentity(data&&data.server_started_at);
+          const nextServerIdentity=_healthResponseServerIdentity(data);
           if (baselineServerIdentity===null){
             location.reload();
             return;
           }
-          if (nextServerIdentity!==null && nextServerIdentity !== baselineServerIdentity){
+          if(
+            nextServerIdentity!==null&&(
+              (baselineServerIdentity.serverStartedAt===null&&nextServerIdentity.serverStartedAt!==null)||
+              (baselineServerIdentity.serverStartedAt!==null&&nextServerIdentity.serverStartedAt!==null&&nextServerIdentity.serverStartedAt!==baselineServerIdentity.serverStartedAt)||
+              (baselineServerIdentity.uptimeSeconds!==null&&nextServerIdentity.uptimeSeconds!==null&&nextServerIdentity.uptimeSeconds<baselineServerIdentity.uptimeSeconds)
+            )
+          ){
             location.reload();
             return;
           }
-          // Keep polling while the server keeps reporting the same (pre-restart) process identity
+          // Keep polling while /health still describes the pre-restart process.
         }
       }
     }catch(_){ /* socket closed during restart — retry */ }
