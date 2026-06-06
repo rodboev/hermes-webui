@@ -6669,15 +6669,16 @@ def _run_agent_streaming(
                     try:
                         from agent.model_metadata import get_model_context_length
                         from api.routes import _context_length_lookup_inputs_for_model
+                        _cfg_base_url = getattr(agent, 'base_url', '') or resolved_base_url or ''
                         _ctx_lookup = _context_length_lookup_inputs_for_model(
                             getattr(agent, 'model', resolved_model or '') or '',
                             resolved_provider,
-                            base_url=getattr(agent, 'base_url', '') or resolved_base_url or '',
+                            base_url=_cfg_base_url,
                             cfg=_cfg if isinstance(_cfg, dict) else {},
                         )
                         _cfg_ctx_len = _ctx_lookup.config_context_length
                         _cfg_custom_providers = _ctx_lookup.custom_providers
-                        _cfg_base_url = _ctx_lookup.base_url
+                        _cfg_base_url = _ctx_lookup.base_url or _cfg_base_url
                         _cfg_provider = _ctx_lookup.provider or resolved_provider or ''
                         _resolved_cl = get_model_context_length(
                             getattr(agent, 'model', resolved_model or '') or '',

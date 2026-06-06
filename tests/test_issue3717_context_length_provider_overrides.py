@@ -79,6 +79,41 @@ def test_route_resolver_uses_provider_model_context_length(monkeypatch):
     assert calls[-1]["provider"] == "openrouter"
 
 
+def test_route_resolver_uses_provider_model_context_length_without_base_url(monkeypatch):
+    import api.config as config
+    import api.routes as routes
+
+    calls = _install_fake_context_resolver(monkeypatch)
+    monkeypatch.setattr(
+        config,
+        "get_config",
+        lambda *a, **k: {
+            "model": {
+                "default": "default-model",
+                "context_length": 123456,
+            },
+            "providers": {
+                "anthropic": {
+                    "models": {
+                        "provider-model": {"context_length": 777000},
+                    },
+                },
+            },
+            "custom_providers": [],
+        },
+    )
+
+    result = routes._resolve_context_length_for_session_model(
+        "provider-model",
+        "anthropic",
+    )
+
+    assert result == 777000
+    assert calls[-1]["config_context_length"] == 777000
+    assert calls[-1]["base_url"] == ""
+    assert calls[-1]["provider"] == "anthropic"
+
+
 def test_route_resolver_uses_named_custom_provider_base_url(monkeypatch):
     import api.config as config
     import api.routes as routes
@@ -148,7 +183,8 @@ def test_global_context_length_remains_default_model_only(monkeypatch):
 
 def test_streaming_fallbacks_use_shared_provider_context_helper():
     assert STREAMING_PY.count("_context_length_lookup_inputs_for_model(") >= 2
-    assert "base_url=getattr(agent, 'base_url', '') or resolved_base_url or ''" in STREAMING_PY
+    assert "_cfg_base_url = getattr(agent, 'base_url', '') or resolved_base_url or ''" in STREAMING_PY
+    assert "base_url=_cfg_base_url" in STREAMING_PY
     assert "config_context_length=_cfg_ctx_len" in STREAMING_PY
     assert "provider=_cfg_provider" in STREAMING_PY
     assert "custom_providers=_cfg_custom_providers" in STREAMING_PY

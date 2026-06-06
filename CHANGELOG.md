@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Provider-scoped context-length overrides now survive every fallback path, including standard providers with no configured `base_url`.** Session load, session save, and live usage recomputation all keep forwarding provider-model `context_length` overrides and the older-agent fallback now preserves the resolved base URL instead of risking an unbound local in the legacy 2-arg call. (#3717, @rodboev)
+
 ## [v0.51.293] — 2026-06-06 — Release JI (stage-s5 — thinking card no longer renders twice)
 
 ### Fixed
