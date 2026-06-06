@@ -61,6 +61,9 @@ def test_restored_reconnect_display_deactivates_after_new_text_arrives():
     assert "if(!_restoredReconnectDisplayActive||!assistantBody) return false;" in helper_block
     assert "_restoredReconnectDisplayActive=false;" in helper_block
     divergent_block = helper_block[helper_block.index("_restoredReconnectDisplayActive=false;") :]
+    matching_block = helper_block[helper_block.index("if(targetText===currentText){") : helper_block.index("_restoredReconnectDisplayActive=false;")]
+    assert "if(fade) _streamFadeVisibleText=target;" in matching_block
+    assert "_streamFadeVisibleText='';" in divergent_block
     assert "_smdReconnect=true;" in divergent_block
     assert "assistantBody.innerHTML='';" in divergent_block
     assert "renderMd(target)" not in helper_block

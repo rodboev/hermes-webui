@@ -1134,11 +1134,14 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     const currentText=_normalizedRestoredText(assistantBody.textContent||'');
     const targetText=_normalizedRestoredText(target);
     if(!currentText||!targetText) return false;
-    if(fade) _streamFadeVisibleText=target;
     assistantBody.classList.toggle('stream-fade-active',!!fade);
-    if(targetText===currentText) return true;
+    if(targetText===currentText){
+      if(fade) _streamFadeVisibleText=target;
+      return true;
+    }
     _restoredReconnectDisplayActive=false;
     assistantBody.classList.remove('stream-fade-active');
+    _streamFadeVisibleText='';
     _smdReconnect=true;
     assistantBody.innerHTML='';
     return false;
