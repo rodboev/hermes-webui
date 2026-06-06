@@ -22,6 +22,17 @@ def _headers_from_security_helper():
     return dict(handler.sent_headers)
 
 
+def _directives(policy: str):
+    directives = {}
+    for entry in policy.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        key, _, value = entry.partition(" ")
+        directives[key] = value.strip()
+    return directives
+
+
 def test_security_helper_sends_enforcing_csp_with_hardening_directives(monkeypatch):
     monkeypatch.delenv("HERMES_WEBUI_CSP_CONNECT_EXTRA", raising=False)
 
@@ -36,6 +47,9 @@ def test_security_helper_sends_enforcing_csp_with_hardening_directives(monkeypat
     assert "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com" in policy
     assert "worker-src blob: 'self' https://cdn.jsdelivr.net" in policy
     assert "font-src 'self' data: https://fonts.gstatic.com" in policy
+    assert "object-src 'none'" in policy
+    assert "frame-ancestors 'self'" in policy
+    assert "media-src 'self' data: blob:" in policy
     assert "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* https://cdn.jsdelivr.net" in policy
 
 
@@ -65,6 +79,17 @@ def test_enforcing_and_report_only_csp_share_validated_connect_extra(monkeypatch
     assert "https://metrics.example.com" in report_only
 
 
+def test_report_only_policy_tracks_enforced_directives(monkeypatch):
+    monkeypatch.delenv("HERMES_WEBUI_CSP_CONNECT_EXTRA", raising=False)
+
+    enforced = _directives(_headers_from_security_helper()["Content-Security-Policy"])
+    report_only = _directives(Handler.csp_report_only_policy())
+
+    assert report_only.pop("report-uri") == "/api/csp-report"
+    assert report_only.pop("report-to") == "csp-endpoint"
+    assert report_only == enforced
+
+
 def test_report_only_csp_headers_still_point_to_collector(monkeypatch):
     sent_headers = []
     handler = Handler.__new__(Handler)
@@ -81,3 +106,20 @@ def test_report_only_csp_headers_still_point_to_collector(monkeypatch):
     )
     assert "report-uri /api/csp-report" in headers["Content-Security-Policy-Report-Only"]
     assert "report-to csp-endpoint" in headers["Content-Security-Policy-Report-Only"]
+
+
+def test_end_headers_reuses_cached_extra_connect_validation(monkeypatch, caplog):
+    monkeypatch.setenv(
+        "HERMES_WEBUI_CSP_CONNECT_EXTRA",
+        "https://metrics.example.com; script-src *",
+    )
+
+    sent_headers = []
+    handler = Handler.__new__(Handler)
+    handler.send_header = lambda key, value: sent_headers.append((key, value))
+    monkeypatch.setattr(BaseHTTPRequestHandler, "end_headers", lambda self: None)
+
+    _security_headers(handler)
+    Handler.end_headers(handler)
+
+    assert caplog.text.count("Ignoring invalid HERMES_WEBUI_CSP_CONNECT_EXTRA value") == 1

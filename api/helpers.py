@@ -60,29 +60,19 @@ _CSP_EXTRA_CONNECT_RE = _re.compile(
     r"^(?:https?|wss?)://(?:\*\.)?[A-Za-z0-9._~-]+(?::(?P<port>\d{1,5}|\*))?$"
 )
 _CSP_HEADER_NAME = 'Content-Security-Policy'
-_CSP_ENFORCED_POLICY_TEMPLATE = (
+_CSP_SHARED_POLICY_TEMPLATE = (
     "default-src 'self' https://*.cloudflareaccess.com; "
+    "object-src 'none'; "
+    "frame-ancestors 'self'; "
     "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://static.cloudflareinsights.com blob:; "
     "worker-src blob: 'self' https://cdn.jsdelivr.net; "
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
     "img-src 'self' data: https: blob:; "
     "font-src 'self' data: https://fonts.gstatic.com; "
-    "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* https://cdn.jsdelivr.net{extra_connect_src}; "
+    "media-src 'self' data: blob:; "
+    "connect-src {connect_src}; "
     "manifest-src 'self' https://*.cloudflareaccess.com; "
     "base-uri 'self'; form-action 'self'"
-)
-_CSP_REPORT_ONLY_POLICY_TEMPLATE = (
-    "default-src 'self'; "
-    "base-uri 'self'; "
-    "object-src 'none'; "
-    "frame-ancestors 'self'; "
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-    "img-src 'self' data: blob:; "
-    "font-src 'self' data:; "
-    "media-src 'self' data: blob:; "
-    "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*{extra_connect_src}; "
-    "report-uri /api/csp-report; report-to csp-endpoint"
 )
 
 
@@ -110,24 +100,33 @@ def _csp_extra_connect_src() -> str:
     return " " + " ".join(sources)
 
 
-def _build_csp_enforced_policy() -> str:
-    return _CSP_ENFORCED_POLICY_TEMPLATE.format(
-        extra_connect_src=_csp_extra_connect_src()
+def _csp_connect_src(extra_connect_src: str = "") -> str:
+    return f"{_CSP_CONNECT_BASE} https://cdn.jsdelivr.net{extra_connect_src}"
+
+
+def _build_csp_enforced_policy(extra_connect_src: str | None = None) -> str:
+    if extra_connect_src is None:
+        extra_connect_src = _csp_extra_connect_src()
+    return _CSP_SHARED_POLICY_TEMPLATE.format(
+        connect_src=_csp_connect_src(extra_connect_src)
     )
 
 
-def _build_csp_report_only_policy() -> str:
-    return _CSP_REPORT_ONLY_POLICY_TEMPLATE.format(
-        extra_connect_src=_csp_extra_connect_src()
+def _build_csp_report_only_policy(extra_connect_src: str | None = None) -> str:
+    return (
+        _build_csp_enforced_policy(extra_connect_src)
+        + "; report-uri /api/csp-report; report-to csp-endpoint"
     )
 
 
 def _security_headers(handler):
     """Add security headers to every response."""
+    extra_connect_src = _csp_extra_connect_src()
+    setattr(handler, "_csp_extra_connect_src", extra_connect_src)
     handler.send_header('X-Content-Type-Options', 'nosniff')
     handler.send_header('X-Frame-Options', 'DENY')
     handler.send_header('Referrer-Policy', 'same-origin')
-    handler.send_header(_CSP_HEADER_NAME, _build_csp_enforced_policy())
+    handler.send_header(_CSP_HEADER_NAME, _build_csp_enforced_policy(extra_connect_src))
     handler.send_header(
         'Permissions-Policy',
         'camera=(), microphone=(self), geolocation=(), clipboard-write=(self)'

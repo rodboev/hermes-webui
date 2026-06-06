@@ -262,11 +262,12 @@ class Handler(BaseHTTPRequestHandler):
     _CSP_REPORT_TO = '{"group":"csp-endpoint","max_age":10886400,"endpoints":[{"url":"/api/csp-report"}]}'
 
     @classmethod
-    def csp_report_only_policy(cls) -> str:
-        return _build_csp_report_only_policy()
+    def csp_report_only_policy(cls, extra_connect_src=None) -> str:
+        return _build_csp_report_only_policy(extra_connect_src)
 
     def end_headers(self) -> None:
-        self.send_header("Content-Security-Policy-Report-Only", self.csp_report_only_policy())
+        extra_connect_src = getattr(self, "_csp_extra_connect_src", None)
+        self.send_header("Content-Security-Policy-Report-Only", self.csp_report_only_policy(extra_connect_src))
         self.send_header("Report-To", self._CSP_REPORT_TO)
         super().end_headers()
 
