@@ -117,7 +117,7 @@ function enhanceMarkdownTables(root){
       const columnSortLabel=`${sortLabel}: ${columnName}`;
       button.setAttribute('aria-label',columnSortLabel);
       button.title=columnSortLabel;
-      button.setAttribute('aria-sort','none');
+      cell.setAttribute('aria-sort','none');
       const label=document.createElement('span');
       label.className='markdown-table-sort-label';
       while(cell.firstChild) label.appendChild(cell.firstChild);
@@ -131,10 +131,9 @@ function enhanceMarkdownTables(root){
         table.dataset.markdownTableSortCol=String(colIdx);
         table.dataset.markdownTableSortDir=nextDir;
         Array.from(headerRow.cells||[]).forEach((other)=>{
-          const otherBtn=other.querySelector('.markdown-table-sort');
-          if(otherBtn) otherBtn.setAttribute('aria-sort','none');
+          other.setAttribute('aria-sort','none');
         });
-        button.setAttribute('aria-sort',nextDir==='asc'?'ascending':'descending');
+        cell.setAttribute('aria-sort',nextDir==='asc'?'ascending':'descending');
         const rows=Array.from(body.rows||[]).filter((row)=>row.parentElement===body);
         rows.sort((a,b)=>{
           const av=_markdownTableCellText(a.cells[colIdx]);

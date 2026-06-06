@@ -1758,8 +1758,8 @@
   .markdown-table-sort:focus-visible{outline:1px solid var(--accent);outline-offset:2px;}
   .markdown-table-sort-label{min-width:0;overflow-wrap:anywhere;}
   .markdown-table-sort-indicator{flex:0 0 10px;color:var(--muted);font-size:10px;line-height:1;text-align:center;}
-  .markdown-table-sort[aria-sort="ascending"] .markdown-table-sort-indicator::before{content:"\25B2";}
-  .markdown-table-sort[aria-sort="descending"] .markdown-table-sort-indicator::before{content:"\25BC";}
+  .msg-body th[aria-sort="ascending"] .markdown-table-sort-indicator::before{content:"\25B2";}
+  .msg-body th[aria-sort="descending"] .markdown-table-sort-indicator::before{content:"\25BC";}
   /* #486: inline code inside table cells needs scaled sizing to avoid overflow/clipping */
   .msg-body td code,.msg-body th code{font-size:0.85em;padding:1px 4px;vertical-align:baseline;}
   /* KaTeX math rendering */

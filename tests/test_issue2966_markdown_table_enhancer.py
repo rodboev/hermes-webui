@@ -53,8 +53,9 @@ def test_markdown_table_sorting_uses_accessible_buttons_and_stable_rows():
     assert "const columnSortLabel=`${sortLabel}: ${columnName}`" in helper
     assert "button.setAttribute('aria-label',columnSortLabel)" in helper
     assert "button.title=columnSortLabel" in helper
-    assert "button.setAttribute('aria-sort','none')" in helper
-    assert "button.setAttribute('aria-sort',nextDir==='asc'?'ascending':'descending')" in helper
+    assert "cell.setAttribute('aria-sort','none')" in helper
+    assert "other.setAttribute('aria-sort','none')" in helper
+    assert "cell.setAttribute('aria-sort',nextDir==='asc'?'ascending':'descending')" in helper
     assert "row.dataset.markdownTableOriginalIndex=String(idx)" in helper
     assert "localeCompare(bv,undefined,{numeric:true,sensitivity:'base'})" in helper
     assert "return ai-bi" in helper
@@ -79,8 +80,8 @@ def test_markdown_table_styles_keep_controls_compact():
     assert "width:min(260px,100%)" in style
     assert ".markdown-table-sort{display:flex" in style
     assert "min-height:20px" in style
-    assert ".markdown-table-sort[aria-sort=\"ascending\"]" in style
-    assert ".markdown-table-sort[aria-sort=\"descending\"]" in style
+    assert ".msg-body th[aria-sort=\"ascending\"]" in style
+    assert ".msg-body th[aria-sort=\"descending\"]" in style
 
 
 def test_markdown_table_i18n_keys_are_present_in_every_locale():
