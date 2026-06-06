@@ -1109,7 +1109,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
   function _replayRestoredLiveToolCardsIfMissing(){
     if(!restoredLiveTurn||!_isActiveSession()) return false;
     const inner=(typeof _assistantTurnBlocks==='function')?_assistantTurnBlocks($('liveAssistantTurn')):null;
-    if(inner&&inner.querySelector('.tool-card-row[data-live-tid],.tool-call-group[data-live-tool-call-group]')) return true;
+    if(inner&&inner.querySelector('.tool-card-row[data-live-tid]')) return true;
     const calls=_knownReconnectToolCalls();
     if(!calls.length) return false;
     if(typeof replayLiveToolCardsFromState==='function') return replayLiveToolCardsFromState(calls);

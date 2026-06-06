@@ -31,7 +31,8 @@ def test_restored_reconnect_replays_known_tool_cards_before_sse_attach():
     helper_pos = MESSAGES_SRC.index("function _replayRestoredLiveToolCardsIfMissing")
     helper_block = MESSAGES_SRC[helper_pos : helper_pos + 900]
 
-    assert "inner.querySelector('.tool-card-row[data-live-tid],.tool-call-group[data-live-tool-call-group]')" in helper_block
+    assert "inner.querySelector('.tool-card-row[data-live-tid]')" in helper_block
+    assert ".tool-call-group[data-live-tool-call-group]" not in helper_block
     assert "replayLiveToolCardsFromState(calls)" in helper_block
     assert "appendLiveToolCard(tc)" in helper_block
 
