@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -8,6 +9,15 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 AUDIT_SCRIPT = REPO / "scripts" / "audit_agent_source_dependencies.py"
+
+
+def _audit_module():
+    spec = importlib.util.spec_from_file_location("audit_agent_source_dependencies", AUDIT_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run_audit() -> dict[str, object]:
@@ -148,6 +158,19 @@ def test_audit_reports_runtime_state_and_provider_imports():
     assert ("api/state_sync.py", "hermes_state") in state_anchors
     assert ("api/streaming.py", "hermes_cli.runtime_provider") in provider_anchors
     assert ("api/routes.py", "hermes_cli.runtime_provider") in provider_anchors
+
+
+def test_runtime_import_scan_includes_root_python_entrypoints():
+    root = AUDIT_SCRIPT.parents[1]
+    audit_module = _audit_module()
+    paths = {
+        path.relative_to(root).as_posix()
+        for path in audit_module._iter_python_files(root)
+    }
+
+    assert "api/routes.py" in paths
+    assert "server.py" in paths
+    assert "bootstrap.py" in paths
 
 
 def test_audit_keeps_client_package_candidates_visible():

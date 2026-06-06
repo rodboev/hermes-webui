@@ -89,10 +89,15 @@ def _iter_text_matches(
 
 
 def _iter_python_files(root: Path) -> list[Path]:
-    base = root / "api"
-    if not base.is_dir():
-        return []
-    return sorted(base.rglob("*.py"))
+    paths: set[Path] = set()
+    api_dir = root / "api"
+    if api_dir.is_dir():
+        paths.update(api_dir.rglob("*.py"))
+    for filename in ("server.py", "bootstrap.py"):
+        path = root / filename
+        if path.is_file():
+            paths.add(path)
+    return sorted(paths)
 
 
 def _module_root(module_name: str) -> str:
