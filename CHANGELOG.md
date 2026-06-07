@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **CSP report-only now intentionally matches the enforced policy baseline.** The report-only header no longer carries a stricter candidate directive set for `default-src`, `img-src`, and `font-src`; it now reuses the enforced policy and only appends the reporting directives, so drift detection stays accurate and the deliberate relaxation is documented. (#1909, @rodboev)
+
 ## [v0.51.312] — 2026-06-07 — Release KB (brick-wave — purge stale bytecode after self-update)
 
 ### Fixed

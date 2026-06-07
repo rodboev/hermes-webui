@@ -122,7 +122,7 @@ def _build_csp_report_only_policy(extra_connect_src: str | None = None) -> str:
 def _security_headers(handler):
     """Add security headers to every response."""
     extra_connect_src = _csp_extra_connect_src()
-    setattr(handler, "_csp_extra_connect_src", extra_connect_src)
+    handler._csp_extra_connect_src = extra_connect_src
     handler.send_header('X-Content-Type-Options', 'nosniff')
     handler.send_header('X-Frame-Options', 'DENY')
     handler.send_header('Referrer-Policy', 'same-origin')
