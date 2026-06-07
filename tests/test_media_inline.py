@@ -663,7 +663,7 @@ class TestMediaEndpointIntegration(unittest.TestCase):
     def test_nonexistent_file_returns_404(self):
         missing = _media_fixture_dir() / "__hermes_nonexistent_12345.png"
         _, status, _ = self._get(
-            "/api/media?path=" + urllib.request.quote(str(missing))
+            "/api/media?path=" + urllib.parse.quote(str(missing))
         )
         self.assertEqual(status, 404)
 
@@ -687,7 +687,7 @@ class TestMediaEndpointIntegration(unittest.TestCase):
             tmp_path = f.name
         try:
             body, status, headers = self._get(
-                f"/api/media?path={urllib.request.quote(tmp_path)}"
+                f"/api/media?path={urllib.parse.quote(tmp_path)}"
             )
             self.assertEqual(status, 200, f"Expected 200, got {status}")
             ct = headers.get("Content-Type", "")
@@ -705,7 +705,7 @@ class TestMediaEndpointIntegration(unittest.TestCase):
             f.write(audio_bytes)
             tmp_path = f.name
         try:
-            encoded = urllib.request.quote(tmp_path)
+            encoded = urllib.parse.quote(tmp_path)
             body, status, headers = self._get(f"/api/media?path={encoded}&inline=1")
             self.assertEqual(status, 200)
             self.assertIn("audio/wav", headers.get("Content-Type", ""))
@@ -732,7 +732,7 @@ class TestMediaEndpointIntegration(unittest.TestCase):
             f.write(html_bytes)
             tmp_path = f.name
         try:
-            encoded = urllib.request.quote(tmp_path)
+            encoded = urllib.parse.quote(tmp_path)
 
             body, status, headers = self._get(f"/api/media?path={encoded}")
             self.assertEqual(status, 200)
@@ -758,7 +758,7 @@ class TestMediaEndpointIntegration(unittest.TestCase):
 
     def test_path_traversal_rejected(self):
         _, status, _ = self._get(
-            "/api/media?path=" + urllib.request.quote("/tmp/../../etc/passwd")
+            "/api/media?path=" + urllib.parse.quote("/tmp/../../etc/passwd")
         )
         self.assertIn(status, {403, 404})
 
@@ -777,7 +777,7 @@ class TestMediaEndpointIntegration(unittest.TestCase):
         settings.write_text('{"secret":"value"}', encoding="utf-8")
         try:
             _, status, _ = self._get(
-                "/api/media?path=" + urllib.request.quote(str(settings.resolve()))
+                "/api/media?path=" + urllib.parse.quote(str(settings.resolve()))
             )
             self.assertEqual(
                 status, 403,
@@ -793,7 +793,7 @@ class TestMediaEndpointIntegration(unittest.TestCase):
         sess_file.write_text('{"messages":[]}', encoding="utf-8")
         try:
             _, status, _ = self._get(
-                "/api/media?path=" + urllib.request.quote(str(sess_file.resolve()))
+                "/api/media?path=" + urllib.parse.quote(str(sess_file.resolve()))
             )
             self.assertEqual(
                 status, 403,
@@ -825,7 +825,7 @@ class TestMediaEndpointIntegration(unittest.TestCase):
             tmp_path = f.name
         try:
             body, status, headers = self._get(
-                f"/api/media?path={urllib.request.quote(tmp_path)}"
+                f"/api/media?path={urllib.parse.quote(tmp_path)}"
             )
             self.assertEqual(
                 status, 200,
