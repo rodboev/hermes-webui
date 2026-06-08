@@ -237,3 +237,11 @@ class TestBackendThinkSplitParity:
     def test_leading_unclosed_still_extracted(self):
         """A LEADING unclosed block (cut off mid-thought) is still reasoning."""
         assert self._sp("<think>still thinking") == ("", "still thinking")
+
+    def test_indented_fence_1_3_spaces_preserved(self):
+        """A fenced code block indented 1-3 spaces is still a fence (valid
+        Markdown), so a literal think tag inside it stays visible."""
+        backtick = "text\n  ```\n  <think>lit</think>\n  ```\nend"
+        assert self._sp(backtick) == (backtick, "")
+        tilde = "text\n   ~~~html\n   <think>lit</think>\n   ~~~\nend"
+        assert self._sp(tilde) == (tilde, "")

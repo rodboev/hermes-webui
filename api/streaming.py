@@ -1497,8 +1497,19 @@ _INLINE_THINKING_TAG_PAIRS = (
 
 
 def _inline_thinking_fence_marker_at(text, index):
+    # A fenced code block opener may be indented up to 3 spaces in Markdown
+    # (4+ spaces is an indented code block, handled separately). The marker is
+    # only a fence when it sits at the start of a line (after optional 1-3
+    # spaces of indentation).
     if index > 0 and text[index - 1] != '\n':
-        return ''
+        # Allow up to 3 leading spaces: walk back over spaces to a line start.
+        back = index - 1
+        spaces = 0
+        while back >= 0 and text[back] == ' ' and spaces < 3:
+            back -= 1
+            spaces += 1
+        if not (back < 0 or text[back] == '\n'):
+            return ''
     if text.startswith('```', index):
         return '```'
     if text.startswith('~~~', index):

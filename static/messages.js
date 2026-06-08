@@ -113,7 +113,14 @@ const _thinkPairs=[
 ];
 
 function _thinkingFenceMarkerAt(text, index){
-  if(index>0&&text[index-1]!=='\n') return '';
+  // A fenced code block opener may be indented up to 3 spaces in Markdown
+  // (4+ spaces is an indented code block, handled separately). Only treat the
+  // marker as a fence when it sits at a line start after optional 1-3 spaces.
+  if(index>0&&text[index-1]!=='\n'){
+    let back=index-1, spaces=0;
+    while(back>=0&&text[back]===' '&&spaces<3){back--;spaces++;}
+    if(!(back<0||text[back]==='\n')) return '';
+  }
   if(text.startsWith('```',index)) return '```';
   if(text.startsWith('~~~',index)) return '~~~';
   return '';
