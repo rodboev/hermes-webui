@@ -21,6 +21,8 @@ import sys
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -2569,7 +2571,7 @@ def _models_dev_reasoning_efforts(model_id: str, provider_id: str) -> list[str] 
 
 def _get_lmstudio_reasoning_probe_api_key() -> str | None:
     """Resolve the LM Studio key for reasoning probes with WebUI precedence."""
-    config_data = _load_yaml_config_file(_get_config_path())
+    config_data = cfg
     model_cfg = config_data.get("model") or {}
     if isinstance(model_cfg, dict):
         active_provider = str(model_cfg.get("provider") or "").strip().lower()
@@ -2596,6 +2598,104 @@ def _get_lmstudio_reasoning_probe_api_key() -> str | None:
     return None
 
 
+def _lmstudio_reasoning_probe_options_fallback(
+    model: str,
+    base_url: str | None,
+    *,
+    api_key: str | None = None,
+    timeout: float = 5.0,
+) -> list[str]:
+    """Query LM Studio reasoning options without relying on hermes_cli."""
+    server_root = str(base_url or "").strip().rstrip("/")
+    if server_root.endswith("/v1"):
+        server_root = server_root[:-3].rstrip("/")
+    if not server_root or not model:
+        return []
+
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "hermes-webui-reasoning-probe",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    request = urllib.request.Request(
+        server_root + "/api/v1/models",
+        headers=headers,
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        logger.debug(
+            "LM Studio reasoning probe at %s failed with HTTP %s",
+            server_root,
+            exc.code,
+        )
+        return []
+    except Exception as exc:
+        logger.debug("LM Studio reasoning probe at %s failed: %s", server_root, exc)
+        return []
+
+    raw_models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(raw_models, list):
+        logger.debug(
+            "LM Studio reasoning probe at %s returned malformed payload",
+            server_root,
+        )
+        return []
+
+    for raw in raw_models:
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("key") != model and raw.get("id") != model:
+            continue
+        caps = raw.get("capabilities")
+        reasoning = caps.get("reasoning") if isinstance(caps, dict) else None
+        opts = reasoning.get("allowed_options") if isinstance(reasoning, dict) else None
+        if isinstance(opts, list):
+            return [str(opt).strip().lower() for opt in opts if isinstance(opt, str)]
+        return []
+    return []
+
+
+def _lmstudio_model_reasoning_options(
+    model: str,
+    base_url: str | None,
+    *,
+    api_key: str | None = None,
+    timeout: float = 5.0,
+) -> list[str]:
+    """Prefer hermes_cli, but keep WebUI reasoning probes working without it."""
+    try:
+        from hermes_cli.models import (
+            lmstudio_model_reasoning_options as _cli_lmstudio_model_reasoning_options,
+        )
+    except Exception:
+        return _lmstudio_reasoning_probe_options_fallback(
+            model,
+            base_url,
+            api_key=api_key,
+            timeout=timeout,
+        )
+
+    try:
+        return _cli_lmstudio_model_reasoning_options(
+            model,
+            base_url,
+            api_key=api_key,
+            timeout=timeout,
+        )
+    except Exception:
+        return _lmstudio_reasoning_probe_options_fallback(
+            model,
+            base_url,
+            api_key=api_key,
+            timeout=timeout,
+        )
+
+
 def resolve_model_reasoning_efforts(
     model_id: str | None = None,
     provider_id: str | None = None,
@@ -2620,38 +2720,33 @@ def resolve_model_reasoning_efforts(
 
     hinted_model = _strip_provider_hint_for_reasoning(model)
 
-    try:
-        from hermes_cli.models import (
-            github_model_reasoning_efforts,
-            lmstudio_model_reasoning_options,
-        )
-    except Exception:
-        if provider in {"copilot", "github-copilot"}:
+    if provider in {"copilot", "github-copilot"}:
+        try:
+            from hermes_cli.models import github_model_reasoning_efforts
+        except Exception:
             return _heuristic_reasoning_efforts(hinted_model, provider)
-    else:
-        if provider in {"copilot", "github-copilot"}:
-            return _filter_reasoning_efforts_for_provider(
-                github_model_reasoning_efforts(hinted_model), hinted_model, provider
-            )
+        return _filter_reasoning_efforts_for_provider(
+            github_model_reasoning_efforts(hinted_model), hinted_model, provider
+        )
 
-        if provider == "lmstudio":
-            probe_base = resolved_base_url or _get_provider_base_url(provider)
-            opts = lmstudio_model_reasoning_options(
-                hinted_model,
-                probe_base,
-                api_key=_get_lmstudio_reasoning_probe_api_key(),
-            )
-            normalized = [str(opt).strip().lower() for opt in opts if str(opt).strip()]
-            if not normalized or set(normalized).issubset({"off"}):
-                return []
-            level_opts = [opt for opt in normalized if opt in VALID_REASONING_EFFORTS]
-            if level_opts:
-                return _filter_reasoning_efforts_for_provider(
-                    level_opts, hinted_model, provider
-                )
-            if set(normalized).issubset({"off", "on"}):
-                return []
+    if provider == "lmstudio":
+        probe_base = resolved_base_url or _get_provider_base_url(provider)
+        opts = _lmstudio_model_reasoning_options(
+            hinted_model,
+            probe_base,
+            api_key=_get_lmstudio_reasoning_probe_api_key(),
+        )
+        normalized = [str(opt).strip().lower() for opt in opts if str(opt).strip()]
+        if not normalized or set(normalized).issubset({"off"}):
             return []
+        level_opts = [opt for opt in normalized if opt in VALID_REASONING_EFFORTS]
+        if level_opts:
+            return _filter_reasoning_efforts_for_provider(
+                level_opts, hinted_model, provider
+            )
+        if set(normalized).issubset({"off", "on"}):
+            return []
+        return []
 
     # _models_dev_reasoning_efforts already applies the provider/model filter
     # internally, so it is returned as-is here (filtering again would be

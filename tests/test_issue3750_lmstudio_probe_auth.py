@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -206,6 +207,64 @@ display:
         "path": "/api/v1/models",
         "authorization": "Bearer model-token",
     }
+
+
+def test_reasoning_probe_falls_back_without_hermes_cli(
+    tmp_path,
+    monkeypatch,
+    lmstudio_probe_server,
+):
+    blocked_modules = [
+        name
+        for name in list(sys.modules)
+        if name == "hermes_cli" or name.startswith("hermes_cli.")
+    ]
+    for name in blocked_modules:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    class _Blocker:
+        def find_module(self, name, path=None):
+            if name == "hermes_cli" or name.startswith("hermes_cli."):
+                return self
+            return None
+
+        def load_module(self, name):
+            raise ImportError(f"hermes_cli blocked for test: {name}")
+
+    blocker = _Blocker()
+    sys.meta_path.insert(0, blocker)
+    try:
+        _write_config(
+            tmp_path,
+            monkeypatch,
+            f"""
+model:
+  provider: lmstudio
+  default: auth-model
+  base_url: {lmstudio_probe_server.base_v1}
+providers:
+  lmstudio:
+    api_key: config-token
+agent:
+  reasoning_effort: medium
+display:
+  show_reasoning: true
+""",
+        )
+
+        status = config.get_reasoning_status()
+
+        assert status["supports_reasoning_effort"] is True
+        assert status["supported_efforts"] == ["low", "medium", "high"]
+        assert lmstudio_probe_server.requests[0] == {
+            "path": "/api/v1/models",
+            "authorization": "Bearer config-token",
+        }
+    finally:
+        try:
+            sys.meta_path.remove(blocker)
+        except ValueError:
+            pass
 
 
 def test_reasoning_probe_stays_keyless_when_no_key_is_configured(
