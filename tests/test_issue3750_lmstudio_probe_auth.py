@@ -174,6 +174,40 @@ display:
     }
 
 
+def test_reasoning_probe_honors_active_model_api_key(
+    tmp_path,
+    monkeypatch,
+    lmstudio_probe_server,
+):
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        f"""
+model:
+  provider: lmstudio
+  default: auth-model
+  base_url: {lmstudio_probe_server.base_v1}
+  api_key: model-token
+providers:
+  lmstudio:
+    api_key: provider-token
+agent:
+  reasoning_effort: medium
+display:
+  show_reasoning: true
+""",
+    )
+
+    status = config.get_reasoning_status()
+
+    assert status["supports_reasoning_effort"] is True
+    assert status["supported_efforts"] == ["low", "medium", "high"]
+    assert lmstudio_probe_server.requests[0] == {
+        "path": "/api/v1/models",
+        "authorization": "Bearer model-token",
+    }
+
+
 def test_reasoning_probe_stays_keyless_when_no_key_is_configured(
     tmp_path,
     monkeypatch,
