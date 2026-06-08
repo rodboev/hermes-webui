@@ -1517,20 +1517,24 @@ def _inline_thinking_fence_marker_at(text, index):
     return ''
 
 
-def _inline_thinking_indented_code_at(text, index):
-    """True when `index` falls on a markdown indented code block line (the line
-    containing `index` starts with >=4 spaces or a tab, and is not blank). Such
-    lines are literal code, so thinking tags inside them must stay visible.
-    Evaluated for any column on the line, not just the first — the thinking tag
-    sits after the indentation."""
-    line_start = text.rfind('\n', 0, index) + 1  # 0 if no preceding newline
-    line_end = text.find('\n', index)
-    if line_end == -1:
-        line_end = len(text)
-    line = text[line_start:line_end]
-    if not line.strip():
+def _line_is_indented_code(text, line_start):
+    """True when the line beginning at `line_start` is a markdown indented code
+    block line (>=4 leading spaces or a leading tab, and not blank). `line_start`
+    must be the index of the first character of the line. O(1)-ish: only inspects
+    the line's leading characters, not the whole document (the per-character
+    variant was O(n^2) on long no-newline content — #3633 Codex perf catch)."""
+    if line_start >= len(text):
         return False
-    return line.startswith('    ') or line.startswith('\t')
+    if text[line_start] == '\t':
+        # A leading tab is indented code only if the line isn't otherwise blank.
+        nl = text.find('\n', line_start)
+        seg = text[line_start:(nl if nl != -1 else len(text))]
+        return bool(seg.strip())
+    if text.startswith('    ', line_start):
+        nl = text.find('\n', line_start)
+        seg = text[line_start:(nl if nl != -1 else len(text))]
+        return bool(seg.strip())
+    return False
 
 
 def _merge_inline_thinking_reasoning(existing_reasoning, extracted_parts):
@@ -1573,15 +1577,25 @@ def _extract_inline_thinking_from_content(raw_content, existing_reasoning='', *,
     fence = ''
     in_backtick = False
     length = len(text)
+    # Incremental, O(1)-per-iteration line state (the previous per-character line
+    # scan made the whole pass O(n^2) on long no-newline content — #3633 Codex
+    # perf catch). `line_is_indented_code` is recomputed only at a line start.
+    line_is_indented_code = _line_is_indented_code(text, 0)
+    # Whether any non-whitespace char appeared in text[:index] — the cheap
+    # equivalent of the old `text[:index].strip() != ''` leading check.
+    seen_nonspace = False
     while index < length:
+        ch = text[index]
+        if index > 0 and text[index - 1] == '\n':
+            line_is_indented_code = _line_is_indented_code(text, index)
         marker = _inline_thinking_fence_marker_at(text, index)
         if marker:
             fence = '' if fence == marker else (fence or marker)
         # Inline single-backtick code span toggles on each lone backtick that is
         # not part of a triple fence. Only tracked outside a triple fence.
-        if not fence and not marker and text[index] == '`':
+        if not fence and not marker and ch == '`':
             in_backtick = not in_backtick
-        in_code = bool(fence) or in_backtick or _inline_thinking_indented_code_at(text, index)
+        in_code = bool(fence) or in_backtick or line_is_indented_code
         if not in_code:
             pair = None
             for open_tag, close_tag in _INLINE_THINKING_TAG_PAIRS:
@@ -1601,7 +1615,7 @@ def _extract_inline_thinking_from_content(raw_content, existing_reasoning='', *,
                     # the prose after it) visible so nothing is silently
                     # truncated (#3633 Codex catch). During live streaming any
                     # unmatched open tag is treated as in-progress thinking.
-                    leading = (text[:index].strip() == '')
+                    leading = not seen_nonspace
                     if not streaming and not leading:
                         break
                     visible.append(text[cursor:index])
@@ -1613,6 +1627,7 @@ def _extract_inline_thinking_from_content(raw_content, existing_reasoning='', *,
                     break
                 visible.append(text[cursor:index])
                 extracted.append(text[index + len(open_tag):close_index])
+                seen_nonspace = True  # the extracted tag span is non-whitespace
                 index = close_index + len(close_tag)
                 cursor = index
                 continue
@@ -1628,6 +1643,8 @@ def _extract_inline_thinking_from_content(raw_content, existing_reasoning='', *,
                         break
                 if matched_partial or index >= length:
                     break
+        if not ch.isspace():
+            seen_nonspace = True
         index += 1
     if cursor < length:
         visible.append(text[cursor:])

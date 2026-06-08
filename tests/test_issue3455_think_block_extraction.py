@@ -64,7 +64,7 @@ def driver(tmp_path_factory):
         pytest.skip("node not available")
     pairs = _extract_block(MESSAGES_JS, "const _thinkPairs=")
     fence = _extract_block(MESSAGES_JS, "function _thinkingFenceMarkerAt(")
-    indented = _extract_block(MESSAGES_JS, "function _thinkingIndentedCodeAt(")
+    indented = _extract_block(MESSAGES_JS, "function _lineIsIndentedCode(")
     merge = _extract_block(MESSAGES_JS, "function _mergeInlineThinkingReasoning(")
     extract = _extract_block(MESSAGES_JS, "function _extractInlineThinkingFromContent(")
     fn = _extract_block(MESSAGES_JS, "function _splitThinkFromContent(")

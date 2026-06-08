@@ -106,9 +106,47 @@ def test_messages_js_live_and_persist_paths_share_extractor():
 def test_render_messages_uses_shared_extractor_on_reload():
     render = _function_body(UI_JS, "function renderMessages")
 
-    assert "window._extractInlineThinkingFromContentForRender(content, thinkingText)" in render
+    # The reload path seeds the shared extractor with the message's separate
+    # reasoning payload so inline <think> blocks MERGE with (not suppress) a
+    # distinct m.reasoning payload (#3633 Codex catch).
+    assert "m.reasoning_content||m.reasoning||m.thinking||m._reasoning" in render
+    assert "window._extractInlineThinkingFromContentForRender(content, directReasoning||thinkingText)" in render
     assert "thinkingText=split.reasoning||thinkingText" in render
     assert "content=split.content" in render
+
+
+def test_inline_and_separate_reasoning_merge_not_drop():
+    """#3633 Codex catch: when content has an inline <think> block AND a separate
+    reasoning payload, the extractor must MERGE both (deduped), not drop either."""
+    # existing_reasoning is the separate payload; inline block merges after it.
+    content, reasoning = _split_thinking_from_content("<think>inline</think>answer", "separate")
+    assert content == "answer"
+    assert reasoning == "separate\n\ninline"
+
+    # Identical inline + separate dedupe to one.
+    content2, reasoning2 = _split_thinking_from_content("<think>same</think>answer", "same")
+    assert content2 == "answer"
+    assert reasoning2 == "same"
+
+    # Separate-only (no inline tag) is preserved and content is untouched
+    # (no promotion of reasoning into visible prose).
+    content3, reasoning3 = _split_thinking_from_content("plain answer", "separate")
+    assert content3 == "plain answer"
+    assert reasoning3 == "separate"
+
+
+def test_extraction_is_linear_on_long_no_newline_content():
+    """#3633 Codex perf catch: the indented-code / leading checks must not be
+    O(n^2). A 200k-char no-newline message must extract well under a second."""
+    import time
+
+    big = "x" * 200_000 + "answer"
+    start = time.time()
+    content, reasoning = _split_thinking_from_content(big)
+    elapsed = time.time() - start
+    assert content == big
+    assert reasoning == ""
+    assert elapsed < 1.0, f"extraction took {elapsed:.2f}s — likely quadratic"
 
 
 def test_timeout_wrapper_remains_out_of_scope():
