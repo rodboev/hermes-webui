@@ -3509,38 +3509,84 @@ function renderMd(raw){
   s=s.replace(/^---+$/gm,'<hr>');
   // (Blockquotes are handled by the pre-pass at the top of renderMd, before
   // fence_stash. The per-line passes below never see > prefixes.)
-  // B8: improved list handling supporting up to 2 levels of indentation
-  s=s.replace(/((?:^(?:  )?[-*+] .+\n?)+)/gm,block=>{
-    const lines=block.trimEnd().split('\n');
-    let html='<ul>';
-    for(const l of lines){
-      const indent=/^ {2,}/.test(l);
-      const text=l.replace(/^ {0,4}[-*+] /,'');
-      let _ih;
-      if(/^\[x\] /i.test(text)) _ih='<span class="task-done">✅</span> '+inlineMd(text.slice(4));
-      else if(/^\[ \] /.test(text)) _ih='<span class="task-todo">☐</span> '+inlineMd(text.slice(4));
-      else _ih=inlineMd(text);
-      if(indent) html+=`<li style="margin-left:16px">${_ih}</li>`;
-      else html+=`<li>${_ih}</li>`;
+  function _renderListBlock(lines, ordered){
+    const marker=ordered?'\\d+\\. ':'[-*+] ';
+    let html=ordered?'<ol>':'<ul>';
+    let item=null;
+    const flush=()=>{
+      if(!item) return;
+      const body=item.parts.join('\n').trim();
+      let inner;
+      if(!ordered && /^\[x\] /i.test(body)) inner='<span class="task-done">✅</span> '+inlineMd(body.slice(4));
+      else if(!ordered && /^\[ \] /.test(body)) inner='<span class="task-todo">☐</span> '+inlineMd(body.slice(4));
+      else inner=inlineMd(body);
+      const valueAttr=item.value!==null?` value="${item.value}"`:'';
+      const styleAttr=item.indent?` style="margin-left:16px"`:'';
+      html+=`<li${valueAttr}${styleAttr}>${inner}</li>`;
+      item=null;
+    };
+    for(const raw of lines){
+      const line=String(raw||'');
+      const nested=line.match(new RegExp(`^ {2,}(${marker})(.*)$`));
+      if(nested){
+        flush();
+        item={indent:true,value:ordered?parseInt(nested[1],10):null,parts:[nested[2]]};
+        continue;
+      }
+      const top=line.match(new RegExp(`^(?:  )?(${marker})(.*)$`));
+      if(top){
+        flush();
+        item={indent:false,value:ordered?parseInt(top[1],10):null,parts:[top[2]]};
+        continue;
+      }
+      if(!item) continue;
+      if(!line.trim()) continue;
+      item.parts.push(line.replace(/^ {2,}/,'').trim());
     }
-    return html+'</ul>';
-  });
-  // Ordered lists: use value= on each <li> so the correct number is preserved
-  // even when blank lines between items cause the paragraph splitter to place
-  // each item in its own <ol> container — without value= every <ol> restarts
-  // at 1, producing "1. 1. 1." instead of "1. 2. 3." (#886).
-  s=s.replace(/((?:^(?:  )?\d+\. .+\n?)+)/gm,block=>{
-    const lines=block.trimEnd().split('\n');
-    let html='<ol>';
-    for(const l of lines){
-      const numMatch=l.match(/^\s*(\d+)\. /);
-      const num=numMatch?parseInt(numMatch[1],10):null;
-      const text=l.replace(/^ {0,4}\d+\. /,'');
-      const valAttr=num!==null?` value="${num}"`:'';
-      html+=`<li${valAttr}>${inlineMd(text)}</li>`;
+    flush();
+    return html+(ordered?'</ol>':'</ul>');
+  }
+  function _renderLists(src, ordered){
+    const lines=src.split('\n');
+    const out=[];
+    const topRe=ordered?/^(?:  )?\d+\. /:/^(?:  )?[-*+] /;
+    const nestedRe=ordered?/^ {2,}\d+\. /:/^ {2,}[-*+] /;
+    const contRe=/^ {2,}\S/;
+    let i=0;
+    while(i<lines.length){
+      if(!topRe.test(lines[i])){
+        out.push(lines[i]);
+        i++;
+        continue;
+      }
+      const block=[lines[i]];
+      i++;
+      while(i<lines.length){
+        const line=lines[i];
+        if(topRe.test(line)||nestedRe.test(line)||contRe.test(line)){
+          block.push(line);
+          i++;
+          continue;
+        }
+        if(!line.trim()){
+          const next=lines[i+1]||'';
+          if(topRe.test(next)||nestedRe.test(next)||contRe.test(next)){
+            i++;
+            continue;
+          }
+        }
+        break;
+      }
+      out.push(_renderListBlock(block,ordered));
     }
-    return html+'</ol>';
-  });
+    return out.join('\n');
+  }
+  // Preserve continuation lines, nested indentation, and LaTeX placeholder lines
+  // inside list items without changing the wider markdown pipeline.
+  s=_renderLists(s,false);
+  // Ordered lists: keep continuation lines attached to their item and preserve
+  // explicit numbering via value= even when blank lines split the markdown.
+  s=_renderLists(s,true);
   // Tables: | col | col | header row followed by | --- | --- | separator then data rows
   // NOTE: table pass runs BEFORE outer link pass so [label](url) in table cells
   // is handled by inlineMd() only — prevents double-linking.
