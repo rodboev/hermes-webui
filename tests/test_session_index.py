@@ -864,6 +864,42 @@ def test_all_sessions_does_not_refresh_fresh_lineage_rows_from_sidecars(monkeypa
     assert rows[0]["message_count"] == 7
 
 
+def test_sidebar_lineage_root_id_prefers_explicit_override():
+    root = models._sidebar_lineage_root_id(
+        {
+            "session_id": "child_sid",
+            "_lineage_root_id": "root_sid",
+            "parent_session_id": "parent_sid",
+        },
+        {
+            "parent_sid": {
+                "session_id": "parent_sid",
+                "parent_session_id": "grandparent_sid",
+            }
+        },
+    )
+
+    assert root == "root_sid"
+
+
+def test_sidebar_lineage_root_id_keeps_child_sessions_self_rooted():
+    root = models._sidebar_lineage_root_id(
+        {
+            "session_id": "child_sid",
+            "relationship_type": "child_session",
+            "parent_session_id": "parent_sid",
+        },
+        {
+            "parent_sid": {
+                "session_id": "parent_sid",
+                "parent_session_id": "grandparent_sid",
+            }
+        },
+    )
+
+    assert root == "child_sid"
+
+
 def test_all_sessions_refreshes_stale_visible_continuation_metadata(monkeypatch):
     """A visible continuation whose sidecar advanced after _index.json must refresh metadata.
 
@@ -1368,3 +1404,34 @@ def test_background_index_rebuild_skips_after_session_dir_switch(tmp_path, monke
     )
 
     assert not new_index_file.exists()
+
+
+def test_background_index_rebuild_writes_only_to_captured_target_after_dir_switch(tmp_path, monkeypatch):
+    """Background rebuild must keep writing to its captured target after a late dir switch."""
+    original_session_dir = models.SESSION_DIR
+    original_index_file = models.SESSION_INDEX_FILE
+    session = _make_session("late_switch_sid", "Late switch", updated_at=100.0)
+    session.save(skip_index=True)
+
+    new_session_dir = tmp_path / "other-sessions"
+    new_session_dir.mkdir()
+    new_index_file = new_session_dir / "_index.json"
+
+    original_write_session_index = models._write_session_index
+
+    def _switch_globals_then_write(*args, **kwargs):
+        monkeypatch.setattr(models, "SESSION_DIR", new_session_dir)
+        monkeypatch.setattr(models, "SESSION_INDEX_FILE", new_index_file)
+        return original_write_session_index(*args, **kwargs)
+
+    monkeypatch.setattr(models, "_write_session_index", _switch_globals_then_write)
+
+    models._rebuild_session_index_background(
+        original_session_dir,
+        original_index_file,
+    )
+
+    assert original_index_file.exists()
+    assert not new_index_file.exists()
+    rows = _read_index(original_index_file)
+    assert [row["session_id"] for row in rows] == ["late_switch_sid"]
