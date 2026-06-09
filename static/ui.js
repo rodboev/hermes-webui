@@ -3516,10 +3516,11 @@ function renderMd(raw){
     const flush=()=>{
       if(!item) return;
       const body=item.parts.join('\n').trim();
+      const text=body;
       let inner;
-      if(!ordered && /^\[x\] /i.test(body)) inner='<span class="task-done">✅</span> '+inlineMd(body.slice(4));
-      else if(!ordered && /^\[ \] /.test(body)) inner='<span class="task-todo">☐</span> '+inlineMd(body.slice(4));
-      else inner=inlineMd(body);
+      if(!ordered && /^\[x\] /i.test(text)) inner='<span class="task-done">✅</span> '+inlineMd(text.slice(4));
+      else if(!ordered && /^\[ \] /.test(text)) inner='<span class="task-todo">☐</span> '+inlineMd(text.slice(4));
+      else inner=inlineMd(text);
       const valueAttr=item.value!==null?` value="${item.value}"`:'';
       const styleAttr=item.indent?` style="margin-left:16px"`:'';
       html+=`<li${valueAttr}${styleAttr}>${inner}</li>`;
