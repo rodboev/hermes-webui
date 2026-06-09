@@ -374,7 +374,7 @@ async function loadDir(path, opts={}){
   try{
     if(!path||path==='.'||refreshExpanded){
       S._dirCache={};
-      _restoreExpandedDirs();  // restore per-workspace expanded state on root load
+      _restoreExpandedDirs();  // restore per-workspace expanded state after root and refresh resets
     }
     S.currentDir=path||'.';
     const data=await api(`/api/list?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`);

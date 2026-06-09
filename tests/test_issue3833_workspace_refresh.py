@@ -3,8 +3,9 @@
 from pathlib import Path
 
 
-INDEX_HTML = Path("static/index.html").read_text(encoding="utf-8")
-WORKSPACE_JS = Path("static/workspace.js").read_text(encoding="utf-8")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+INDEX_HTML = (REPO_ROOT / "static/index.html").read_text(encoding="utf-8")
+WORKSPACE_JS = (REPO_ROOT / "static/workspace.js").read_text(encoding="utf-8")
 
 
 def _function_block(src: str, name: str) -> str:
