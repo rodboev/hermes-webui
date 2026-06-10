@@ -6169,3 +6169,22 @@ async function _confirmDeleteProject(proj){
 document.addEventListener('keydown',(e)=>{
   if(e.key==='Escape'&&_sessionSelectMode) exitSessionSelectMode();
 });
+
+// Keyboard session navigation — J/K bindings
+function navigateSession(dir){
+  const rows=[...document.querySelectorAll('.session-item[data-sid]')];
+  const sids=rows.map(r=>r.dataset.sid);
+  const cur=S.session&&S.session.session_id;
+  const i=sids.indexOf(cur);
+  if(i<0||!sids.length)return;
+  const next=sids[Math.min(Math.max(i+dir,0),sids.length-1)];
+  if(next&&next!==cur) loadSession(next);
+}
+
+document.addEventListener('keydown',(e)=>{
+  if(e.key!=='j'&&e.key!=='k') return;
+  if(e.ctrlKey||e.metaKey||e.altKey) return;
+  if(typeof _isInteractiveSwipeTarget==='function'&&_isInteractiveSwipeTarget(e.target)) return;
+  e.preventDefault();
+  navigateSession(e.key==='j'?1:-1);
+});
