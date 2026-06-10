@@ -2559,10 +2559,12 @@ def generate_title_raw_via_agent(agent, user_text: str, assistant_text: str) -> 
                         api_kwargs.pop('tools', None)
                         api_kwargs['temperature'] = 0.1
                         api_kwargs['timeout'] = 15.0
+                        _tg_extra = dict(api_kwargs.get('extra_body') or {})
+                        _tg_extra.setdefault('thinking', {'type': 'disabled'})
+                        _tg_extra.setdefault('reasoning', {'enabled': False})
+                        api_kwargs['extra_body'] = _tg_extra
                         if _is_minimax_route(getattr(agent, 'provider', ''), getattr(agent, 'model', ''), getattr(agent, 'base_url', '')):
-                            extra_body = dict(api_kwargs.get('extra_body') or {})
-                            extra_body['reasoning_split'] = True
-                            api_kwargs['extra_body'] = extra_body
+                            api_kwargs['extra_body']['reasoning_split'] = True
                         if 'max_completion_tokens' in api_kwargs:
                             api_kwargs['max_completion_tokens'] = max_tokens
                         else:
