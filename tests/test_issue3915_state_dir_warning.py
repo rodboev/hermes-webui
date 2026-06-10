@@ -8,8 +8,6 @@ This test suite verifies that _warn_state_dir_divergence() detects this
 condition and prints a diagnostic warning, helping users recover their sessions.
 """
 
-import json
-import sys
 import tempfile
 from pathlib import Path
 from unittest import mock
