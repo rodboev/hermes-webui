@@ -113,6 +113,7 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         mock_agent.base_url = None
         mock_agent.api_mode = None
         mock_agent.reasoning_config = None
+        mock_agent._supports_reasoning_extra_body.return_value = True
 
         base_kwargs = {
             'model': 'o3-mini',
@@ -159,6 +160,48 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
 
         base_kwargs = {
             'model': 'mistral-large',
+            'messages': [],
+        }
+        mock_agent._build_api_kwargs.return_value = base_kwargs.copy()
+
+        captured_kwargs = {}
+
+        def capture_kwargs(**kwargs):
+            captured_kwargs.update(kwargs)
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = 'A nice title'
+            mock_response.choices[0].message.reasoning = None
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = capture_kwargs
+        mock_agent._ensure_primary_openai_client.return_value = mock_client
+
+        generate_title_raw_via_agent(mock_agent, user_text, assistant_text)
+
+        extra_body = captured_kwargs.get('extra_body', {})
+        self.assertNotIn('thinking', extra_body)
+        self.assertNotIn('reasoning', extra_body)
+
+    def test_api_kwargs_omits_reasoning_keys_for_strict_direct_route(self):
+        """Reasoning model on a strict direct provider (e.g. OpenAI direct) must not
+        get thinking/reasoning keys — the route rejects them with 400."""
+        from api.streaming import generate_title_raw_via_agent
+
+        user_text = 'Test user input'
+        assistant_text = 'Test assistant output'
+
+        mock_agent = MagicMock()
+        mock_agent.provider = 'openai'
+        mock_agent.model = 'gpt-5.5'
+        mock_agent.base_url = 'https://api.openai.com/v1'
+        mock_agent.api_mode = None
+        mock_agent.reasoning_config = None
+        mock_agent._supports_reasoning_extra_body.return_value = False
+
+        base_kwargs = {
+            'model': 'gpt-5.5',
             'messages': [],
         }
         mock_agent._build_api_kwargs.return_value = base_kwargs.copy()
