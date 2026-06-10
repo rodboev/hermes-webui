@@ -615,7 +615,7 @@ def _warn_state_dir_divergence(warn_prefix: str) -> None:
                         continue
                     sibling_sessions = sibling / "sessions"
                     if sibling_sessions.exists():
-                        json_files = list(sibling_sessions.glob("*.json"))
+                        json_files = [f for f in sibling_sessions.glob("*.json") if f.name != "_index.json"]
                         if json_files:
                             # Found a sibling with session data
                             print(
