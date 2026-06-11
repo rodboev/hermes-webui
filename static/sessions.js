@@ -5750,10 +5750,6 @@ function _renderSidebarRowsFromRawSessions(sessionsRaw, referenceSessionsRaw){
   return _attachChildSessionsToSidebarRows(_collapseSessionLineageForSidebar(sessionsRaw), sessionsRaw, referenceRows);
 }
 
-function _countRenderedSidebarRowsFromRawSessions(sessionsRaw, referenceSessionsRaw){
-  return _renderSidebarRowsFromRawSessions(sessionsRaw, referenceSessionsRaw).length;
-}
-
 
 function renderSessionListFromCache(){
   // #4671: while a profile-switch skeleton is up, bail — _allSessions still holds the
