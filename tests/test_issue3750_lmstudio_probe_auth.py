@@ -311,3 +311,54 @@ def test_onboarding_probe_remains_authorized_control(
         "path": "/v1/models",
         "authorization": "Bearer control-token",
     }
+
+
+def test_reasoning_probe_logs_signature_mismatch_before_fallback(
+    tmp_path,
+    monkeypatch,
+    lmstudio_probe_server,
+):
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        f"""
+model:
+  provider: lmstudio
+  default: auth-model
+  base_url: {lmstudio_probe_server.base_v1}
+providers:
+  lmstudio:
+    api_key: config-token
+agent:
+  reasoning_effort: medium
+display:
+  show_reasoning: true
+""",
+    )
+
+    captured: list[tuple[str, bool]] = []
+
+    class _CliModule:
+        @staticmethod
+        def lmstudio_model_reasoning_options(model, base_url):
+            raise TypeError("unexpected keyword argument: api_key")
+
+    monkeypatch.setitem(sys.modules, "hermes_cli", type("HermesCli", (), {})())
+    monkeypatch.setitem(sys.modules, "hermes_cli.models", _CliModule)
+    monkeypatch.setattr(
+        config.logger,
+        "warning",
+        lambda msg, *args, **kwargs: captured.append((str(msg), bool(kwargs.get("exc_info")))),
+    )
+
+    status = config.get_reasoning_status()
+
+    assert status["supports_reasoning_effort"] is True
+    assert status["supported_efforts"] == ["low", "medium", "high"]
+    assert lmstudio_probe_server.requests[0] == {
+        "path": "/api/v1/models",
+        "authorization": "Bearer config-token",
+    }
+    assert captured, "TypeError fallback must log a warning before probing directly"
+    assert "unexpected signature" in captured[0][0]
+    assert captured[0][1] is True

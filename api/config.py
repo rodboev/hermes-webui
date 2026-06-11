@@ -2687,6 +2687,18 @@ def _lmstudio_model_reasoning_options(
             api_key=api_key,
             timeout=timeout,
         )
+    except (TypeError, AttributeError):
+        logger.warning(
+            "hermes_cli.lmstudio_model_reasoning_options has an unexpected signature; "
+            "falling back to the built-in LM Studio reasoning probe",
+            exc_info=True,
+        )
+        return _lmstudio_reasoning_probe_options_fallback(
+            model,
+            base_url,
+            api_key=api_key,
+            timeout=timeout,
+        )
     except Exception:
         return _lmstudio_reasoning_probe_options_fallback(
             model,
