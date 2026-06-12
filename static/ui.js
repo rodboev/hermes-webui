@@ -706,6 +706,15 @@ function _openMermaidLightbox(svgEl) {
         }
       });
     });
+    clone.querySelectorAll('style').forEach(styleEl => {
+      let styleText = styleEl.textContent || '';
+      idMap.forEach((nextId, originalId) => {
+        const escapedId = originalId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        styleText = styleText.replace(new RegExp(`url\\(#${escapedId}\\)`, 'g'), `url(#${nextId})`);
+        styleText = styleText.replace(new RegExp(`(^|[^\\w-])#${escapedId}(?=$|[^\\w-])`, 'g'), (match, prefix) => `${prefix}#${nextId}`);
+      });
+      styleEl.textContent = styleText;
+    });
   }
   clone.classList.add('mermaid-lightbox-svg');
   clone.removeAttribute('width');

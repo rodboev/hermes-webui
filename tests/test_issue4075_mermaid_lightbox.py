@@ -36,6 +36,12 @@ class TestMermaidLightboxHelper:
         assert "const idPrefix = 'mermaid-lightbox-'" in src
         assert "replace(/url\\(#([^)]+)\\)/g" in src
 
+    def test_mermaid_lightbox_rewrites_embedded_style_selectors(self):
+        src = _ui_js()
+        assert "clone.querySelectorAll('style').forEach(styleEl => {" in src
+        assert "styleText = styleText.replace(new RegExp(`url\\\\(#${escapedId}\\\\)`" in src
+        assert "styleText = styleText.replace(new RegExp(`(^|[^\\\\w-])#${escapedId}(?=$|[^\\\\w-])`" in src
+
 
 class TestDocumentClickDelegate:
     def test_delegate_routes_rendered_mermaid_svgs_before_attach_thumb(self):
