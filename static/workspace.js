@@ -533,10 +533,17 @@ function renderCodePreviewContent(path, content){
 function renderCsvPreviewContent(path, content){
   if(typeof buildCsvTablePreview!=='function') return false;
   const preview=buildCsvTablePreview(path, content);
-  if(!preview||!preview.html) return false;
+  if(!preview) return false;
   showPreview('csv');
-  $('previewMd').innerHTML=preview.html;
-  return true;
+  if(preview.html){
+    $('previewMd').innerHTML=preview.html;
+    return true;
+  }
+  if(preview.errorKey&&typeof _csvPreviewErrorHtml==='function'){
+    $('previewMd').innerHTML=_csvPreviewErrorHtml(path, preview.errorKey);
+    return true;
+  }
+  return false;
 }
 
 function forceRenderMarkdownPreview(){
