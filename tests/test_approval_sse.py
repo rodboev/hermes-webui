@@ -105,6 +105,19 @@ class TestSSEStaticAnalysis:
              "from inside the `with _lock:` block — not the unlocked _approval_sse_notify wrapper, "
              "and head must be queue_list[0] (the head, not the just-appended entry).")
 
+    def test_streaming_notify_callback_mirrors_pending_before_sse_push(self):
+        """Gateway notify callback must repopulate polling state before relying on SSE."""
+        stream_start = ROUTES_SRC.find("def _handle_sse_stream(")
+        assert stream_start != -1, "_handle_sse_stream must exist"
+        streaming_src = (REPO_ROOT / "api" / "streaming.py").read_text(encoding="utf-8")
+        cb_start = streaming_src.find("def _approval_notify_cb(approval_data):")
+        cb_end = streaming_src.find("_reg_notify(session_id, _approval_notify_cb)", cb_start)
+        cb_body = streaming_src[cb_start:cb_end]
+        assert "_submit_pending_for_polling(session_id, approval_data)" in cb_body, \
+            "_approval_notify_cb must mirror approval data into polling state before SSE"
+        assert "put('approval', approval_data)" in cb_body, \
+            "_approval_notify_cb must still emit the approval SSE event"
+
     def test_unsubscribe_in_finally(self):
         """SSE handler must unsubscribe in a finally block."""
         # Find the finally block that calls _approval_sse_unsubscribe
