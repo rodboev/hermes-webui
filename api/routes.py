@@ -11234,6 +11234,8 @@ def _handle_approval_pending(handler, parsed):
                 if raw:
                     p = raw
                     total = len(gw_queue)
+                else:
+                    logger.warning("Gateway queue entry for %s has no .data attribute", sid)
     if p:
         return j(handler, {"pending": dict(p), "pending_count": total})
     return j(handler, {"pending": None, "pending_count": 0})

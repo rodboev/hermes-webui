@@ -5938,6 +5938,8 @@ def _run_agent_streaming(
                                         raw = getattr(gw_queue[0], 'data', None) or {}
                                         if raw:
                                             p = dict(raw)
+                                        else:
+                                            logger.warning("Gateway queue entry for %s has no .data attribute", session_id)
                             if p:
                                 put('approval', p)
                     except ImportError:
