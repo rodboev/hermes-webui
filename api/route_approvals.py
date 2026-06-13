@@ -106,15 +106,20 @@ def _approval_sse_notify(session_id: str, head: dict | None, total: int) -> None
 
 
 def _gateway_mirror_entry_token(entry) -> str:
-    """Return a stable token for the current process lifetime of a gateway head."""
-    token = getattr(entry, "_webui_gateway_mirror_token", None)
-    if not token:
-        token = uuid.uuid4().hex
-        try:
-            entry._webui_gateway_mirror_token = token
-        except Exception:
-            token = f"{id(entry)}:{uuid.uuid4().hex}"
-    return str(token)
+    """Return a stable token for the current process lifetime of a gateway head.
+
+    Stamps a `_webui_mirror_token` key into the entry's `.data` dict so
+    slotted objects like `_ApprovalEntry` work without attribute mutation
+    and the token survives CPython `id()` reuse after GC.
+    """
+    data = getattr(entry, "data", None)
+    if isinstance(data, dict):
+        token = data.get("_webui_mirror_token")
+        if not token:
+            token = uuid.uuid4().hex
+            data["_webui_mirror_token"] = token
+        return token
+    return uuid.uuid4().hex
 
 
 def _is_gateway_mirror_entry(entry: dict | None) -> bool:
@@ -138,6 +143,7 @@ def reconcile_gateway_pending_mirror_locked(session_key: str) -> tuple[dict | No
     changed = False
     queue_list = list(_normalize_pending_queue_locked(session_key))
     live_gateway_queue = _gateway_queues.get(session_key) or []
+
     live_head_entry = live_gateway_queue[0] if live_gateway_queue else None
     live_head_data = getattr(live_head_entry, "data", None) or {}
     live_token = _gateway_mirror_entry_token(live_head_entry) if live_head_entry and live_head_data else None

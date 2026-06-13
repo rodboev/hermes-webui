@@ -14455,17 +14455,13 @@ def _resolve_approval_legacy(sid: str, approval_id: str, choice: str) -> bool:
             if not approval_id or queue.get("approval_id") == approval_id:
                 pending = _pending.pop(sid, None)
                 found_target = pending is not None
-        # When no _pending entry found, peek into _gateway_queues for
-        # pattern_keys so session-level approval still works. The gateway
-        # path is the primary mechanism during active streaming; _pending
-        # is only used for UI polling/SSE notification.
-        # NOTE: Gateway queue entries don't carry approval_id, so when
-        # approval_id is given and _pending is empty, we assume the gateway
-        # entry at the head of the queue corresponds. This is safe because
-        # tagged gateway mirrors were reconciled against the live queue head
-        # under this same lock above, so a stale WebUI-only mirror cannot be
-        # popped ahead of whichever gateway entry is actually live now.
-        if not pending:
+        # When no _pending entry found AND no explicit approval_id was
+        # given, peek into _gateway_queues for pattern_keys so legacy
+        # no-id clients still work. When approval_id IS given but not
+        # found, the caller sent a stale/duplicate id — do NOT fall
+        # through to the gateway queue, or a stale click on approval A
+        # would resolve the unrelated live approval B.
+        if not pending and not approval_id:
             gw_queue = _gateway_queues.get(sid)
             if gw_queue and len(gw_queue) > 0:
                 gw_entry = gw_queue[0]

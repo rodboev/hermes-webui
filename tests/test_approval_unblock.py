@@ -399,3 +399,83 @@ class TestApprovalHTTPEndpoints:
             with _lock:
                 r._pending.pop(sid, None)
                 r._gateway_queues.pop(sid, None)
+
+    def test_gateway_mirror_token_stable_across_reconciles(self, monkeypatch):
+        """Two reconciles of the same _ApprovalEntry must keep the same approval_id."""
+        from api import routes as r
+        from api import route_approvals as ra
+
+        sid = f"http-token-stable-{uuid.uuid4().hex[:8]}"
+        approval = {
+            "command": "rm -rf /tmp/token-test",
+            "pattern_key": "recursive delete",
+            "pattern_keys": ["recursive delete"],
+            "description": "recursive delete",
+        }
+
+        entry = _ApprovalEntry(approval)
+        with _lock:
+            r._pending.pop(sid, None)
+            r._gateway_queues[sid] = [entry]
+        try:
+            with _lock:
+                head1, total1, _ = ra.reconcile_gateway_pending_mirror_locked(sid)
+            aid1 = head1["approval_id"]
+            token1 = head1[ra._GATEWAY_MIRROR_TOKEN]
+
+            with _lock:
+                head2, total2, _ = ra.reconcile_gateway_pending_mirror_locked(sid)
+            aid2 = head2["approval_id"]
+            token2 = head2[ra._GATEWAY_MIRROR_TOKEN]
+
+            assert token1 == token2, "token must be stable across reconciles"
+            assert aid1 == aid2, "approval_id must be stable across reconciles"
+        finally:
+            with _lock:
+                r._pending.pop(sid, None)
+                r._gateway_queues.pop(sid, None)
+                pass  # no external token state to clean
+
+    def test_stale_explicit_approval_id_does_not_resolve_live_gateway_head(self, monkeypatch):
+        """A stale explicit approval_id must not resolve the next live gateway head."""
+        from api import routes as r
+        from api import route_approvals as ra
+
+        sid = f"http-stale-id-{uuid.uuid4().hex[:8]}"
+        approval_a = {
+            "command": "rm -rf /tmp/stale-a",
+            "pattern_key": "recursive delete",
+            "pattern_keys": ["recursive delete"],
+            "description": "recursive delete",
+        }
+        approval_b = {
+            "command": "rm -rf /tmp/live-b",
+            "pattern_key": "recursive delete",
+            "pattern_keys": ["recursive delete"],
+            "description": "recursive delete",
+        }
+
+        entry_a = _ApprovalEntry(approval_a)
+        with _lock:
+            r._pending.pop(sid, None)
+            r._gateway_queues[sid] = [entry_a]
+        try:
+            ra.submit_gateway_pending_mirror(sid, approval_a)
+            with _lock:
+                mirror_aid_a = r._pending[sid][0]["approval_id"]
+
+            with _lock:
+                r._gateway_queues.pop(sid, None)
+            entry_b = _ApprovalEntry(approval_b)
+            with _lock:
+                r._gateway_queues[sid] = [entry_b]
+            ra.submit_gateway_pending_mirror(sid, approval_b)
+
+            resolved = r._resolve_approval_legacy(sid, mirror_aid_a, "once")
+            assert resolved is False, "stale approval_id must not resolve live B"
+            assert not entry_b.event.is_set(), "live B must not be unblocked by stale A"
+        finally:
+            with _lock:
+                r._pending.pop(sid, None)
+                r._gateway_queues.pop(sid, None)
+                pass  # no external token state to clean
