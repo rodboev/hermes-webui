@@ -1,4 +1,3 @@
----
 # Hermes Web UI -- Changelog
 
 ## [Unreleased]
@@ -155,8 +154,7 @@
 
 ### Fixed
 
-- **`/yolo` now takes effect immediately when sent during a running turn, instead of being queued behind it.** The busy-send fast path already ran `/steer`, `/interrupt`, `/queue`, `/terminal`, and `/goal` immediately; `/yolo` (session-scoped approval bypass) is now in that allowlist too, so toggling YOLO mid-turn applies to the in-flight approvals rather than only the next turn. (#467 follow-up)
-
+- **`/yolo` now takes effect immediately when sent during a running turn, instead of being queued behind it.** The busy-send fast path already ran `/steer`, `/interrupt`, `/queue`, `/terminal`, and `/goal` immediately; `/yolo` (session-scoped approval bypass) is now in that allowlist too, so toggling YOLO mid-turn applies to the in-flight approvals rather than only the next turn. (#467 follow-up) 
 ## [v0.51.392] — 2026-06-13 — Release NE (align WebUI reasoning efforts to the agent's accepted set, drop "max")
 
 ### Fixed
@@ -7869,7 +7867,6 @@ The hardcoded lists in `_PROVIDER_MODELS` remain as credential-missing / network
 > Living document. Updated at the end of every sprint.
 > Repository: https://github.com/nesquena/hermes-webui
 
----
 
 ## [v0.50.21] Live reasoning, tool progress, and in-flight session recovery (PR #367)
 
@@ -8134,7 +8131,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 
 **645 tests (up from 624 on v0.46.0 — +21 new tests)**
 
----
 
 ## [v0.46.0] — 2026-04-11
 
@@ -8160,7 +8156,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 
 **624 tests (up from 604 on v0.45.0 — +20 new tests)**
 
----
 
 ## [v0.45.0] — 2026-04-10
 
@@ -8285,7 +8280,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - 16 tests in `tests/test_approval_unblock.py` (gateway approval unit + HTTP).
 - **547 tests total** (499 → 515 → 547).
 
----
 
 ## [v0.40.1] — 2026-04-09
 
@@ -8297,7 +8291,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
   LOCALES bundle. `setLocale()` also stores the resolved code, so an unknown
   input never persists to storage.
 
----
 
 ## [v0.40.0] — 2026-04-09
 
@@ -8325,7 +8318,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
   `LOGIN_CONN_FAILED` were injected into a JS string context without escaping
   single quotes or backslashes. Now uses minimal JS-string escaping.
 
----
 
 ## [v0.39.1] — 2026-04-08
 
@@ -8336,7 +8328,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
   env variable read/write operations, released before the agent runs, and
   re-acquired in the finally block for restoration.
 
----
 
 ## [v0.39.0] — 2026-04-08
 
@@ -8358,14 +8349,12 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 ### Tests
 - Added `tests/test_sprint29.py` — 33 tests covering all 12 security fixes.
 
----
 
 ## [v0.38.6] — 2026-04-07
 
 ### Fixed
 - **`/insights` message count always 0 for WebUI sessions** (#163, #164): `sync_session_usage()` wrote token counts, cost, model, and title to `state.db` but never `message_count`. Both the streaming and sync chat paths now pass `len(s.messages)`. Note: `/insights` sync is opt-in — enable **Sync to Insights** in Settings (it's off by default).
 
----
 
 ## [v0.38.5] — 2026-04-06
 
@@ -8374,28 +8363,24 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **`custom_providers` config entries now appear in dropdown** (#138, #160): Models defined under `config.yaml` `custom_providers` (e.g. Ollama aliases, Azure model overrides) are now always included in the dropdown, even when the `/v1/models` endpoint is unreachable.
 - **Custom endpoint API key reads profile `.env`** (#138, #160): Custom endpoint auth now checks `~/.hermes/.env` keys in addition to `os.environ`.
 
----
 
 ## [v0.38.4] — 2026-04-06
 
 ### Fixed
 - **Copilot false positive in model dropdown** (#158): `list_available_providers()` reported Copilot as available on any machine with `gh` CLI auth, because the Copilot token resolver falls back to `gh auth token`. The dropdown now skips any provider whose credential source is `'gh auth token'` — only explicit, dedicated credentials count. Users with `GITHUB_TOKEN` explicitly set in their `.env` still see Copilot correctly.
 
----
 
 ## [v0.38.3] — 2026-04-06
 
 ### Fixed
 - **Model dropdown shows only configured providers** (#155): Provider detection now uses `hermes_cli.models.list_available_providers()` — the same auth check the Hermes agent uses at runtime — instead of scanning raw API key env vars. The dropdown now reflects exactly what the user has configured (auth.json, credential pools, OAuth flows like Copilot). When no providers are detected, shows only the configured default model rather than a full generic list. Added `copilot` and `gemini` to the curated model lists. Falls back to env var scanning for standalone installs without hermes-agent.
 
----
 
 ## [v0.38.2] — 2026-04-06
 
 ### Fixed
 - **Tool cards actually render on page reload** (#140, #153): PR #149 fixed the wrong filter — it updated `vis` but not `visWithIdx` (the loop that actually creates DOM rows), so anchor rows were never inserted. This PR fixes `visWithIdx`. Additionally, `streaming.py`'s `assistant_msg_idx` builder previously only scanned Anthropic content-array format and produced `idx=-1` for all OpenAI-format tool calls (the format used in saved sessions); it now handles both. As a final fallback, `renderMessages()` now builds tool card data directly from per-message `tool_calls` arrays when `S.toolCalls` is empty, covering historical sessions that predate session-level tool tracking.
 
----
 
 ## [v0.38.1] — 2026-04-06
 
@@ -8403,7 +8388,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **Model selector duplicates** (#147, #151): When `config.yaml` sets `model.default` with a provider prefix (e.g. `anthropic/claude-opus-4.6`), the model dropdown no longer shows a duplicate entry alongside the existing bare-ID entry. The dedup check now normalizes both sides before comparing.
 - **Stale model labels** (#147, #151): Sessions created with models no longer in the current provider list now show `"ModelName (unavailable)"` in muted text with a tooltip, instead of appearing as a normal selectable option that would fail silently on send.
 
----
 
 ## [v0.38.0] — 2026-04-06
 
@@ -8412,7 +8396,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **Personalities from config.yaml (#139):** `/api/personalities` reads from `config.yaml` `agent.personalities` (the documented mechanism). Personality prompts pass via `agent.ephemeral_system_prompt`.
 - **Tool call cards survive page reload (#140):** Assistant messages with only `tool_use` content are no longer filtered from the render list, preserving anchor rows for tool card display.
 
----
 
 ## [v0.37.0] /personality command, model prefix routing fix, tool card reload fix
 *April 6, 2026 | 465 tests*
@@ -8424,7 +8407,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **Model dropdown routes non-default provider models correctly (#138).** When the active provider is `anthropic` and you pick a `minimax` model, its ID is now prefixed `minimax/MiniMax-M2.7` so `resolve_model_provider()` can route it through OpenRouter. Guards added: `active_provider=None` prevents all-providers-prefixed, case is normalised, shared `_PROVIDER_MODELS` list is no longer mutated by the default_model injector. (PR #142)
 - **Tool call cards persist correctly after page reload.** The reload rendering logic now anchors cards AFTER the triggering assistant row (not before the next one), handles multi-step chains sharing a filtered anchor in chronological order, and filters fallback anchor to assistant rows only. (PR #141)
 
----
 
 ## [v0.36.3] Configurable Assistant Name
 *April 6, 2026 | 449 tests*
@@ -8437,7 +8419,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
   Server-side sanitization prevents empty names and escapes HTML for the
   login page. (PR #135, based on #131 by @TaraTheStar)
 
----
 
 ## [v0.36.2] OpenRouter model routing fix
 *April 5, 2026 | 440 tests*
@@ -8446,7 +8427,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **OpenRouter models sent without prefix, causing 404 (#116).** `resolve_model_provider()` was stripping the `openrouter/` prefix from model IDs (e.g. sending `free` instead of `openrouter/free`) when `config_provider == 'openrouter'`. OpenRouter requires the full `provider/model` path to route upstream correctly. Fixed with an early return that preserves the complete model ID for all OpenRouter configs. (#127)
 - Added 7 unit tests for `resolve_model_provider()` — first coverage on this function. Tests the regression, cross-provider routing, direct-API prefix stripping, bare models, and empty model.
 
----
 
 ## [v0.36.1] Login form Enter key fix
 *April 5, 2026 | 433 tests*
@@ -8454,7 +8434,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 ### Bug Fixes
 - **Login form Enter key unreliable in some browsers (#124).** `onsubmit="return doLogin(event)"` returned a Promise (async functions always return a truthy Promise), which could let the browser fall through to native form submission. Fixed with `doLogin(event);return false` plus an explicit `onkeydown` Enter handler on the password input as belt-and-suspenders. (#125)
 
----
 
 ## [v0.35.1] Model dropdown fixes
 *April 5, 2026 | 433 tests*
@@ -8463,7 +8442,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **Custom providers invisible in model dropdown (#117).** `cfg_base_url` was scoped inside a conditional block but referenced unconditionally, causing a `NameError` for users with a `base_url` in config.yaml. Fix: initialize to `''` before the block. (#118)
 - **Configured default model missing from dropdown (#116).** OpenRouter and other providers replaced the model list with a hardcoded fallback that didn't include `model.default` values like `openrouter/free` or custom local model names. Fix: after building all groups, inject the configured `default_model` at the top of its provider group if absent. (#119)
 
----
 
 ## [v0.34.3] Light theme final polish
 *April 5, 2026 | 433 tests*
@@ -8472,7 +8450,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **Light theme: sidebar, role labels, chips, and interactive elements all broken.** Session titles were too faint, active session used washed-out gold, pin stars were near-invisible bright yellow, and all hover/border effects used dark-theme white `rgba(255,255,255,.XX)` values invisible on cream. Fixed with 46 scoped `[data-theme="light"]` selector overrides covering session items, role labels, project chips, topbar chips, composer, suggestions, tool cards, cron list, and more. (#105)
 - Active session now uses blue accent (`#2d6fa3`) for strong contrast. Pin stars use deep gold (`#996b15`). Role labels are solid and high contrast.
 
----
 
 ## [v0.34.2] Theme text colors
 *April 5, 2026 | 433 tests*
@@ -8481,7 +8458,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **Light mode text unreadable.** Bold text was hardcoded white (invisible on cream), italic was light purple on cream, inline code had a dark box on a light background. Fixed by introducing 5 new per-theme CSS variables (`--strong`, `--em`, `--code-text`, `--code-inline-bg`, `--pre-text`) defined for every theme. (#102)
 - Also replaced remaining `rgba(255,255,255,.08)` border references with `var(--border)`, and darkened light theme `--code-bg` slightly for better contrast.
 
----
 
 ## [v0.34.1] Theme variable polish
 *April 5, 2026 | 433 tests*
@@ -8489,7 +8465,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 ### Bug Fixes
 - **All non-dark themes had broken surfaces, topbar, and dropdowns.** 30+ hardcoded dark-navy rgba/hex values in style.css were stuck on the Dark palette regardless of active theme. Fixed by introducing 7 new CSS variables (`--surface`, `--topbar-bg`, `--main-bg`, `--input-bg`, `--hover-bg`, `--focus-ring`, `--focus-glow`) defined per-theme, replacing every hardcoded reference. (#100)
 
----
 
 ## [v0.31.2] CLI session delete fix
 *April 5, 2026 | 424 tests*
@@ -8530,7 +8505,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
   `settings.json` (`show_cli_sessions`, default `true`). When disabled, CLI
   sessions are excluded from `/api/sessions` responses. (#61)
 
----
 
 ## [v0.28.1] CI Pipeline + Multi-Arch Docker Builds
 *April 3, 2026 | 426 tests*
@@ -8543,7 +8517,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **Pre-built container images.** Users can now `docker pull ghcr.io/nesquena/hermes-webui:latest`
   instead of building locally.
 
----
 
 ## [v0.18.1] Safe HTML Rendering + Sprint 16 Tests
 *April 2, 2026 | 289 tests*
@@ -8568,7 +8541,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **74 new tests** in `test_sprint16.py`: static analysis (6), behavioral (10),
   exact regression (1), XSS security (7), edge cases (51). Total: 289 passed.
 
----
 
 ## [v0.17.3] Bug Fixes
 *April 2, 2026*
@@ -8585,7 +8557,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
   moved after DOM append to fix reference-before-definition. Reordered
   `picker.remove()` before `removeEventListener` for correct cleanup. (PR #25)
 
----
 
 ## [v0.17.2] Model Update
 *April 2, 2026*
@@ -8594,7 +8565,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **GLM-5.1 added to Z.AI model list.** New model available in the dropdown
   for Z.AI provider users. (Fixes #17)
 
----
 
 ## [v0.17.1] Security + Bug Fixes
 *April 2, 2026 | 237 tests*
@@ -8635,7 +8605,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
 - **Redundant sys.path.insert calls removed.** Two cron handler imports no
   longer prepend the agent dir (already on sys.path via config.py).
 
----
 
 ## [v0.16.2] Model List Updates + base_url Passthrough
 *April 1, 2026 | 247 tests*
@@ -8650,7 +8619,6 @@ Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the bigg
   `base_url` from config.yaml and passes it to AIAgent, so providers with
   custom endpoints (MiniMax, Z.AI, local LLMs) route to the correct API.
 
----
 
 ## [v0.16.1] Community Fixes -- Mobile + Auth + Provider Routing
 *April 1, 2026 | 247 tests*
@@ -8672,7 +8640,6 @@ Community contributions from @deboste, reviewed and refined.
   `provider` to AIAgent. Handles cross-provider selection by matching against
   known direct-API providers.
 
----
 
 ## [v0.12.2] Concurrency + Correctness Sweeps
 *March 31, 2026 | 190 tests*
@@ -8704,7 +8671,6 @@ became a regression test so it cannot silently return.
 - **R15: Stale live tool cards in new sessions.** `newSession()` didn't call
   `clearLiveToolCards()`. Fixed.
 
----
 
 ## [v0.12.1] Sprint 10 Post-Release Fixes
 *March 31, 2026 | 177 tests*
@@ -8718,4 +8684,6 @@ Critical regressions introduced during the server.py split, caught by users and 
 - **SSE loop did not break on `cancel` event** -- connection hung after cancel
 - **Regression test file added** (`tests/test_regressions.py`): 10 tests, one per introduced bug. These form a permanent regression gate so each class of error can never silently return.
 
----
+
+
+
