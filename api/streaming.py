@@ -2574,11 +2574,11 @@ def generate_title_raw_via_agent(agent, user_text: str, assistant_text: str) -> 
                         _agent_model = getattr(agent, 'model', '')
                         _agent_base_url = getattr(agent, 'base_url', '')
                         _is_minimax = _is_minimax_route(_agent_provider, _agent_model, _agent_base_url)
-                        _agent_base_lower = (_agent_base_url or '').lower()
-                        _route_ok = any(h in _agent_base_lower for h in ('openrouter', 'nousresearch.com', 'localhost', '127.0.0.1', '0.0.0.0')) or (_agent_provider or '').strip().lower() == 'lmstudio'
-                        _caps = resolve_model_reasoning_efforts(_agent_model, provider_id=_agent_provider, base_url=_agent_base_url)
-                        _name_heuristic = _route_ok and not _caps and any(_candidate_supports_reasoning(c) for c in _reasoning_name_candidates(_agent_model))
-                        if _is_minimax or (_caps and _route_ok) or _name_heuristic:
+                        _route_ok = (
+                            callable(getattr(agent, '_supports_reasoning_extra_body', None))
+                            and agent._supports_reasoning_extra_body()
+                        )
+                        if _is_minimax or _route_ok:
                             _tg_extra.setdefault('thinking', {'type': 'disabled'})
                             _tg_extra.setdefault('reasoning', {'enabled': False})
                             if _is_minimax:

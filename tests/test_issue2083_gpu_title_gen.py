@@ -4,8 +4,9 @@ Covers:
   1. _title_should_skip_remaining_attempts('llm_empty_reasoning') returns True
   2. _title_should_skip_remaining_attempts('llm_empty_reasoning_aux') returns True
   3. generate_title_raw_via_agent with mock agent returns (None, 'llm_empty_reasoning')
-  4. Reasoning-capable models on tolerant routes get thinking/reasoning disabled; strict routes and non-reasoning models do not
-  4a. LM Studio reasoning models (qwen3, deepseek-r1) get the disable payload via name heuristic fallback
+  4. Reasoning-capable models get thinking/reasoning disabled when the canonical gate approves; gate-rejected routes (strict routes, non-reasoning models, mandatory-reasoning Anthropic on OpenRouter) do not
+  4a. LM Studio reasoning models (qwen3, deepseek-r1) get the disable payload via the canonical agent gate
+  4b. OpenRouter Anthropic mandatory-reasoning models (e.g. claude-sonnet-4.6) are excluded by the gate and do not receive the inject
   5. _run_background_title_update falls through to local fallback when agent returns llm_empty_reasoning
 """
 import sys
@@ -114,6 +115,7 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         mock_agent.base_url = 'https://openrouter.ai/api/v1'
         mock_agent.api_mode = None
         mock_agent.reasoning_config = None
+        mock_agent._supports_reasoning_extra_body.return_value = True
 
         base_kwargs = {
             'model': 'o3-mini',
@@ -157,6 +159,7 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         mock_agent.base_url = None
         mock_agent.api_mode = None
         mock_agent.reasoning_config = None
+        mock_agent._supports_reasoning_extra_body.return_value = False
 
         base_kwargs = {
             'model': 'mistral-large',
@@ -198,6 +201,7 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         mock_agent.base_url = 'https://api.openai.com/v1'
         mock_agent.api_mode = None
         mock_agent.reasoning_config = None
+        mock_agent._supports_reasoning_extra_body.return_value = False
 
         base_kwargs = {
             'model': 'gpt-5.5',
@@ -272,7 +276,7 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         self.assertTrue(extra_body['reasoning_split'])
 
     def test_lmstudio_qwen3_gets_reasoning_disabled(self):
-        """LM Studio qwen3 model gets reasoning-disable payload via name heuristic."""
+        """LM Studio qwen3 model gets reasoning-disable payload via canonical gate."""
         from api.streaming import generate_title_raw_via_agent
 
         user_text = 'Test user input'
@@ -284,6 +288,7 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         mock_agent.base_url = 'http://localhost:1234/v1'
         mock_agent.api_mode = None
         mock_agent.reasoning_config = None
+        mock_agent._supports_reasoning_extra_body.return_value = True
 
         base_kwargs = {
             'model': 'qwen3-8b',
@@ -315,7 +320,7 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         self.assertEqual(extra_body['reasoning'], {'enabled': False})
 
     def test_lmstudio_deepseek_r1_gets_reasoning_disabled(self):
-        """LM Studio DeepSeek-R1 model gets reasoning-disable payload via name heuristic."""
+        """LM Studio DeepSeek-R1 model gets reasoning-disable payload via canonical gate."""
         from api.streaming import generate_title_raw_via_agent
 
         user_text = 'Test user input'
@@ -327,6 +332,7 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         mock_agent.base_url = 'http://localhost:1234/v1'
         mock_agent.api_mode = None
         mock_agent.reasoning_config = None
+        mock_agent._supports_reasoning_extra_body.return_value = True
 
         base_kwargs = {
             'model': 'deepseek-r1-distill-qwen-7b',
@@ -356,6 +362,51 @@ class TestGenerateTitleRawViaAgent(unittest.TestCase):
         self.assertEqual(extra_body['thinking'], {'type': 'disabled'})
         self.assertIn('reasoning', extra_body)
         self.assertEqual(extra_body['reasoning'], {'enabled': False})
+
+
+    def test_api_kwargs_omits_reasoning_keys_for_openrouter_anthropic_mandatory(self):
+        """OpenRouter Anthropic mandatory-reasoning models must not get thinking/reasoning
+        injected — those models 400 when reasoning is disabled via extra_body."""
+        from api.streaming import generate_title_raw_via_agent
+
+        user_text = 'Test user input'
+        assistant_text = 'Test assistant output'
+
+        mock_agent = MagicMock()
+        mock_agent.provider = 'openai'
+        mock_agent.model = 'anthropic/claude-sonnet-4.6'
+        mock_agent.base_url = 'https://openrouter.ai/api/v1'
+        mock_agent.api_mode = None
+        mock_agent.reasoning_config = None
+        # The canonical gate returns False for mandatory-reasoning Anthropic models
+        # on OpenRouter because disabling their reasoning via extra_body is rejected.
+        mock_agent._supports_reasoning_extra_body.return_value = False
+
+        base_kwargs = {
+            'model': 'anthropic/claude-sonnet-4.6',
+            'messages': [],
+        }
+        mock_agent._build_api_kwargs.return_value = base_kwargs.copy()
+
+        captured_kwargs = {}
+
+        def capture_kwargs(**kwargs):
+            captured_kwargs.update(kwargs)
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = 'A title'
+            mock_response.choices[0].message.reasoning = None
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = capture_kwargs
+        mock_agent._ensure_primary_openai_client.return_value = mock_client
+
+        generate_title_raw_via_agent(mock_agent, user_text, assistant_text)
+
+        extra_body = captured_kwargs.get('extra_body', {})
+        self.assertNotIn('thinking', extra_body)
+        self.assertNotIn('reasoning', extra_body)
 
 
 class TestBackgroundTitleUpdateFallback(unittest.TestCase):
