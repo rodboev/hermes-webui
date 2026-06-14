@@ -1119,3 +1119,38 @@ console.log(JSON.stringify({{
 }}));
 """
     assert json.loads(_run_node(source)) == {"webui": [], "custom": ["#prod"]}
+
+
+def test_streaming_state_recorded_from_own_state_not_bubbled_child():
+    """_rememberRenderedStreamingState must receive the parent's own streaming
+    state, not the composite own||child value.  Otherwise the parent gets
+    marked unread/completed when a nested fork stops streaming."""
+    js = SESSIONS_JS_PATH.read_text(encoding="utf-8")
+    # The pattern we need: ownStreaming used for remember, isStreaming used
+    # for rendering (includes child).
+    assert "const ownStreaming=_isSessionEffectivelyStreaming(s);" in js
+    assert "const isStreaming=ownStreaming||!!s._child_session_streaming;" in js
+    assert "_rememberRenderedStreamingState(s, ownStreaming);" in js
+    # The old buggy pattern must not exist.
+    assert "_rememberRenderedStreamingState(s, isStreaming);" not in js
+
+
+def test_nested_fork_rows_included_in_visible_sidebar_ids():
+    """Expanded writable fork children must appear in _sessionVisibleSidebarIds
+    so they participate in batch-select (select-all / shift-select)."""
+    js = SESSIONS_JS_PATH.read_text(encoding="utf-8")
+    assert "child.session_source==='fork'" in js
+    # The _sessionVisibleSidebarIds builder must push fork children.
+    assert "_sessionVisibleSidebarIds.push(child.session_id)" in js
+
+
+def test_nested_fork_rows_render_select_checkbox():
+    """The session-child-session-fork render path must include a batch-select
+    checkbox when _sessionSelectMode is active and the child is writable."""
+    js = SESSIONS_JS_PATH.read_text(encoding="utf-8")
+    # Find the fork child render block and verify it contains checkbox wiring.
+    fork_render_start = js.find("session-child-session-fork")
+    assert fork_render_start > 0
+    fork_render_block = js[fork_render_start:fork_render_start + 2000]
+    assert "session-select-cb" in fork_render_block
+    assert "_sessionSelectMode" in fork_render_block

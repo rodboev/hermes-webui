@@ -5274,6 +5274,17 @@ function renderSessionListFromCache(){
     for(const s of g.items){ flatSessionRows.push({group:g,session:s}); }
   }
   _sessionVisibleSidebarIds=flatSessionRows.map(row=>row.session&&row.session.session_id).filter(Boolean);
+  for(const row of flatSessionRows){
+    const s=row.session;
+    if(!s||!Array.isArray(s._child_sessions)) continue;
+    const key=_sidebarLineageKeyForRow(s);
+    if(!_expandedChildSessionKeys.has(key)&&!searchQueryRaw) continue;
+    for(const child of s._child_sessions){
+      if(child&&child.session_source==='fork'&&child.session_id&&!_isReadOnlySession(child)){
+        _sessionVisibleSidebarIds.push(child.session_id);
+      }
+    }
+  }
   _ensureSessionVirtualScrollHandler(list);
   const activeIndex=flatSessionRows.findIndex(row=>_sessionLineageContainsSession(row.session,activeSidForSidebar));
   const shouldAnchorActive=activeSidForSidebar&&activeIndex>=0&&(
@@ -5385,8 +5396,9 @@ function renderSessionListFromCache(){
   function _renderOneSession(s, isPinnedGroup=false){
     const el=document.createElement('div');
     const isActive=_sessionLineageContainsSession(s,activeSidForSidebar);
-    const isStreaming=_isSessionEffectivelyStreaming(s)||!!s._child_session_streaming;
-    _rememberRenderedStreamingState(s, isStreaming);
+    const ownStreaming=_isSessionEffectivelyStreaming(s);
+    const isStreaming=ownStreaming||!!s._child_session_streaming;
+    _rememberRenderedStreamingState(s, ownStreaming);
     _rememberRenderedSessionSnapshot(s);
     const hasUnread=(_hasUnreadForSession(s)||!!s._child_session_has_unread)&&!isActive;
     const attention=_sessionAttentionState(s)||_sessionAttentionState({_child:true,attention:s._child_session_attention});
@@ -5827,6 +5839,19 @@ function renderSessionListFromCache(){
             +(childAttention?' needs-attention':'')
             +childAttentionClass;
           row.dataset.sid=child.session_id;
+          if(_sessionSelectMode&&!_isReadOnlySession(child)){
+            const cbW=document.createElement('label');cbW.className='session-select-cb-wrapper';
+            const cb=document.createElement('input');cb.type='checkbox';cb.className='session-select-cb';
+            cb.dataset.sid=child.session_id;cb.checked=_selectedSessions.has(child.session_id);
+            cb.onchange=(e)=>{e.stopPropagation();setSessionSelected(child.session_id,cb.checked);};
+            cb.onclick=(e)=>{e.stopPropagation();};
+            cb.onpointerup=(e)=>{e.stopPropagation();};
+            cbW.onpointerup=(e)=>{e.stopPropagation();};
+            cbW.onclick=(e)=>{e.stopPropagation();};
+            cbW.appendChild(cb);
+            row.classList.toggle('selected',_selectedSessions.has(child.session_id));
+            row.appendChild(cbW);
+          }
           const mainBtn=document.createElement('button');
           mainBtn.type='button';
           mainBtn.className='session-child-session-main'+(childIsActive?' active':'');
