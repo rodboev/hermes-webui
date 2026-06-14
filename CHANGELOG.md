@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.408] — 2026-06-14 — Release NU (reasoning selector for nested Gemini custom-provider routes, #3431)
+
+### Fixed
+
+- **Custom provider model ids with nested Gemini gateway routes (e.g. `vertex/gemini-2.5-…`, `gemini_cli/gemini-2.5-…`) now expose the reasoning effort selector when the underlying model supports thinking.** Extends the heuristic fallback used for bare and dot-separated custom names; embedding and image-only Gemini routes stay excluded, and the allow is version-gated to the reasoning-capable families (Gemini 2.5 series and 3-era) so pre-2.5 routes like `vertex/gemini-1.5-pro` — which have no thinking controls — don't get a selector that would fail on send. OpenRouter-style `x-ai/…` ids continue to use the existing slash-prefix list. (#3431)
+
 ## [v0.51.407] — 2026-06-14 — Release NT (nest forked sessions under their parent in the sidebar, #3224)
 
 ### Added
