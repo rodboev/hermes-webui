@@ -2739,7 +2739,7 @@ function toggleSessionSelect(sid){
   else _selectedSessions.add(sid);
   _updateBatchActionBar();
   const cb=document.querySelector('.session-select-cb[data-sid="'+sid+'"]');
-  const item=cb?cb.closest('.session-item'):null;
+  const item=cb?cb.closest('.session-item,.session-child-session-fork'):null;
   if(item){item.classList.toggle('selected',_selectedSessions.has(sid));if(cb)cb.checked=_selectedSessions.has(sid);}
 }
 function setSessionSelected(sid, selected){
@@ -2747,7 +2747,7 @@ function setSessionSelected(sid, selected){
   else _selectedSessions.delete(sid);
   _updateBatchActionBar();
   const cb=document.querySelector('.session-select-cb[data-sid="'+sid+'"]');
-  const item=cb?cb.closest('.session-item'):null;
+  const item=cb?cb.closest('.session-item,.session-child-session-fork'):null;
   if(item){item.classList.toggle('selected',_selectedSessions.has(sid));if(cb)cb.checked=_selectedSessions.has(sid);}
 }
 function selectAllSessions(){
@@ -2758,13 +2758,13 @@ function selectAllSessions(){
   ids.forEach(sid=>_selectedSessions.add(sid));
   document.querySelectorAll('.session-select-cb').forEach(cb=>{
     const sid=cb.dataset.sid;
-    if(sid){cb.checked=_selectedSessions.has(sid);const item=cb.closest('.session-item');if(item)item.classList.toggle('selected',_selectedSessions.has(sid));}
+    if(sid){cb.checked=_selectedSessions.has(sid);const item=cb.closest('.session-item,.session-child-session-fork');if(item)item.classList.toggle('selected',_selectedSessions.has(sid));}
   });
   _updateBatchActionBar();
 }
 function deselectAllSessions(){
   _selectedSessions.clear();
-  document.querySelectorAll('.session-select-cb').forEach(cb=>{cb.checked=false;const item=cb.closest('.session-item');if(item)item.classList.remove('selected');});
+  document.querySelectorAll('.session-select-cb').forEach(cb=>{cb.checked=false;const item=cb.closest('.session-item,.session-child-session-fork');if(item)item.classList.remove('selected');});
   _updateBatchActionBar();
 }
 function _updateBatchActionBar(){

@@ -1148,8 +1148,8 @@ def test_nested_fork_rows_render_select_checkbox():
     """The session-child-session-fork render path must include a batch-select
     checkbox when _sessionSelectMode is active and the child is writable."""
     js = SESSIONS_JS_PATH.read_text(encoding="utf-8")
-    # Find the fork child render block and verify it contains checkbox wiring.
-    fork_render_start = js.find("session-child-session-fork")
+    render_marker = "row.className='session-child-session session-child-session-fork'"
+    fork_render_start = js.find(render_marker)
     assert fork_render_start > 0
     fork_render_block = js[fork_render_start:fork_render_start + 2000]
     assert "session-select-cb" in fork_render_block
