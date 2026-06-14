@@ -2413,6 +2413,19 @@ def _is_minimax_route(provider: str = '', model: str = '', base_url: str = '') -
     return 'minimax' in text or 'minimaxi.com' in text
 
 
+def _route_rejects_reasoning_extra(provider: str = '', model: str = '', base_url: str = '') -> bool:
+    provider_lower = str(provider or '').strip().lower()
+    base_lower = str(base_url or '').strip().lower()
+    # OpenAI Chat Completions rejects unknown top-level parameters
+    if 'api.openai.com' in base_lower or 'openai.azure.com' in base_lower:
+        return True
+    if provider_lower in ('openai', 'openai-api', 'openai-codex'):
+        return True
+    if provider_lower == 'azure' or provider_lower.startswith('azure/'):
+        return True
+    return False
+
+
 def _get_aux_title_config() -> dict:
     """Return title_generation auxiliary config, or an empty dict on errors."""
     try:
@@ -2594,7 +2607,9 @@ def generate_title_raw_via_aux(
     if not caller_supplied_route:
         api_key = str(configured.get('api_key', '') or '').strip()
     base_max_tokens = _title_completion_budget(provider, model, base_url)
-    reasoning_extra = {"reasoning": {"enabled": False}}
+    reasoning_extra = {}
+    if not _route_rejects_reasoning_extra(provider, model, base_url):
+        reasoning_extra["reasoning"] = {"enabled": False}
     if _is_minimax_route(provider, model, base_url):
         reasoning_extra["reasoning_split"] = True
     try:
@@ -2619,7 +2634,7 @@ def generate_title_raw_via_aux(
                         max_tokens=max_tokens,
                         temperature=0.2,
                         timeout=_timeout,
-                        extra_body=reasoning_extra,
+                        extra_body=reasoning_extra or None,
                     )
                     raw, empty_status = _extract_title_response(resp, aux=True)
                     if raw:
