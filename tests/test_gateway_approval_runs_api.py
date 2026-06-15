@@ -248,7 +248,7 @@ def test_gateway_runs_api_streaming_parses_real_run_events():
 # ---------------------------------------------------------------------------
 
 def test_gateway_approval_response_relay():
-    """_handle_approval_respond relays to /v1/runs/{run_id}/approval when a run_id exists."""
+    """_handle_approval_respond relays the real gateway approval body."""
     from api.gateway_chat import _STREAM_RUN_IDS
 
     # Seed the mapping.
@@ -281,8 +281,7 @@ def test_gateway_approval_response_relay():
         _handle_approval_respond(handler, body)
 
     assert "/v1/runs/run-abc/approval" in captured.get("url", "")
-    assert captured["body"]["choice"] == "once"
-    assert captured["body"]["approval_id"] == "appr-x"
+    assert captured["body"] == {"choice": "once"}
 
     # Cleanup.
     _STREAM_RUN_IDS.pop("sid-relay", None)

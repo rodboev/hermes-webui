@@ -15313,7 +15313,7 @@ def _handle_approval_respond(handler, body):
             _relay_headers = {"Content-Type": "application/json"}
             if _key:
                 _relay_headers["Authorization"] = f"Bearer {_key}"
-            _relay_body = json.dumps({"choice": choice, "approval_id": approval_id}).encode()
+            _relay_body = json.dumps({"choice": choice}).encode()
             try:
                 import urllib.request as _ureq
                 _req = _ureq.Request(_relay_url, data=_relay_body, headers=_relay_headers, method="POST")
