@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -7,10 +6,14 @@ REPO = Path(__file__).resolve().parents[1]
 
 def _extract_function(src: str, name: str) -> str:
     anchor = f"function {name}("
+    return _extract_balanced_block(src, anchor)
+
+
+def _extract_balanced_block(src: str, anchor: str) -> str:
     start = src.find(anchor)
-    assert start != -1, f"{name}() must exist"
+    assert start != -1, f"{anchor} must exist"
     body_start = src.find("{", start)
-    assert body_start != -1, f"{name}() must have a body"
+    assert body_start != -1, f"{anchor} must have a body"
     depth = 1
     idx = body_start + 1
     while depth and idx < len(src):
@@ -19,7 +22,7 @@ def _extract_function(src: str, name: str) -> str:
         elif src[idx] == "}":
             depth -= 1
         idx += 1
-    assert depth == 0, f"{name}() body must balance braces"
+    assert depth == 0, f"{anchor} body must balance braces"
     return src[start:idx]
 
 
@@ -68,13 +71,7 @@ def test_browser_tts_callbacks_and_deactivate_clear_recovery_handles():
 
 def test_edge_audio_branch_stays_separate():
     src = (REPO / "static" / "boot.js").read_text(encoding="utf-8")
-    edge_match = re.search(
-        r'if\(engine==="edge"\)\{(.*?)\n\s+return;\n\s+\}',
-        src,
-        re.DOTALL,
-    )
-    assert edge_match, "Edge audio branch must exist"
-    edge_body = edge_match.group(1)
+    edge_body = _extract_balanced_block(src, 'if(engine==="edge")')
     assert "const audio = new Audio(url);" in edge_body
     assert "audio.onended = () => {" in edge_body
     assert "_armBrowserTtsRecovery" not in edge_body, (
