@@ -15295,6 +15295,36 @@ def _handle_approval_respond(handler, body):
         return bad(handler, f"Invalid choice: {choice}")
     approval_id = body.get("approval_id", "")
 
+    # Gateway relay: forward choice to the runs API when session has an active run.
+    try:
+        from api.gateway_chat import _STREAM_RUN_IDS, _gateway_base_url, _gateway_api_key
+        from api.config import get_config as _get_config
+        s = get_session(sid)
+        _run_id = None
+        if s is not None:
+            active_sid = getattr(s, "active_stream_id", None)
+            if active_sid:
+                _run_id = _STREAM_RUN_IDS.get(active_sid)
+        if _run_id:
+            _cfg = _get_config()
+            _base = _gateway_base_url(_cfg)
+            _key = _gateway_api_key()
+            _relay_url = f"{_base.rstrip('/')}/v1/runs/{_run_id}/approval"
+            _relay_headers = {"Content-Type": "application/json"}
+            if _key:
+                _relay_headers["Authorization"] = f"Bearer {_key}"
+            _relay_body = json.dumps({"choice": choice, "approval_id": approval_id}).encode()
+            try:
+                import urllib.request as _ureq
+                _req = _ureq.Request(_relay_url, data=_relay_body, headers=_relay_headers, method="POST")
+                with _ureq.urlopen(_req, timeout=10) as _resp:
+                    _relay_ok = 200 <= _resp.status < 300
+            except Exception:
+                _relay_ok = False
+            return j(handler, {"ok": _relay_ok, "choice": choice, "relayed": True})
+    except Exception:
+        pass  # fall through to local approval path
+
     from api.runtime_adapter import LegacyJournalRuntimeAdapter, runtime_adapter_enabled
 
     if runtime_adapter_enabled():
