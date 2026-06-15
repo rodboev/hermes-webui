@@ -79,7 +79,7 @@ class TestSessionPersistence(unittest.TestCase):
         self.assertIn("valid_token", auth._sessions)
 
     def test_sessions_file_permissions(self) -> None:
-        """Sessions file must be owner-read-only (0600)."""
+        """Sessions file must stay strict on POSIX and still be created on Windows."""
         auth.create_session()
         # Check the path auth actually writes to (auth._SESSIONS_FILE is computed
         # from api.config.STATE_DIR at import time). Asserting against a local
