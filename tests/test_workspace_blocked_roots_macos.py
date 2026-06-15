@@ -124,7 +124,7 @@ class TestUserTmpPrefixes:
         """Carve-outs must not let /etc or other strict roots through."""
         for tmp in _USER_TMP_PREFIXES:
             # tmp paths are under /var or /private/var, never under /etc, /usr, /bin, etc.
-            assert str(tmp).startswith('/var/') or str(tmp).startswith('/private/var/')
+            assert tmp.as_posix().startswith('/var/') or tmp.as_posix().startswith('/private/var/')
 
 
 # ── Other roots: literal == resolved on both platforms ─────────────────────
