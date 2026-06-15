@@ -451,6 +451,35 @@ def test_gateway_approval_response_relay_failure_returns_502():
     _STREAM_RUN_IDS.pop("sid-relay-fail", None)
 
 
+def test_gateway_approval_response_invalid_gateway_base_returns_502():
+    """Misconfigured gateway bases must not fall through to the local approval path."""
+    from api.gateway_chat import _STREAM_RUN_IDS
+
+    _STREAM_RUN_IDS["sid-relay-invalid-base"] = "run-abc"
+
+    mock_session = MagicMock()
+    mock_session.active_stream_id = "sid-relay-invalid-base"
+
+    handler = MagicMock()
+    handler.wfile = io.BytesIO()
+
+    body = {"session_id": "sess-relay", "choice": "once", "approval_id": "appr-x"}
+
+    with patch("api.routes.get_session", return_value=mock_session), \
+         patch("api.gateway_chat._gateway_base_url", return_value="file:///tmp/not-http"), \
+         patch("api.gateway_chat._gateway_api_key", return_value=""):
+        from api.routes import _handle_approval_respond
+        _handle_approval_respond(handler, body)
+
+    handler.send_response.assert_called_with(502)
+    payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+    assert payload["ok"] is False
+    assert payload["relayed"] is True
+    assert "runner base_url must be http(s)" in payload["error"]
+
+    _STREAM_RUN_IDS.pop("sid-relay-invalid-base", None)
+
+
 # ---------------------------------------------------------------------------
 # 6. Empty chat/completions response emits gateway_empty_response (not a
 #    misleading approval-unsupported banner)

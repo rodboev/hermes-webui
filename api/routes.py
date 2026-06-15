@@ -15314,7 +15314,7 @@ def _handle_approval_respond(handler, body):
             _key = _gateway_api_key()
             try:
                 HttpRunnerClient(base_url=_base, api_key=_key).respond_approval(_run_id, approval_id, choice)
-            except RunnerClientError as exc:
+            except (RunnerClientError, ValueError) as exc:
                 return j(handler, {"ok": False, "choice": choice, "relayed": True, "error": str(exc)}, status=502)
             return j(handler, {"ok": True, "choice": choice, "relayed": True})
     except Exception:
