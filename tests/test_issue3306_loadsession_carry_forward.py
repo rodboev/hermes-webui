@@ -23,6 +23,12 @@ REPO = Path(__file__).resolve().parents[1]
 SESSIONS_JS = (REPO / "static" / "sessions.js").read_text(encoding="utf-8")
 
 
+def _function_body(start_marker: str, end_marker: str) -> str:
+    start = SESSIONS_JS.index(start_marker)
+    end = SESSIONS_JS.index(end_marker, start)
+    return SESSIONS_JS[start:end]
+
+
 def _load_session_clear_block() -> str:
     """The if(currentSid!==sid||forceReload){...} block in loadSession()."""
     start = SESSIONS_JS.index("async function loadSession(sid)")
@@ -32,8 +38,10 @@ def _load_session_clear_block() -> str:
 
 
 def _ensure_messages_loaded_body() -> str:
-    start = SESSIONS_JS.index("async function _ensureMessagesLoaded")
-    return SESSIONS_JS[start: start + 3000]
+    return _function_body(
+        "async function _ensureMessagesLoaded(sid) {",
+        "function _messageComparableText",
+    )
 
 
 def test_pending_carry_forward_snapshot_declared_at_module_scope():
@@ -87,13 +95,17 @@ def test_ensure_messages_loaded_consumes_snapshot_then_clears_it():
 
 
 def _load_older_messages_body() -> str:
-    start = SESSIONS_JS.index("async function _loadOlderMessages")
-    return SESSIONS_JS[start: start + 6000]
+    return _function_body(
+        "async function _loadOlderMessages() {",
+        "async function _ensureAllMessagesLoaded",
+    )
 
 
 def _start_gateway_sse_body() -> str:
-    start = SESSIONS_JS.index("function startGatewaySSE")
-    return SESSIONS_JS[start: start + 4000]
+    return _function_body(
+        "function startGatewaySSE(){",
+        "function stopGatewaySSE",
+    )
 
 
 def test_load_older_messages_tail_match_carries_forward():
