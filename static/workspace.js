@@ -1082,7 +1082,7 @@ if (typeof document !== 'undefined') {
       if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('Files')) {
         e.preventDefault();
         e.stopPropagation();
-        if (e.target.closest('.file-item[data-ws-type="dir"],.breadcrumb-seg')) return;
+        if (e.target.closest('.file-item[data-ws-type="dir"],.file-item[data-ws-is-dir="true"],.breadcrumb-seg')) return;
         e.dataTransfer.dropEffect = 'copy';
         tree.classList.add('drag-over-upload');
       }
@@ -1094,7 +1094,7 @@ if (typeof document !== 'undefined') {
     tree.addEventListener('drop', async (e) => {
       tree.classList.remove('drag-over-upload');
       if (!e.dataTransfer || !e.dataTransfer.types || !e.dataTransfer.types.includes('Files')) return;
-      if (e.target.closest('.file-item[data-ws-type="dir"],.breadcrumb-seg')) return;
+      if (e.target.closest('.file-item[data-ws-type="dir"],.file-item[data-ws-is-dir="true"],.breadcrumb-seg')) return;
       e.preventDefault();
       e.stopPropagation();
       await uploadOsDropToWorkspace(e.dataTransfer, S.currentDir || '.');

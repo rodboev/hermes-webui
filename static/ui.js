@@ -12684,6 +12684,12 @@ function _bindWorkspaceMoveDropTarget(el,destDir){
   };
 }
 
+function elideMiddle(str, maxLen = 60) {
+  if (str.length <= maxLen) return str;
+  const half = Math.floor((maxLen - 3) / 2);
+  return str.slice(0, half) + '...' + str.slice(str.length - half);
+}
+
 function _renderTreeItems(container, entries, depth){
   for(const item of entries){
     const el=document.createElement('div');el.className='file-item';
@@ -12694,7 +12700,11 @@ function _renderTreeItems(container, entries, depth){
     el.ondragstart=(e)=>{e.dataTransfer.setData('application/ws-path',item.path);e.dataTransfer.setData('application/ws-type',item.type);e.dataTransfer.effectAllowed='copy';el.classList.add('dragging');};
     el.ondragend=()=>{el.classList.remove('dragging');_clearWorkspaceMoveDragOver();};
 
-    if(item.type==='dir'){
+    const isLk = item.type === 'symlink';
+    const isDirLike = item.type === 'dir' || (isLk && item.is_dir);
+    el.dataset.wsIsDir = String(isDirLike);
+
+    if(isDirLike){
       // Toggle arrow for directories
       const arrow=document.createElement('span');
       arrow.className='file-tree-toggle';
@@ -12712,7 +12722,10 @@ function _renderTreeItems(container, entries, depth){
 
     // Icon
     const iconEl=document.createElement('span');
-    iconEl.className='file-icon';iconEl.innerHTML=fileIcon(item.name,item.type);
+    iconEl.className='file-icon';
+    iconEl.innerHTML = isDirLike
+      ? (isLk ? li('link', 14) : li('folder', 14))
+      : (isLk ? li('link', 14) : fileIcon(item.name, item.type));
     el.appendChild(iconEl);
 
     // Name
@@ -12721,7 +12734,10 @@ function _renderTreeItems(container, entries, depth){
     // Tooltip only on FILES — dblclick renames them. On directories, dblclick
     // navigates into the folder; rename lives in the right-click context menu
     // (the "Double-click to rename" hint here would be misleading). #1710.
-    if(item.type!=='dir')nameEl.title=t('double_click_rename');
+    if(isLk && item.target)
+      nameEl.title = t('symlink_link_to').replace('{target}', elideMiddle(item.target));
+    else if(!isDirLike)
+      nameEl.title = t('double_click_rename');
     // Single-click opens (file) or expand-toggles (dir) but is debounced 300ms so a
     // double-click can cancel it and trigger rename instead. Without the debounce, the
     // click bubbles to el.onclick before dblclick can fire — that's #1698. Without the
@@ -12740,7 +12756,7 @@ function _renderTreeItems(container, entries, depth){
       e.stopPropagation();
       if(_nameClickTimer){clearTimeout(_nameClickTimer);_nameClickTimer=null;}
       // For directories, double-click navigates (breadcrumb view)
-      if(item.type==='dir'){loadDir(item.path);return;}
+      if(isDirLike){loadDir(item.path);return;}
       const inp=document.createElement('input');
       inp.className='file-rename-input';inp.value=item.name;
       inp.onclick=(e2)=>e2.stopPropagation();
@@ -12755,7 +12771,7 @@ function _renderTreeItems(container, entries, depth){
               })});
               showToast(t('renamed_to')+newName);
               // Update expanded dirs cache key if renaming a directory
-              if(item.type==='dir'&&S._expandedDirs){
+              if(isDirLike&&S._expandedDirs){
                 S._expandedDirs.delete(item.path);
                 const parent=item.path.includes('/')?item.path.substring(0,item.path.lastIndexOf('/')):'.';
                 const newPath=parent==='.'?newName:parent+'/'+newName;
@@ -12799,14 +12815,14 @@ function _renderTreeItems(container, entries, depth){
       del.className='file-del-btn';del.title=t('delete_title');del.textContent='\u00d7';
       del.onclick=async(e)=>{e.stopPropagation();await deleteWorkspaceFile(item.path,item.name);};
       el.appendChild(del);
-    }else if(item.type==='dir'){
+    }else if(isDirLike){
       const del=document.createElement('button');
       del.className='file-del-btn';del.title=t('delete_title');del.textContent='\u00d7';
       del.onclick=async(e)=>{e.stopPropagation();await deleteWorkspaceDir(item.path,item.name);};
       el.appendChild(del);
     }
 
-    if(item.type==='dir'){
+    if(isDirLike){
       _bindWorkspaceMoveDropTarget(el,item.path);
       _bindWorkspaceOsUploadDropTarget(el,item.path);
       // Single-click toggles expand/collapse
@@ -12836,7 +12852,7 @@ function _renderTreeItems(container, entries, depth){
     container.appendChild(el);
 
     // Render children if directory is expanded
-    if(item.type==='dir'&&S._expandedDirs.has(item.path)){
+    if(isDirLike&&S._expandedDirs.has(item.path)){
       const children=_visibleWorkspaceEntries(S._dirCache[item.path]||[]);
       if(children.length){
         _renderTreeItems(container, children, depth+1);
@@ -12874,7 +12890,8 @@ function _showFileContextMenu(e, item){
   const vw=window.innerWidth,vh=window.innerHeight;
   menu.style.left=(e.clientX+140>vw?e.clientX-150:e.clientX)+'px';
   menu.style.top=(e.clientY+100>vh?e.clientY-100:e.clientY)+'px';
-  const targetDir=item.type==='dir' ? item.path : _workspaceParentDir(item.path);
+  const isDirLike=item.type==='dir'||(item.type==='symlink'&&item.is_dir);
+  const targetDir=isDirLike ? item.path : _workspaceParentDir(item.path);
 
   menu.appendChild(_workspaceContextMenuItem(t('new_file'),async()=>{
     menu.remove();
@@ -12953,7 +12970,7 @@ function _showFileContextMenu(e, item){
   };
   menu.appendChild(copyPathItem);
 
-  if(item.type==='dir'){
+  if(isDirLike){
     const dlItem=document.createElement('div');
     dlItem.textContent=t('download_folder');
     dlItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
@@ -12976,7 +12993,7 @@ function _showFileContextMenu(e, item){
   delItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--error,#e94560);';
   delItem.onmouseenter=()=>delItem.style.background='var(--hover-bg)';
   delItem.onmouseleave=()=>delItem.style.background='';
-  delItem.onclick=()=>{menu.remove();if(item.type==='dir')deleteWorkspaceDir(item.path,item.name);else deleteWorkspaceFile(item.path,item.name);};
+  delItem.onclick=()=>{menu.remove();if(isDirLike)deleteWorkspaceDir(item.path,item.name);else deleteWorkspaceFile(item.path,item.name);};
   menu.appendChild(delItem);
 
   document.body.appendChild(menu);
@@ -12986,6 +13003,7 @@ function _showFileContextMenu(e, item){
 
 async function _inlineRenameFileItem(item){
   if(!S.session)return;
+  const isDirLike=item.type==='dir'||(item.type==='symlink'&&item.is_dir);
   // Pre-fill the input with the current name and select just the stem
   // (everything before the last '.') so the user can immediately retype the
   // basename while preserving the extension — matches macOS Finder. For
@@ -12995,15 +13013,15 @@ async function _inlineRenameFileItem(item){
     message:t('rename_prompt'),
     value:item.name,
     confirmLabel:t('rename_title'),
-    selectStem:item.type!=='dir',
-    selectAll:item.type==='dir'
+    selectStem:!isDirLike,
+    selectAll:isDirLike
   });
   if(!newName||newName===item.name)return;
   try{
     await api('/api/file/rename',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,path:item.path,new_name:newName})});
     showToast(t('renamed_to')+newName);
     // Update expanded dirs cache key if renaming a directory
-    if(item.type==='dir'&&S._expandedDirs){
+    if(isDirLike&&S._expandedDirs){
       S._expandedDirs.delete(item.path);
       const parent=item.path.includes('/')?item.path.substring(0,item.path.lastIndexOf('/')):'.';
       const newPath=parent==='.'?newName:parent+'/'+newName;
