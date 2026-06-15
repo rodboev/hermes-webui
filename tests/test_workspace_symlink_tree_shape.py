@@ -4,7 +4,6 @@ The renderer _renderTreeItems must use isDirLike (type==='dir' || (type==='symli
 && is_dir)) for all expand/navigate/delete gates rather than type==='dir' alone.
 """
 from pathlib import Path
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UI_JS = (REPO_ROOT / "static" / "ui.js").read_text(encoding="utf-8")
