@@ -1463,7 +1463,10 @@ def _session_list_cache_source_stamp(key: tuple) -> tuple[tuple[int, int], tuple
         state_db_path = Path(_active_state_db_path())
     except Exception:
         state_db_path = None
-    state_db_wal_path = state_db_path.with_name(f"{state_db_path.name}-wal") if state_db_path is not None else None
+    try:
+        state_db_wal_path = state_db_path.with_name(f"{state_db_path.name}-wal") if state_db_path is not None else None
+    except Exception:
+        state_db_wal_path = None
     try:
         gateway_metadata_path = _gateway_session_metadata_path()
     except Exception:
@@ -1472,12 +1475,16 @@ def _session_list_cache_source_stamp(key: tuple) -> tuple[tuple[int, int], tuple
         session_index_path = SESSION_DIR / "_index.json"
     except Exception:
         session_index_path = None
+    try:
+        settings_file = SETTINGS_FILE
+    except Exception:
+        settings_file = None
     return (
         _session_list_cache_path_stamp(state_db_path),
         _session_list_cache_path_stamp(state_db_wal_path),
         _session_list_cache_path_stamp(gateway_metadata_path),
         _session_list_cache_path_stamp(session_index_path),
-        _session_list_cache_path_stamp(SETTINGS_FILE),
+        _session_list_cache_path_stamp(settings_file),
     )
 
 
