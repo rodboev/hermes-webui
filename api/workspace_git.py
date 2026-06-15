@@ -213,7 +213,7 @@ def _run_git(
             extra_configs.extend(_destructive_filter_overrides(cwd, run_env))
         if effective_destructive:
             extra_configs.extend(_destructive_merge_driver_overrides(cwd, run_env))
-            extra_configs.extend(_destructive_remote_helper_overrides(cwd, run_env))
+            args = _destructive_remote_command_args(args, cwd, run_env)
             hooks_path = tempfile.mkdtemp(prefix="hermes-webui-git-hooks-")
             temporary_dirs = [hooks_path]
         result = subprocess.run(
@@ -390,6 +390,26 @@ def _destructive_remote_helper_overrides(cwd: Path, env: dict[str, str]) -> list
     return overrides
 
 
+def _destructive_remote_command_args(args: list[str], cwd: Path, env: dict[str, str]) -> list[str]:
+    if not args:
+        return args
+    names = _remote_helper_names_for_scope("--local", cwd, env)
+    names |= _remote_helper_names_for_scope(
+        "--worktree",
+        cwd,
+        env,
+        ignore_unsupported=True,
+    )
+    if not names:
+        return args
+    command = args[0]
+    if command in {"fetch", "pull"}:
+        return [command, "--upload-pack=git-upload-pack", *args[1:]]
+    if command == "push":
+        return [command, "--receive-pack=git-receive-pack", *args[1:]]
+    return args
+
+
 def resolve_git_context(workspace: str | Path) -> GitContext | None:
     ws = Path(workspace).expanduser().resolve()
     result = _run_git(ws, ["rev-parse", "--show-toplevel"], check=False)
@@ -489,6 +509,7 @@ def _parse_path_list(text: str, ctx: GitContext) -> set[str]:
 
 def _collect_diff_paths(ctx: GitContext, cached: bool, *, ignore_cr_at_eol: bool = True) -> set[str] | None:
     args = ["diff", "--name-only", "-z"]
+    args.append("--no-textconv")
     if ignore_cr_at_eol:
         args.append("--ignore-cr-at-eol")
     if cached:
@@ -513,6 +534,7 @@ def _collect_numstat(
     ignore_cr_at_eol: bool = True,
 ) -> dict[str, tuple[int, int, bool]]:
     args = ["diff", "--numstat"]
+    args.append("--no-textconv")
     if ignore_cr_at_eol:
         args.append("--ignore-cr-at-eol")
     if cached:
@@ -1545,7 +1567,7 @@ def git_commit_selected(workspace: str | Path, message: str, paths: Iterable[str
         try:
             quiet = _run_git(
                 ctx,
-                ["diff", "--cached", "--quiet", "--", *specs],
+                ["diff", "--cached", "--quiet", "--no-textconv", "--", *specs],
                 check=False,
                 env=env,
                 destructive=True,
