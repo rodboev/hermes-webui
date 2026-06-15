@@ -496,10 +496,10 @@ def test_fix_credential_permissions_corrects_loose_files(tmp_path, monkeypatch):
 
     import stat
     assert env_file.exists(), ".env missing after permission repair"
-    assert google_file.exists(), "aux sidecar missing after permission repair"
+    assert google_file.exists(), "google_token.json missing after permission repair"
     if os.name != "nt":
         assert stat.S_IMODE(env_file.stat().st_mode) == 0o600, ".env not fixed to 600"
-        assert stat.S_IMODE(google_file.stat().st_mode) == 0o600, "aux sidecar not fixed to 600"
+        assert stat.S_IMODE(google_file.stat().st_mode) == 0o600, "google_token.json not fixed to 600"
 
 
 def test_fix_credential_permissions_skips_correct_files(tmp_path, monkeypatch):
