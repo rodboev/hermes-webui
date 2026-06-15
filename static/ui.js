@@ -2820,7 +2820,11 @@ function toggleToolsetsDropdown() {
   _populateToolsetsDropdown();
   _loadToolsetsCatalog().then(function() {
     const stillOpen = dd && dd.classList.contains('open');
-    if (stillOpen) _populateToolsetsDropdown();
+    if (stillOpen) {
+      const state = $('toolsetsDropdownState');
+      const input = $('toolsetsInput');
+      _renderToolsetsPresetSections({ state, input });
+    }
   });
   dd.classList.add('open');
   _positionToolsetsDropdown();

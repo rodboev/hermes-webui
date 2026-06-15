@@ -35,6 +35,14 @@ def test_toolsets_dropdown_fetches_configured_mcp_server_names():
     assert "_loadToolsetsCatalog().then(function()" in toggle
 
 
+def test_async_catalog_refresh_preserves_manual_toolset_input():
+    toggle = _function_body(UI_JS, "function toggleToolsetsDropdown")
+
+    assert "const state = $('toolsetsDropdownState');" in toggle
+    assert "const input = $('toolsetsInput');" in toggle
+    assert "_renderToolsetsPresetSections({ state, input });" in toggle
+
+
 def test_null_state_is_labeled_as_active_profile_defaults():
     apply_chip = _function_body(UI_JS, "function _applyToolsetsChip")
     render_sections = _function_body(UI_JS, "function _renderToolsetsPresetSections")
