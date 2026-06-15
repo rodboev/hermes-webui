@@ -255,6 +255,8 @@ requires_agent_modules = pytest.mark.skipif(
 def pytest_configure(config):
     config.addinivalue_line("markers", "requires_agent: skip when hermes-agent dir is not found")
     config.addinivalue_line("markers", "requires_agent_modules: skip when hermes-agent Python modules are not importable")
+    config.addinivalue_line("markers", "requires_fcntl: skip when fcntl-backed file-descriptor operations are unavailable")
+    config.addinivalue_line("markers", "requires_fork: skip when the platform lacks multiprocessing fork support")
 
 
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
