@@ -143,6 +143,17 @@ def test_gateway_approval_event_translation():
     assert result["run_id"] == "run-999"
     assert result["approval_id"] == "appr-1"
 
+    downgraded = _gateway_runs_approval_event({
+        "command": "rm -rf /tmp/x",
+        "description": "Dangerous command approval",
+        "pattern_key": "dangerous_command",
+        "pattern_keys": ["dangerous_command"],
+        "allow_permanent": False,
+        "choices": ["once", "session", "always", "deny"],
+    })
+    assert downgraded is not None
+    assert downgraded["allow_permanent"] is False
+
     # Missing command/description/tool should return None.
     assert _gateway_runs_approval_event({"risk_level": "high"}) is None
     assert _gateway_runs_approval_event({}) is None

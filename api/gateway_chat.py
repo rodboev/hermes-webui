@@ -223,6 +223,9 @@ def _gateway_runs_approval_event(payload: dict) -> dict | None:
     approval_id = str(payload.get("approval_id") or payload.get("id") or "").strip()
     risk = str(payload.get("risk_level") or "high").strip()
     choices = payload.get("choices") if isinstance(payload.get("choices"), list) else []
+    allow_permanent = payload.get("allow_permanent")
+    if allow_permanent is None:
+        allow_permanent = "always" in choices
     if not (tool or command or description):
         return None
     return {
@@ -236,7 +239,7 @@ def _gateway_runs_approval_event(payload: dict) -> dict | None:
         "run_id": run_id,
         "approval_id": approval_id,
         "choices": choices,
-        "allow_permanent": "always" in choices,
+        "allow_permanent": bool(allow_permanent),
     }
 
 
