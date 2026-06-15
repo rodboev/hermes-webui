@@ -14,6 +14,7 @@ PATH DISCOVERY:
     4. System python3 as a last resort
 """
 import json
+import inspect
 import os
 import pathlib
 import shutil
@@ -679,18 +680,24 @@ def _rmtree_retry(path):
         shutil.rmtree(target)
         return
 
-    def _clear_readonly(_func, entry, _excinfo):
+    def _clear_readonly(_func, entry, _exc):
         try:
             os.chmod(entry, 0o666)
             _func(entry)
         except Exception:
             raise
 
+    rmtree_kwargs = (
+        {"onexc": _clear_readonly}
+        if "onexc" in inspect.signature(shutil.rmtree).parameters
+        else {"onerror": _clear_readonly}
+    )
+
     attempts = 5
     last_exc = None
     for attempt in range(1, attempts + 1):
         try:
-            shutil.rmtree(target, onerror=_clear_readonly)
+            shutil.rmtree(target, **rmtree_kwargs)
             return
         except FileNotFoundError:
             return
