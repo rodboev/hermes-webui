@@ -63,7 +63,11 @@ _GIT_DESTRUCTIVE_HARDENED_CONFIG = (
     # Git operations. Hooks are redirected to a temporary empty directory in
     # _run_git() so Git never falls back to .git/hooks.
     ("commit.gpgSign", "false"),
+    ("push.gpgSign", "false"),
     ("gpg.program", ""),
+    ("gpg.ssh.program", ""),
+    ("gpg.x509.program", ""),
+    ("core.alternateRefsCommand", ""),
 )
 
 
@@ -206,8 +210,10 @@ def _run_git(
             os.close(fd)
             attributes_file = attributes_path
             temporary_attributes = [attributes_path]
-            extra_configs = _destructive_filter_overrides(cwd, run_env)
+            extra_configs.extend(_destructive_filter_overrides(cwd, run_env))
         if effective_destructive:
+            extra_configs.extend(_destructive_merge_driver_overrides(cwd, run_env))
+            extra_configs.extend(_destructive_remote_helper_overrides(cwd, run_env))
             hooks_path = tempfile.mkdtemp(prefix="hermes-webui-git-hooks-")
             temporary_dirs = [hooks_path]
         result = subprocess.run(
@@ -245,15 +251,21 @@ def _run_git(
 _FILTER_CONFIG_RE = re.compile(r"^filter\.(.+)\.(clean|smudge|process|required)$")
 
 
-def _filter_names_for_scope(
+_MERGE_DRIVER_CONFIG_RE = re.compile(r"^merge\.(.+)\.driver$")
+_REMOTE_HELPER_CONFIG_RE = re.compile(r"^remote\.(.+)\.(uploadpack|receivepack)$")
+
+
+def _config_names_for_scope(
     scope: str,
     cwd: Path,
     env: dict[str, str],
+    config_pattern: str,
+    name_re: re.Pattern[str],
     *,
     ignore_unsupported: bool = False,
 ) -> set[str]:
     result = subprocess.run(
-        ["git", "config", scope, "--name-only", "--get-regexp", r"^filter\..*\.(clean|smudge|process|required)$"],
+        ["git", "config", "--includes", scope, "--name-only", "--get-regexp", config_pattern],
         cwd=str(cwd),
         shell=False,
         text=True,
@@ -268,10 +280,61 @@ def _filter_names_for_scope(
         raise GitWorkspaceError(message, _classify_git_error(message, ["config"]))
     names: set[str] = set()
     for line in (result.stdout or "").splitlines():
-        match = _FILTER_CONFIG_RE.match(line.strip())
+        match = name_re.match(line.strip())
         if match:
             names.add(match.group(1))
     return names
+
+
+def _filter_names_for_scope(
+    scope: str,
+    cwd: Path,
+    env: dict[str, str],
+    *,
+    ignore_unsupported: bool = False,
+) -> set[str]:
+    return _config_names_for_scope(
+        scope,
+        cwd,
+        env,
+        r"^filter\..*\.(clean|smudge|process|required)$",
+        _FILTER_CONFIG_RE,
+        ignore_unsupported=ignore_unsupported,
+    )
+
+
+def _merge_driver_names_for_scope(
+    scope: str,
+    cwd: Path,
+    env: dict[str, str],
+    *,
+    ignore_unsupported: bool = False,
+) -> set[str]:
+    return _config_names_for_scope(
+        scope,
+        cwd,
+        env,
+        r"^merge\..*\.driver$",
+        _MERGE_DRIVER_CONFIG_RE,
+        ignore_unsupported=ignore_unsupported,
+    )
+
+
+def _remote_helper_names_for_scope(
+    scope: str,
+    cwd: Path,
+    env: dict[str, str],
+    *,
+    ignore_unsupported: bool = False,
+) -> set[str]:
+    return _config_names_for_scope(
+        scope,
+        cwd,
+        env,
+        r"^remote\..*\.(uploadpack|receivepack)$",
+        _REMOTE_HELPER_CONFIG_RE,
+        ignore_unsupported=ignore_unsupported,
+    )
 
 
 def _destructive_filter_overrides(cwd: Path, env: dict[str, str]) -> list[tuple[str, str]]:
@@ -290,6 +353,38 @@ def _destructive_filter_overrides(cwd: Path, env: dict[str, str]) -> list[tuple[
                 (f"filter.{name}.smudge", "cat"),
                 (f"filter.{name}.process", ""),
                 (f"filter.{name}.required", "false"),
+            ]
+        )
+    return overrides
+
+
+def _destructive_merge_driver_overrides(cwd: Path, env: dict[str, str]) -> list[tuple[str, str]]:
+    names = _merge_driver_names_for_scope("--local", cwd, env)
+    names |= _merge_driver_names_for_scope(
+        "--worktree",
+        cwd,
+        env,
+        ignore_unsupported=True,
+    )
+    # Replace repo-defined merge drivers with Git's trusted three-way merge
+    # binary so stash restores cannot invoke workspace-controlled helpers.
+    return [(f"merge.{name}.driver", 'git merge-file "%A" "%O" "%B"') for name in sorted(names)]
+
+
+def _destructive_remote_helper_overrides(cwd: Path, env: dict[str, str]) -> list[tuple[str, str]]:
+    names = _remote_helper_names_for_scope("--local", cwd, env)
+    names |= _remote_helper_names_for_scope(
+        "--worktree",
+        cwd,
+        env,
+        ignore_unsupported=True,
+    )
+    overrides: list[tuple[str, str]] = []
+    for name in sorted(names):
+        overrides.extend(
+            [
+                (f"remote.{name}.uploadpack", "git-upload-pack"),
+                (f"remote.{name}.receivepack", "git-receive-pack"),
             ]
         )
     return overrides
@@ -1099,7 +1194,7 @@ def git_diff(workspace: str | Path, path: str, kind: str = "unstaged") -> dict:
         payload = _synthetic_untracked_diff(ctx.workspace / workspace_rel, workspace_rel)
         return {"path": workspace_rel, "kind": kind, **payload}
 
-    args = ["diff", "--no-ext-diff", "--unified=3"]
+    args = ["diff", "--no-ext-diff", "--no-textconv", "--unified=3"]
     if kind == "staged":
         args.append("--cached")
     args.extend(["--", repo_rel])
@@ -1228,6 +1323,7 @@ def _staged_diff_text(ctx: GitContext) -> tuple[str, bool]:
             "diff",
             "--cached",
             "--no-ext-diff",
+            "--no-textconv",
             "--unified=3",
             "--",
             _workspace_pathspec(ctx),
@@ -1301,7 +1397,7 @@ def _selected_diff_text(ctx: GitContext, specs: list[str]) -> tuple[str, bool]:
     try:
         result = _run_git(
             ctx,
-            ["diff", "--cached", "--no-ext-diff", "--unified=3", "--", *specs],
+            ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3", "--", *specs],
             check=True,
             env=env,
             destructive=True,

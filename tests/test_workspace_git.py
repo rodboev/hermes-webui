@@ -275,6 +275,40 @@ def test_git_diff_generates_untracked_text_diff_and_blocks_escape(tmp_path):
         git_diff(repo, "../outside.txt", "unstaged")
 
 
+def test_git_diff_skips_repo_local_textconv(tmp_path):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted textconv helper setup is POSIX-only")
+
+    from api.workspace_git import git_diff
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.txt diff=demo\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+    marker = tmp_path / "git-diff-textconv-ran"
+    helper = tmp_path / "git_diff_textconv_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('textconv ran', encoding='utf-8')\n"
+        "print('converted')\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _git(repo, "config", "diff.demo.textconv", f'"{sys.executable}" "{helper}" "{marker}"')
+
+    (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    diff = git_diff(repo, "tracked.txt", "unstaged")
+
+    assert "+two" in diff["diff"]
+    assert "converted" not in diff["diff"]
+    assert not marker.exists()
+
+
 def test_git_status_reports_untracked_files_inside_directories(tmp_path):
     from api.workspace_git import git_discard, git_status
 
@@ -553,6 +587,49 @@ def test_staged_commit_message_prompt_uses_only_staged_diff(tmp_path):
     assert clean_generated_commit_message("```text\nSubject\n\n- Body\n```") == "Subject\n\n- Body"
 
 
+def test_commit_message_prompts_skip_repo_local_textconv_when_destructive_mode_enabled(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted textconv helper setup is POSIX-only")
+
+    from api.workspace_git import (
+        WORKSPACE_GIT_DESTRUCTIVE_ENV,
+        selected_commit_message_prompt,
+        staged_commit_message_prompt,
+    )
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.txt diff=demo\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+    marker = tmp_path / "textconv-ran"
+    helper = tmp_path / "textconv_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('textconv ran', encoding='utf-8')\n"
+        "print('converted')\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _git(repo, "config", "diff.demo.textconv", f'"{sys.executable}" "{helper}" "{marker}"')
+
+    (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+
+    staged = staged_commit_message_prompt(repo)
+    selected = selected_commit_message_prompt(repo, ["tracked.txt"])
+
+    assert "+two" in staged["user_prompt"]
+    assert "+two" in selected["user_prompt"]
+    assert "converted" not in staged["user_prompt"]
+    assert "converted" not in selected["user_prompt"]
+    assert not marker.exists()
+
+
 def test_git_fetch_pull_and_push_with_upstream(tmp_path):
     from api.workspace_git import git_fetch, git_pull, git_push, git_status
 
@@ -588,6 +665,66 @@ def test_git_fetch_pull_and_push_with_upstream(tmp_path):
 
     pushed = git_push(clone)
     assert pushed["status"]["ahead"] == 0
+
+
+def test_git_fetch_pull_and_push_skip_repo_local_remote_helpers_when_destructive_mode_enabled(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted remote helper setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, git_fetch, git_pull, git_push
+
+    remote = _init_bare_repo(tmp_path / "remote.git")
+
+    origin = _init_repo(tmp_path / "origin")
+    (origin / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(origin)
+    _git(origin, "branch", "-M", "main")
+    _git(origin, "remote", "add", "origin", str(remote))
+    _git(origin, "push", "-u", "origin", "main")
+    _git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", str(remote), str(clone))
+    _git(clone, "config", "user.email", "hermes-tests@example.invalid")
+    _git(clone, "config", "user.name", "Hermes Tests")
+
+    marker = tmp_path / "remote-helper-ran"
+    helper = tmp_path / "remote_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('remote helper ran', encoding='utf-8')\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    helper_cmd = f'"{sys.executable}" "{helper}" "{marker}"'
+    _git(clone, "config", "remote.origin.uploadpack", helper_cmd)
+    _git(clone, "config", "remote.origin.receivepack", helper_cmd)
+
+    (origin / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+    _commit_all(origin, "Remote update")
+    _git(origin, "push")
+
+    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    fetched = git_fetch(clone)
+    pulled = git_pull(clone)
+
+    assert fetched["status"]["behind"] == 1
+    assert pulled["status"]["behind"] == 0
+    assert not marker.exists()
+
+    (clone / "tracked.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    _git(clone, "add", "tracked.txt")
+    _git(clone, "commit", "-m", "Local update")
+
+    pushed = git_push(clone)
+
+    assert pushed["status"]["ahead"] == 0
+    assert not marker.exists()
 
 
 def test_git_branches_lists_local_remote_and_upstream(tmp_path):
@@ -1375,6 +1512,54 @@ def test_destructive_filter_overrides_include_worktree_scope(tmp_path):
     assert overrides["filter.demo.required"] == "false"
 
 
+def test_destructive_filter_overrides_include_included_scope(tmp_path):
+    import os
+
+    from api.workspace_git import _destructive_filter_overrides
+
+    repo = _init_repo(tmp_path / "repo")
+    included = tmp_path / "included-filter.cfg"
+    included.write_text(
+        "[filter \"demo\"]\n"
+        "\tclean = cat\n"
+        "\trequired = true\n",
+        encoding="utf-8",
+    )
+    _git(repo, "config", "include.path", str(included))
+
+    overrides = dict(_destructive_filter_overrides(repo, os.environ.copy()))
+
+    assert overrides["filter.demo.clean"] == "cat"
+    assert overrides["filter.demo.smudge"] == "cat"
+    assert overrides["filter.demo.process"] == ""
+    assert overrides["filter.demo.required"] == "false"
+
+
+def test_destructive_merge_driver_overrides_include_local_worktree_and_included_scope(tmp_path):
+    import os
+
+    from api.workspace_git import _destructive_merge_driver_overrides
+
+    repo = _init_repo(tmp_path / "repo")
+    included = tmp_path / "included-merge.cfg"
+    included.write_text(
+        "[merge \"included\"]\n"
+        "\tdriver = cat\n",
+        encoding="utf-8",
+    )
+    _git(repo, "config", "include.path", str(included))
+    _git(repo, "config", "merge.local.driver", "cat")
+    _git(repo, "config", "extensions.worktreeConfig", "true")
+    _git(repo, "config", "--worktree", "merge.worktree.driver", "cat")
+
+    overrides = dict(_destructive_merge_driver_overrides(repo, os.environ.copy()))
+
+    trusted_driver = 'git merge-file "%A" "%O" "%B"'
+    assert overrides["merge.included.driver"] == trusted_driver
+    assert overrides["merge.local.driver"] == trusted_driver
+    assert overrides["merge.worktree.driver"] == trusted_driver
+
+
 def test_git_checkout_skips_worktree_scope_filters_when_destructive_mode_enabled(tmp_path, monkeypatch):
     import os
     import sys
@@ -1418,6 +1603,94 @@ def test_git_checkout_skips_worktree_scope_filters_when_destructive_mode_enabled
 
     assert result["ok"] is True
     assert result["current_branch"] == "feature"
+    assert not marker.exists()
+
+
+def test_git_stage_skips_included_repo_local_filters_when_destructive_mode_enabled(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted filter helper setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, git_stage
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.txt filter=demo\n", encoding="utf-8")
+    marker = tmp_path / "included-filter-ran"
+    helper = tmp_path / "included_filter_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('filter ran', encoding='utf-8')\n"
+        "print(sys.stdin.read(), end='')\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    included = tmp_path / "included-filter.cfg"
+    included.write_text(
+        "[filter \"demo\"]\n"
+        f"\tclean = \"{sys.executable}\" \"{helper}\" \"{marker}\"\n"
+        f"\tsmudge = \"{sys.executable}\" \"{helper}\" \"{marker}\"\n",
+        encoding="utf-8",
+    )
+    _git(repo, "config", "include.path", str(included))
+
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+    marker.unlink(missing_ok=True)
+    (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    staged = git_stage(repo, ["tracked.txt"])
+
+    assert staged["totals"]["staged"] == 1
+    assert not marker.exists()
+
+
+def test_git_stash_restore_skips_repo_local_merge_drivers_when_destructive_mode_enabled(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted merge driver setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, git_stash_and_checkout
+
+    repo = _init_repo(tmp_path / "repo")
+    _git(repo, "branch", "-M", "main")
+    (repo / ".gitattributes").write_text("tracked.txt merge=demo\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+    _git(repo, "checkout", "-b", "feature")
+    _git(repo, "checkout", "main")
+    (repo / "tracked.txt").write_text("main dirty\n", encoding="utf-8")
+
+    marker = tmp_path / "merge-driver-ran"
+    helper = tmp_path / "merge_driver_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('merge driver ran', encoding='utf-8')\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _git(repo, "config", "merge.demo.driver", f'"{sys.executable}" "{helper}" "{marker}"')
+
+    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    git_stash_and_checkout(repo, "feature", "local")
+    _git(repo, "checkout", "main")
+    (repo / "tracked.txt").write_text("main changed while parked\n", encoding="utf-8")
+    _commit_all(repo, "advance main")
+    _git(repo, "checkout", "feature")
+
+    result = git_stash_and_checkout(repo, "main", "local")
+
+    assert result["ok"] is True
+    assert result["current_branch"] == "main"
+    assert result["restore_failed"] is True
+    assert result["restore_stash"]["branch"] == "main"
     assert not marker.exists()
 
 
