@@ -405,6 +405,7 @@ global._isCliSession = () => false;
 global._getSessionViewedCounts = () => ({{}});
 global._sessionHasUnreadForSidebar = () => false;
 eval(extractFunc('_isChildSession'));
+eval(extractFunc('_isForkWithResolvableParent'));
 eval(extractFunc('_sessionLineageKey'));
 eval(extractFunc('_sessionMatchesActiveLineageForUnreadFilter'));
 eval(extractFunc('_partitionSidebarSessionRows'));

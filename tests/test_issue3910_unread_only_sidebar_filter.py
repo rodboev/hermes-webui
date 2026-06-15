@@ -62,7 +62,7 @@ def test_unread_only_composes_with_source_filter_before_row_rendering():
         "The unread-only predicate must run after the source filter inside "
         "_partitionSidebarSessionRows so the filters compose in one pipeline."
     )
-    assert "const hasUnread=Boolean(unreadById.get(s.session_id))&&!isActive;" in js
+    assert "const hasUnread=(Boolean(unreadById.get(s.session_id))||!!s._child_session_has_unread)&&!isActive;" in js
 
 
 def test_unread_only_empty_state_is_specific():
