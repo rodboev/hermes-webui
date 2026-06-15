@@ -24,10 +24,31 @@ def _ctx(workspace):
     return routes._read_active_project_context(pathlib.Path(workspace))
 
 
-def test_non_git_workspace_does_not_walk_above_workspace(tmp_path):
+def _scoped_git_root(scope_root: pathlib.Path):
+    scope_root = scope_root.resolve()
+
+    def _inner(start: pathlib.Path) -> pathlib.Path | None:
+        current = start.resolve()
+        for parent in [current, *current.parents]:
+            try:
+                parent.relative_to(scope_root)
+            except ValueError:
+                break
+            if (parent / ".git").exists():
+                return parent
+            if parent == scope_root:
+                break
+        return None
+
+    return _inner
+
+
+def test_non_git_workspace_does_not_walk_above_workspace(tmp_path, monkeypatch):
     """Sentinel HERMES.md placed *above* the workspace in a non-git tree must
     not be surfaced — the pre-fix walk would have loaded it because stop_at
     was None and the loop ran to filesystem root."""
+    monkeypatch.setattr(routes, "_project_context_git_root", _scoped_git_root(tmp_path))
+
     above = tmp_path / "outside"
     above.mkdir()
     (above / "HERMES.md").write_text("LEAKED FROM OUTSIDE", encoding="utf-8")
@@ -47,9 +68,11 @@ def test_non_git_workspace_does_not_walk_above_workspace(tmp_path):
     )
 
 
-def test_non_git_workspace_still_reads_in_workspace_context(tmp_path):
+def test_non_git_workspace_still_reads_in_workspace_context(tmp_path, monkeypatch):
     """The bound must only block *parents* — files inside the workspace itself
     must still load exactly as before."""
+    monkeypatch.setattr(routes, "_project_context_git_root", _scoped_git_root(tmp_path))
+
     workspace = tmp_path / "no-git-here"
     workspace.mkdir()
     (workspace / "AGENTS.md").write_text("# In-workspace rules", encoding="utf-8")
@@ -61,11 +84,13 @@ def test_non_git_workspace_still_reads_in_workspace_context(tmp_path):
     assert data["name"] == "AGENTS.md"
 
 
-def test_git_workspace_walk_to_git_root_is_unchanged(tmp_path):
+def test_git_workspace_walk_to_git_root_is_unchanged(tmp_path, monkeypatch):
     """Git workspaces must keep walking up to the git root — the bound only
     activates when git_root is None. This duplicates the pre-existing
     ``test_project_context_walks_hermes_md_to_git_root_but_not_agents_md``
     intent specifically against the #4164 patch site."""
+    monkeypatch.setattr(routes, "_project_context_git_root", _scoped_git_root(tmp_path))
+
     root = tmp_path / "repo"
     nested = root / "src" / "deep" / "pkg"
     nested.mkdir(parents=True)
@@ -78,11 +103,13 @@ def test_git_workspace_walk_to_git_root_is_unchanged(tmp_path):
     assert data["path"].endswith("HERMES.md")
 
 
-def test_non_git_workspace_bound_is_workspace_not_first_parent(tmp_path):
+def test_non_git_workspace_bound_is_workspace_not_first_parent(tmp_path, monkeypatch):
     """Edge case: if the workspace itself contains a HERMES.md AND a parent
     also contains one, the workspace copy must win and the parent copy must
     NOT leak in via the candidate list (i.e. the bound triggers immediately,
     not after one extra parent step)."""
+    monkeypatch.setattr(routes, "_project_context_git_root", _scoped_git_root(tmp_path))
+
     parent = tmp_path / "container"
     parent.mkdir()
     (parent / "HERMES.md").write_text("PARENT COPY", encoding="utf-8")
