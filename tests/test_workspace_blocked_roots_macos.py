@@ -173,3 +173,15 @@ class TestMacOSSystemAndLibraryBlocked:
         """Paths under /Library and /System must be blocked regardless of platform."""
         from api.workspace import _is_blocked_workspace_path
         assert _is_blocked_workspace_path(Path(path))
+
+
+class TestPosixShapeNormalization:
+    def test_etc_parent_escape_is_not_falsely_blocked(self):
+        from api.workspace import _is_blocked_workspace_path
+
+        assert not _is_blocked_workspace_path(Path('/home/user'), '/etc/../home/user')
+
+    def test_dot_prefixed_etc_path_is_still_blocked(self):
+        from api.workspace import _is_blocked_workspace_path
+
+        assert _is_blocked_workspace_path(Path('/etc/ssh'), '/./etc/ssh')

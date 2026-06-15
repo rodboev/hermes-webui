@@ -100,7 +100,7 @@ def _as_posix_path(path: str | Path | None) -> PurePosixPath | None:
     raw = _strip_surrounding_quotes(str(path)).strip().replace('\\', '/')
     if not raw.startswith('/'):
         return None
-    return PurePosixPath(raw)
+    return PurePosixPath(posixpath.normpath(raw))
 
 
 def _posix_is_within(path: PurePosixPath, root: PurePosixPath) -> bool:
@@ -115,7 +115,7 @@ def _normalize_posix_path(path: str | Path | None) -> str | None:
     candidate = _as_posix_path(path)
     if candidate is None:
         return None
-    return posixpath.normpath(candidate.as_posix())
+    return candidate.as_posix()
 
 
 def _is_remote_terminal_backend(terminal_cfg: dict | None) -> bool:
@@ -549,7 +549,8 @@ def _is_blocked_workspace_path(candidate: Path, raw_path: str | Path | None = No
     raw = None
     if raw_path not in (None, ""):
         try:
-            raw = _expanduser_path(raw_path)
+            normalized_posix = _normalize_posix_path(raw_path)
+            raw = Path(normalized_posix) if normalized_posix is not None else _expanduser_path(raw_path)
         except Exception:
             raw = None
 
