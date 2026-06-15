@@ -21,6 +21,7 @@ def test_busy_hint_bar_in_html():
 def test_busy_hint_bar_css():
     src = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
     assert ".busy-hint-bar" in src
+    assert ".busy-hint-bar[hidden]" in src
     assert ".busy-hint-pill" in src
 
 
