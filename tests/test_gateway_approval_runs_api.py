@@ -254,6 +254,73 @@ def test_gateway_runs_api_streaming_parses_real_run_events():
     assert events[2] == ("token", {"text": "Hello"})
 
 
+def test_gateway_runs_api_streaming_preserves_multimodal_input():
+    """Attachment-backed runs requests must keep multimodal content lists."""
+    from api.gateway_chat import _STREAM_RUN_IDS, _run_gateway_runs_api_streaming
+
+    requests = []
+    multimodal_content = [
+        {"type": "input_text", "text": "describe this"},
+        {"type": "input_image", "image_url": "file:///tmp/demo.png"},
+    ]
+
+    class _JsonResponse:
+        def __init__(self, payload):
+            self._payload = json.dumps(payload).encode("utf-8")
+
+        def read(self, _limit=None):
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class _SseResponse:
+        def __iter__(self):
+            return iter([
+                b'data: {"event":"run.completed","output":"done","usage":{"input_tokens":1,"output_tokens":1}}\n',
+                b'\n',
+            ])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    def fake_urlopen(req, *, timeout=None):
+        requests.append(req)
+        if req.full_url.endswith("/v1/runs"):
+            return _JsonResponse({"run_id": "run-mm"})
+        return _SseResponse()
+
+    try:
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch("api.streaming._build_native_multimodal_message", return_value=multimodal_content):
+            _run_gateway_runs_api_streaming(
+                session_id="sess-mm",
+                msg_text="describe this",
+                model="test-model",
+                workspace="/tmp",
+                stream_id="sid-mm",
+                base_url="http://gw:8642",
+                api_key="secret",
+                prefill_messages=[],
+                body_extras={},
+                put_gateway_event=lambda *_args, **_kwargs: None,
+                cancel_event=threading.Event(),
+                attachments=[{"name": "demo.png"}],
+                cfg={},
+            )
+    finally:
+        _STREAM_RUN_IDS.pop("sid-mm", None)
+
+    run_body = json.loads(requests[0].data.decode("utf-8"))
+    assert run_body["input"] == multimodal_content
+
+
 # ---------------------------------------------------------------------------
 # 4. Approval response relay
 # ---------------------------------------------------------------------------
