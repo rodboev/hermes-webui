@@ -1351,14 +1351,15 @@ def _session_list_cache_path_stamp(path: Path | None) -> tuple[int, int]:
         return (0, 0)
 
 
-def _session_list_cache_source_stamp(key: tuple) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
+def _session_list_cache_source_stamp(key: tuple) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]:
     _cache_profile, _cache_all_profiles, cache_show_cli_sessions, *_rest = key
     if not cache_show_cli_sessions:
-        return ((0, 0), (0, 0), (0, 0))
+        return ((0, 0), (0, 0), (0, 0), (0, 0), (0, 0))
     try:
         state_db_path = Path(_active_state_db_path())
     except Exception:
         state_db_path = None
+    state_db_wal_path = state_db_path.with_name(f"{state_db_path.name}-wal") if state_db_path is not None else None
     try:
         gateway_metadata_path = _gateway_session_metadata_path()
     except Exception:
@@ -1369,8 +1370,10 @@ def _session_list_cache_source_stamp(key: tuple) -> tuple[tuple[int, int], tuple
         session_index_path = None
     return (
         _session_list_cache_path_stamp(state_db_path),
+        _session_list_cache_path_stamp(state_db_wal_path),
         _session_list_cache_path_stamp(gateway_metadata_path),
         _session_list_cache_path_stamp(session_index_path),
+        _session_list_cache_path_stamp(SETTINGS_FILE),
     )
 
 
@@ -1743,6 +1746,7 @@ from api.config import (
     CUSTOM_MODELS_ENDPOINT_TIMEOUT_SECONDS,
     load_settings,
     save_settings,
+    SETTINGS_FILE,
     set_hermes_default_model,
     model_with_provider_context,
     get_reasoning_status,
