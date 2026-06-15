@@ -15306,22 +15306,17 @@ def _handle_approval_respond(handler, body):
             if active_sid:
                 _run_id = _STREAM_RUN_IDS.get(active_sid)
         if _run_id:
+            if not approval_id:
+                return bad(handler, "approval_id is required for gateway approvals")
+            from api.runner_client import HttpRunnerClient, RunnerClientError
             _cfg = _get_config()
             _base = _gateway_base_url(_cfg)
             _key = _gateway_api_key()
-            _relay_url = f"{_base.rstrip('/')}/v1/runs/{_run_id}/approval"
-            _relay_headers = {"Content-Type": "application/json"}
-            if _key:
-                _relay_headers["Authorization"] = f"Bearer {_key}"
-            _relay_body = json.dumps({"choice": choice}).encode()
             try:
-                import urllib.request as _ureq
-                _req = _ureq.Request(_relay_url, data=_relay_body, headers=_relay_headers, method="POST")
-                with _ureq.urlopen(_req, timeout=10) as _resp:
-                    _relay_ok = 200 <= _resp.status < 300
-            except Exception:
-                _relay_ok = False
-            return j(handler, {"ok": _relay_ok, "choice": choice, "relayed": True})
+                HttpRunnerClient(base_url=_base, api_key=_key).respond_approval(_run_id, approval_id, choice)
+            except RunnerClientError as exc:
+                return j(handler, {"ok": False, "choice": choice, "relayed": True, "error": str(exc)}, status=502)
+            return j(handler, {"ok": True, "choice": choice, "relayed": True})
     except Exception:
         pass  # fall through to local approval path
 

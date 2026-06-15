@@ -285,6 +285,8 @@ def _run_gateway_runs_api_streaming(
             continue
         conversation_history.append({"role": role, "content": content})
     run_input = message_content
+    if isinstance(run_input, list):
+        run_input = [{"role": "user", "content": run_input}]
     run_body = {
         "model": model or "default",
         "input": run_input,

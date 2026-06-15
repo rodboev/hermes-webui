@@ -318,7 +318,9 @@ def test_gateway_runs_api_streaming_preserves_multimodal_input():
         _STREAM_RUN_IDS.pop("sid-mm", None)
 
     run_body = json.loads(requests[0].data.decode("utf-8"))
-    assert run_body["input"] == multimodal_content
+    assert run_body["input"] == [{"role": "user", "content": multimodal_content}]
+    assert run_body["input"][0]["role"] == "user"
+    assert run_body["input"][0]["content"] == multimodal_content
 
 
 # ---------------------------------------------------------------------------
@@ -386,21 +388,47 @@ def test_gateway_approval_response_relay():
     from api.gateway_chat import _STREAM_RUN_IDS
 
     # Seed the mapping.
-    _STREAM_RUN_IDS["sid-relay"] = "run-abc"
+    _STREAM_RUN_IDS["sid-relay"] = "run abc/1"
 
     mock_session = MagicMock()
     mock_session.active_stream_id = "sid-relay"
 
     captured = {}
 
-    def fake_urlopen(req, *, timeout=None):
+    def fake_request_json(self, req):
         captured["url"] = req.full_url
         captured["body"] = json.loads(req.data)
-        resp = MagicMock()
-        resp.status = 200
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = lambda s, *a: None
-        return resp
+        return {"ok": True}
+
+    handler = MagicMock()
+    handler.wfile = io.BytesIO()
+
+    body = {"session_id": "sess-relay", "choice": "once", "approval_id": "appr x/y"}
+
+    with patch("api.routes.get_session", return_value=mock_session), \
+         patch("api.runner_client.HttpRunnerClient._request_json", new=fake_request_json), \
+         patch("api.gateway_chat._gateway_base_url", return_value="http://gw:8642"), \
+         patch("api.gateway_chat._gateway_api_key", return_value=""):
+        from api.routes import _handle_approval_respond
+        _handle_approval_respond(handler, body)
+
+    assert captured.get("url", "") == "http://gw:8642/v1/runs/run%20abc%2F1/approvals/appr%20x%2Fy/respond"
+    assert captured["body"] == {"choice": "once"}
+    handler.send_response.assert_called_with(200)
+
+    # Cleanup.
+    _STREAM_RUN_IDS.pop("sid-relay", None)
+
+
+def test_gateway_approval_response_relay_failure_returns_502():
+    """Gateway relay failures must surface as HTTP errors to the frontend."""
+    from api.gateway_chat import _STREAM_RUN_IDS
+    from api.runner_client import RunnerClientError
+
+    _STREAM_RUN_IDS["sid-relay-fail"] = "run-abc"
+
+    mock_session = MagicMock()
+    mock_session.active_stream_id = "sid-relay-fail"
 
     handler = MagicMock()
     handler.wfile = io.BytesIO()
@@ -408,17 +436,19 @@ def test_gateway_approval_response_relay():
     body = {"session_id": "sess-relay", "choice": "once", "approval_id": "appr-x"}
 
     with patch("api.routes.get_session", return_value=mock_session), \
-         patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+         patch("api.runner_client.HttpRunnerClient.respond_approval", side_effect=RunnerClientError("relay failed")), \
          patch("api.gateway_chat._gateway_base_url", return_value="http://gw:8642"), \
          patch("api.gateway_chat._gateway_api_key", return_value=""):
         from api.routes import _handle_approval_respond
         _handle_approval_respond(handler, body)
 
-    assert "/v1/runs/run-abc/approval" in captured.get("url", "")
-    assert captured["body"] == {"choice": "once"}
+    handler.send_response.assert_called_with(502)
+    payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+    assert payload["ok"] is False
+    assert payload["relayed"] is True
+    assert "relay failed" in payload["error"]
 
-    # Cleanup.
-    _STREAM_RUN_IDS.pop("sid-relay", None)
+    _STREAM_RUN_IDS.pop("sid-relay-fail", None)
 
 
 # ---------------------------------------------------------------------------
