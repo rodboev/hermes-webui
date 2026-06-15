@@ -28,9 +28,13 @@ def test_static_model_health_metadata_and_renderer_exist():
     assert "inputCostPerM" in PANELS_JS
     assert "outputCostPerM" in PANELS_JS
     assert "replacement:" in PANELS_JS
+    assert '<details class="insights-card insights-model-health-card">' in renderer
+    assert "<summary>" in renderer
     assert "insights-model-health-table" in renderer
     assert "insights_model_health_cost_per_m" in renderer
     assert "insights_model_health_replacement" in renderer
+    assert "insights_model_health_quality" not in renderer
+    assert "insights_model_health_hallucination" not in renderer
 
 
 def test_render_insights_includes_static_table_before_usage_models():
@@ -55,10 +59,6 @@ def test_model_health_i18n_keys_exist_in_locale_blocks():
     keys = [
         "insights_model_health_title",
         "insights_model_health_provider",
-        "insights_model_health_quality",
-        "insights_model_health_quality_deferred",
-        "insights_model_health_hallucination",
-        "insights_model_health_hallucination_deferred",
         "insights_model_health_replacement",
         "insights_model_health_cost_per_m",
     ]
@@ -69,6 +69,7 @@ def test_model_health_i18n_keys_exist_in_locale_blocks():
 def test_model_health_table_css_is_responsive_and_contained():
     assert ".insights-model-health-table" in STYLE_CSS
     assert ".insights-model-health-table .insights-table-head" in STYLE_CSS
+    assert ".insights-model-health-card>summary" in STYLE_CSS
     assert "minmax(130px,1.5fr)" in STYLE_CSS
     assert "overflow-x:auto" in STYLE_CSS
     assert ".insights-model-health-replacement" in STYLE_CSS

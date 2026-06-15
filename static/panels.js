@@ -3460,11 +3460,9 @@ function _renderStaticModelHealthTable() {
     <span class="insights-model-name" title="${esc(row.id)}">${esc(row.id)}</span>
     <span>${esc(row.provider)}</span>
     <span>${esc(_renderModelHealthCost(row))}</span>
-    <span>${esc(t('insights_model_health_quality_deferred'))}</span>
-    <span>${esc(t('insights_model_health_hallucination_deferred'))}</span>
     <span class="insights-model-health-replacement">${esc(row.replacement)}</span>
   </div>`).join('');
-  return `<div class="insights-card"><div class="insights-card-title">${esc(t('insights_model_health_title'))}</div><div class="insights-table insights-model-health-table"><div class="insights-table-head"><span>${esc(t('insights_model_name'))}</span><span>${esc(t('insights_model_health_provider'))}</span><span>${esc(t('insights_model_health_cost_per_m'))}</span><span>${esc(t('insights_model_health_quality'))}</span><span>${esc(t('insights_model_health_hallucination'))}</span><span>${esc(t('insights_model_health_replacement'))}</span></div>${rows}</div></div>`;
+  return `<details class="insights-card insights-model-health-card"><summary><span class="insights-card-title">${esc(t('insights_model_health_title'))}</span></summary><div class="insights-table insights-model-health-table"><div class="insights-table-head"><span>${esc(t('insights_model_name'))}</span><span>${esc(t('insights_model_health_provider'))}</span><span>${esc(t('insights_model_health_cost_per_m'))}</span><span>${esc(t('insights_model_health_replacement'))}</span></div>${rows}</div></details>`;
 }
 
 async function loadInsights(animate) {
