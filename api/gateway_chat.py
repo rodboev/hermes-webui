@@ -320,7 +320,7 @@ def _run_gateway_runs_api_streaming(
         for raw_line in resp:
             if cancel_event.is_set():
                 put_gateway_event("cancel", {"message": "Cancelled by user"})
-                return final_text, usage
+                return None, usage
             line = raw_line.decode("utf-8", errors="replace").strip()
             if not line:
                 sse_event = "message"
@@ -398,7 +398,7 @@ def _run_gateway_runs_api_streaming(
                 raise RuntimeError(str(payload.get("error") or "Gateway run failed"))
             if payload_event == "run.cancelled":
                 put_gateway_event("cancel", {"message": "Cancelled by gateway"})
-                return final_text, usage
+                return None, usage
             reasoning_delta = _gateway_sse_reasoning_delta(payload)
             if reasoning_delta:
                 if stream_id in STREAM_REASONING_TEXT:
@@ -564,6 +564,8 @@ def _run_gateway_chat_streaming(
                     "message": str(exc)[:400],
                     "hint": "Check that the Hermes Gateway runs API (/v1/runs) is available.",
                 })
+                return
+            if final_text is None:
                 return
         else:
             url = f"{base_url}/v1/chat/completions"

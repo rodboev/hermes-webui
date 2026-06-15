@@ -322,7 +322,63 @@ def test_gateway_runs_api_streaming_preserves_multimodal_input():
 
 
 # ---------------------------------------------------------------------------
-# 4. Approval response relay
+# 4. Cancelled runs path should not emit gateway_empty_response
+# ---------------------------------------------------------------------------
+
+def test_gateway_runs_api_cancel_does_not_emit_empty_response():
+    """Cancelled runs-API turns should stop cleanly without empty-response errors."""
+    from api.config import STREAMS, STREAMS_LOCK
+    from api.gateway_chat import _run_gateway_chat_streaming
+
+    events = []
+    q = MagicMock()
+    q.put_nowait = lambda item: events.append(item)
+
+    stream_id = "sid-cancel"
+    with STREAMS_LOCK:
+        STREAMS[stream_id] = q
+
+    mock_session = MagicMock()
+    mock_session.active_stream_id = stream_id
+    mock_session.workspace = "/tmp"
+    mock_session.model = "test"
+    mock_session.model_provider = None
+    mock_session.profile = None
+    mock_session.context_messages = []
+    mock_session.messages = []
+    mock_session.pending_user_message = None
+    mock_session.pending_attachments = None
+    mock_session.pending_started_at = None
+
+    def fake_runs_streaming(*args, **kwargs):
+        kwargs["put_gateway_event"]("cancel", {"message": "Cancelled by gateway"})
+        return None, {}
+
+    try:
+        with patch.dict("os.environ", {"HERMES_WEBUI_CHAT_BACKEND": "gateway"}):
+            with patch("api.gateway_chat.gateway_supports_approval", return_value=True), \
+                 patch("api.gateway_chat._run_gateway_runs_api_streaming", side_effect=fake_runs_streaming), \
+                 patch("api.gateway_chat.get_session", return_value=mock_session):
+                _run_gateway_chat_streaming(
+                    session_id="sess-cancel",
+                    msg_text="stop",
+                    model="test-model",
+                    workspace="/tmp",
+                    stream_id=stream_id,
+                )
+    finally:
+        with STREAMS_LOCK:
+            STREAMS.pop(stream_id, None)
+
+    assert any(e[0] == "cancel" for e in events if isinstance(e, tuple)), events
+    assert not any(
+        e[0] == "apperror" and isinstance(e[1], dict) and e[1].get("type") == "gateway_empty_response"
+        for e in events if isinstance(e, tuple)
+    ), events
+
+
+# ---------------------------------------------------------------------------
+# 5. Approval response relay
 # ---------------------------------------------------------------------------
 
 def test_gateway_approval_response_relay():
@@ -366,7 +422,7 @@ def test_gateway_approval_response_relay():
 
 
 # ---------------------------------------------------------------------------
-# 5. Empty chat/completions response emits gateway_empty_response (not a
+# 6. Empty chat/completions response emits gateway_empty_response (not a
 #    misleading approval-unsupported banner)
 # ---------------------------------------------------------------------------
 
@@ -426,7 +482,7 @@ def test_gateway_empty_response_no_approval_banner():
 
 
 # ---------------------------------------------------------------------------
-# 6. Chat/completions path unchanged for normal responses
+# 7. Chat/completions path unchanged for normal responses
 # ---------------------------------------------------------------------------
 
 def test_gateway_chat_completions_path_unchanged():
