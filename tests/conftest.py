@@ -894,6 +894,10 @@ def test_server():
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         _kill_process_tree(proc.pid)
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
 
     _rmtree_retry(TEST_STATE_DIR)
 
