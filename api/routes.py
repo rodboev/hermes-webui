@@ -246,14 +246,19 @@ def _normalize_cron_job_ids(job_ids) -> list[str]:
     return normalized
 
 
-def _latest_cron_session_info_for_jobs(job_ids) -> dict[str, dict[str, int | str | None]]:
-    """Return newest persisted cron session info keyed by cron job id."""
+def _latest_cron_session_info_for_jobs(
+    job_ids, completed_job_ids=None
+) -> dict[str, dict[str, int | str | None]]:
+    """Return newest persisted cron session info keyed by completed cron job id."""
     normalized = _normalize_cron_job_ids(job_ids)
-    if not normalized:
+    requested = _normalize_cron_job_ids(completed_job_ids if completed_job_ids is not None else job_ids)
+    if not requested:
         return {}
+    if not normalized:
+        return {jid: {"session_id": "", "message_count": None} for jid in requested}
     db_path = _active_state_db_path()
     if not db_path or not Path(db_path).exists():
-        return {jid: {"session_id": "", "message_count": None} for jid in normalized}
+        return {jid: {"session_id": "", "message_count": None} for jid in requested}
     try:
         with closing(sqlite3.connect(str(db_path))) as conn:
             conn.row_factory = sqlite3.Row
@@ -261,7 +266,7 @@ def _latest_cron_session_info_for_jobs(job_ids) -> dict[str, dict[str, int | str
             cur.execute("PRAGMA table_info(sessions)")
             session_cols = {row[1] for row in cur.fetchall()}
             if "id" not in session_cols or "source" not in session_cols:
-                return {jid: {"session_id": "", "message_count": None} for jid in normalized}
+                return {jid: {"session_id": "", "message_count": None} for jid in requested}
             select_message_count = (
                 "s.message_count AS message_count"
                 if "message_count" in session_cols
@@ -285,8 +290,9 @@ def _latest_cron_session_info_for_jobs(job_ids) -> dict[str, dict[str, int | str
                 """
             cur.execute(query)
             results = {
-                jid: {"session_id": "", "message_count": None} for jid in normalized
+                jid: {"session_id": "", "message_count": None} for jid in requested
             }
+            requested_ids = set(requested)
             prefixes = {jid: f"cron_{jid}_" for jid in normalized}
             for row in cur.fetchall():
                 sid = str(row["id"] or "")
@@ -299,7 +305,7 @@ def _latest_cron_session_info_for_jobs(job_ids) -> dict[str, dict[str, int | str
                 ]
                 if matches:
                     jid = max(matches, key=len)
-                    if results[jid]["session_id"]:
+                    if jid not in requested_ids or results[jid]["session_id"]:
                         continue
                     results[jid] = {
                         "session_id": sid,
@@ -313,7 +319,7 @@ def _latest_cron_session_info_for_jobs(job_ids) -> dict[str, dict[str, int | str
                     break
             return results
     except sqlite3.Error:
-        return {jid: {"session_id": "", "message_count": None} for jid in normalized}
+        return {jid: {"session_id": "", "message_count": None} for jid in requested}
 
 
 
@@ -12660,7 +12666,8 @@ def _handle_cron_recent(handler, parsed):
                     }
                 )
         latest_session_info = _latest_cron_session_info_for_jobs(
-            [c["job_id"] for c in completions]
+            [job.get("id", "") for job in jobs],
+            [c["job_id"] for c in completions],
         )
         for completion in completions:
             info = latest_session_info.get(str(completion.get("job_id", "") or ""), {})
