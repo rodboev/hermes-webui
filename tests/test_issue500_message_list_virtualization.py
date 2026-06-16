@@ -402,4 +402,28 @@ def test_render_messages_has_one_shot_virtual_blank_viewport_fallback():
     assert "const virtualFallback=!!(options&&options._virtualFallback);" in render_body
     assert "const virtualWindow=virtualFallback" in render_body
     assert "if(_maybeRecoverVirtualizedBlankViewport(options, preserveScroll, virtualWindow)) return;" in render_body
-    assert "renderMessages({...(options||{}),preserveScroll:true,_virtualFallback:true});" in js
+    assert "if(_sessionHtmlCacheSid&&S.session&&S.session.session_id===_sessionHtmlCacheSid){" in js
+    assert "_sessionHtmlCache.delete(_sessionHtmlCacheSid);" in js
+    assert "renderMessages({preserveScroll:true,_virtualFallback:true});" in js
+
+
+def test_virtual_blank_viewport_recovery_evicts_stale_cache_before_fallback():
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+let deletes = [];
+let renderCalls = [];
+const _sessionHtmlCache = {
+  delete(sid){ deletes.push(sid); }
+};
+let _sessionHtmlCacheSid = 'sid-123';
+const S = { session: { session_id: 'sid-123' } };
+function _messageViewportIntersectsRenderedRow(){ return false; }
+function renderMessages(options){ renderCalls.push(options); }
+eval(extractFunc('_maybeRecoverVirtualizedBlankViewport'));
+const recovered = _maybeRecoverVirtualizedBlankViewport({preserveScroll:false, someFlag:true}, true, {virtualized:true});
+console.log(JSON.stringify({recovered, deletes, renderCalls}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert metrics["recovered"] is True
+    assert metrics["deletes"] == ["sid-123"]
+    assert metrics["renderCalls"] == [{"preserveScroll": True, "_virtualFallback": True}]

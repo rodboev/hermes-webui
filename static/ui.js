@@ -9442,8 +9442,11 @@ function _scrollAfterMessageRender(preserveScroll, scrollSnapshot){
 function _maybeRecoverVirtualizedBlankViewport(options, preserveScroll, virtualWindow){
   if(!preserveScroll||!virtualWindow||!virtualWindow.virtualized||!!(options&&options._virtualFallback)) return false;
   if(_messageViewportIntersectsRenderedRow()) return false;
+  if(_sessionHtmlCacheSid&&S.session&&S.session.session_id===_sessionHtmlCacheSid){
+    _sessionHtmlCache.delete(_sessionHtmlCacheSid);
+  }
   _messageVirtualWindowKey='';
-  renderMessages({...(options||{}),preserveScroll:true,_virtualFallback:true});
+  renderMessages({preserveScroll:true,_virtualFallback:true});
   return true;
 }
 
