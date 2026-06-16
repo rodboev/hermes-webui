@@ -90,3 +90,23 @@ def test_var_home_workspaces_stay_allowed_before_system_root_blocklist(monkeypat
     monkeypatch.setattr(workspace, "_workspace_access_error", lambda _candidate: None)
 
     assert validator(str(candidate)) == candidate
+
+
+def test_remote_terminal_workspace_rejects_embedded_nullbyte_in_raw_path(monkeypatch):
+    """Embedded null bytes in remote workspace path should be rejected."""
+    monkeypatch.setattr(api_config, "get_config", lambda: _remote_config())
+
+    # Path with embedded null byte
+    nullbyte_path = f"{REMOTE_CWD}/projects\x00/demo"
+
+    assert workspace._remote_terminal_workspace_candidate(nullbyte_path) is None
+
+
+def test_remote_terminal_workspace_rejects_embedded_nullbyte_in_cwd(monkeypatch):
+    """Embedded null bytes in remote terminal cwd should be rejected."""
+    monkeypatch.setattr(api_config, "get_config", lambda: _remote_config(terminal={"backend": "ssh", "cwd": f"{REMOTE_CWD}\x00/malicious"}))
+
+    # Normal path, but remote cwd contains null byte
+    normal_path = f"{REMOTE_CWD}/projects/demo"
+
+    assert workspace._remote_terminal_workspace_candidate(normal_path) is None

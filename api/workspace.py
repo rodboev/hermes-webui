@@ -163,6 +163,8 @@ def _remote_terminal_workspace_candidate(path: str | Path) -> Path | None:
     raw = _strip_surrounding_quotes(str(path)).strip()
     if not raw:
         return None
+    if '\x00' in raw or '\x00' in cwd:
+        return None
     normalized_raw = _normalize_posix_path(raw)
     normalized_cwd = _normalize_posix_path(cwd)
     if normalized_raw is not None and normalized_cwd is not None:
