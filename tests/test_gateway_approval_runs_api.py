@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import threading
+import urllib.error
 from unittest.mock import MagicMock, patch
 
 
@@ -53,6 +54,63 @@ def test_gateway_capability_detection():
     with patch("urllib.request.urlopen", side_effect=_fake_urlopen_incapable):
         assert gateway_supports_approval("http://fake:5678") is False
 
+    invalidate_gateway_caps()
+
+
+def test_gateway_capability_cache_keeps_fresher_success_on_probe_race():
+    """A slower failed probe must not overwrite a fresher successful capability result."""
+    from api.config import gateway_supports_approval, invalidate_gateway_caps
+
+    invalidate_gateway_caps()
+    first_probe_release = threading.Event()
+    second_probe_done = threading.Event()
+    call_count = {"value": 0}
+
+    class _JsonResponse:
+        def __init__(self, payload):
+            self._payload = json.dumps(payload).encode("utf-8")
+
+        def read(self, _limit=None):
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    def fake_urlopen(req, *, timeout=None):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            second_probe_done.wait(timeout=5)
+            first_probe_release.wait(timeout=5)
+            raise urllib.error.URLError("slow probe failed")
+        second_probe_done.set()
+        return _JsonResponse({
+            "features": {
+                "approval_events": True,
+                "run_approval_response": True,
+            },
+        })
+
+    results = []
+
+    def worker():
+        results.append(gateway_supports_approval("http://fake:9999", "secret"))
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        second_probe_done.wait(timeout=5)
+        t2.start()
+        t2.join(timeout=5)
+        first_probe_release.set()
+        t1.join(timeout=5)
+
+        assert gateway_supports_approval("http://fake:9999", "secret") is True
+
+    assert results.count(True) == 2
     invalidate_gateway_caps()
 
 

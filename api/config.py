@@ -6324,11 +6324,12 @@ def get_gateway_caps(base_url: str, api_key: str = "") -> dict:
     base_url = str(base_url or "").rstrip("/")
     cache_key = (base_url, str(api_key or ""))
     now = time.time()
+    probe_started_at = now
     with _GATEWAY_CAPS_LOCK:
         cached = _GATEWAY_CAPS_CACHE.get(cache_key)
         if cached and now - cached.get("fetched_at", 0) < _GATEWAY_CAPS_TTL_S:
             return cached
-    caps = {"approval_events": False, "run_approval_response": False, "fetched_at": now}
+    caps = {"approval_events": False, "run_approval_response": False, "fetched_at": 0.0}
     try:
         headers = {}
         if api_key:
@@ -6344,6 +6345,10 @@ def get_gateway_caps(base_url: str, api_key: str = "") -> dict:
     except Exception:
         pass
     with _GATEWAY_CAPS_LOCK:
+        current = _GATEWAY_CAPS_CACHE.get(cache_key)
+        if current and current.get("fetched_at", 0) > probe_started_at:
+            return current
+        caps["fetched_at"] = time.time()
         _GATEWAY_CAPS_CACHE[cache_key] = caps
     return caps
 
