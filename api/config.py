@@ -981,6 +981,26 @@ def _resolve_provider_alias(name: str) -> str:
     return _PROVIDER_ALIASES.get(raw, name)
 
 
+def _is_known_model_provider(pid: str | None) -> bool:
+    """Return True when *pid* names a recognized model provider."""
+    if not pid:
+        return False
+
+    # Check against known provider dictionaries
+    if pid in _PROVIDER_MODELS or pid in _PROVIDER_DISPLAY:
+        return True
+
+    # Check if it's a plugin model provider
+    if _is_plugin_model_provider(pid):
+        return True
+
+    # Check for custom:* pattern
+    if pid.startswith("custom:"):
+        return True
+
+    return False
+
+
 def _custom_provider_slug_from_name(name: object) -> str:
     raw = str(name or "").strip().lower()
     if not raw:
@@ -5029,7 +5049,7 @@ def get_available_models(*, prefer_cache: bool = False) -> dict:
                                     str(getattr(e, "key_source", "") or ""),
                                 )
                             ]
-                            if _explicit:
+                            if _explicit and _is_known_model_provider(_canonical_pid):
                                 detected_providers.add(_canonical_pid)
                         except Exception:
                             logger.debug("credential_pool.load_pool(%s) failed", _pid)
@@ -5047,7 +5067,9 @@ def get_available_models(*, prefer_cache: bool = False) -> dict:
                             for _entry in _entries
                         )
                         if _has_explicit_cred:
-                            detected_providers.add(_resolve_provider_alias(str(_pid)))
+                            _canonical_pid = _resolve_provider_alias(str(_pid))
+                            if _is_known_model_provider(_canonical_pid):
+                                detected_providers.add(_canonical_pid)
         except Exception:
             logger.debug("Failed to inspect credential_pool from auth store")
 
@@ -6034,7 +6056,7 @@ def get_available_models(*, prefer_cache: bool = False) -> dict:
                     detected_models = auto_detected_models_by_provider.get(pid)
                     if detected_models:
                         models_for_group = copy.deepcopy(detected_models)
-                    elif auto_detected_models:
+                    elif auto_detected_models and pid == "custom":
                         # Don't fall back to the global auto_detected_models
                         # list for the bare "custom" PID when the active
                         # provider is something concrete (e.g. ai-gateway,
@@ -6042,11 +6064,13 @@ def get_available_models(*, prefer_cache: bool = False) -> dict:
                         # belong to the active provider's group — copying
                         # them into a Custom group too produces phantom
                         # duplicates with mismatched prefixes (#1881).
-                        if pid == "custom" and active_provider and active_provider != "custom":
+                        if active_provider and active_provider != "custom":
                             models_for_group = []
                         else:
                             models_for_group = copy.deepcopy(auto_detected_models)
                     else:
+                        # Unknown provider with no provider-specific catalog:
+                        # don't fall back to the global catalog, skip entirely.
                         models_for_group = []
                     if models_for_group:
                         # Per-group deep copy so subsequent mutation by
