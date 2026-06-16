@@ -57,6 +57,10 @@ _GIT_HARDENED_CONFIG = (
     # Neutralize repo-local core.gitProxy, which specifies an external proxy
     # command reachable on `git fetch` against a git:// remote.
     ("core.gitProxy", ""),
+    # Prevent submodule operations from recursing into nested repos, which
+    # could trigger hooks or fetch from attacker-controlled submodule URLs.
+    ("submodule.recurse", "false"),
+    ("fetch.recurseSubmodules", "false"),
 )
 _GIT_DESTRUCTIVE_HARDENED_CONFIG = (
     # Disable signing helper command resolution while performing destructive
@@ -1358,6 +1362,7 @@ def _staged_diff_text(ctx: GitContext) -> tuple[str, bool]:
             _workspace_pathspec(ctx),
         ],
         check=True,
+        neutralize_filter_programs=True,
     )
     diff = result.stdout or ""
     encoded = diff.encode("utf-8", errors="replace")

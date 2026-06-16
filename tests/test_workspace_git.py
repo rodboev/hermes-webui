@@ -2048,3 +2048,85 @@ def test_git_commit_route_rejects_active_stream(monkeypatch, tmp_path):
     payload = handler.payload()
     assert payload["code"] == "active_stream"
     assert "active" in payload["error"].lower()
+
+
+def test_selected_commit_message_prompt_skips_clean_filter_without_destructive_mode(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted clean filter setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, selected_commit_message_prompt
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.txt filter=demo\n", encoding="utf-8")
+    (repo / "selected.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+    marker = tmp_path / "selected-clean-filter-ran"
+    helper = tmp_path / "selected_clean_filter_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('clean filter ran', encoding='utf-8')\n"
+        "print(sys.stdin.read(), end='')\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _git(repo, "config", "filter.demo.clean", f'"{sys.executable}" "{helper}" "{marker}"')
+    (repo / "selected.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    monkeypatch.delenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, raising=False)
+    prompt = selected_commit_message_prompt(repo, ["selected.txt"])
+
+    assert "+two" in prompt["user_prompt"]
+    assert not marker.exists()
+
+
+def test_staged_commit_message_prompt_skips_clean_filter_without_destructive_mode(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted clean filter setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, staged_commit_message_prompt
+
+    repo = _init_repo(tmp_path / "repo")
+    # Install .gitattributes without a filter program so git add runs as identity
+    (repo / ".gitattributes").write_text("*.txt filter=demo\n", encoding="utf-8")
+    (repo / "staged.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+
+    # Stage the modification before the malicious filter program is registered,
+    # so the git add step itself does not trigger the payload.
+    (repo / "staged.txt").write_text("one\ntwo\n", encoding="utf-8")
+    _git(repo, "add", "staged.txt")
+
+    # Now install the malicious filter — staged_commit_message_prompt's git diff
+    # --cached must not invoke clean filters on index-vs-HEAD comparisons.
+    marker = tmp_path / "staged-clean-filter-ran"
+    helper = tmp_path / "staged_clean_filter_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('clean filter ran', encoding='utf-8')\n"
+        "print(sys.stdin.read(), end='')\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _git(repo, "config", "filter.demo.clean", f'"{sys.executable}" "{helper}" "{marker}"')
+
+    monkeypatch.delenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, raising=False)
+    prompt = staged_commit_message_prompt(repo)
+
+    assert "+two" in prompt["user_prompt"]
+    assert not marker.exists()
+
+
+def test_git_hardened_config_blocks_submodule_recursion():
+    from api.workspace_git import _GIT_HARDENED_CONFIG
+
+    config = dict(_GIT_HARDENED_CONFIG)
+    assert config.get("submodule.recurse") == "false"
+    assert config.get("fetch.recurseSubmodules") == "false"
