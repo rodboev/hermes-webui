@@ -3,6 +3,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Model picker provider groups are now collapsible and open scannable (#4279).** Provider groups in the model picker start collapsed except the group that owns your currently-selected model, so a picker with many providers/models opens as a tidy list of provider headings rather than one long flat scroll. Searching auto-expands matching groups (and searches hidden overflow models); clearing the search restores the collapsed-except-selected view. The "Show all N models" affordance is restyled as a distinct "+ Show all N models" expander (muted italic, indented, not mistakable for a selectable model) and now reveals the overflow in place — the group stays open and the view scrolls to the newly-revealed models instead of resetting to the top. The redundant per-row provider chip is suppressed for rows already under their own provider heading (kept only for hoisted/search rows). Builds on @akrhin's collapsible-groups work.
+
+### Fixed
+
+- **Non-model credential-pool keys no longer appear as phantom providers in the model picker (#4324).** A regression from #4247: the credential-pool detection loop added *every* `auth.json` → `credential_pool` key to the detected providers without checking it names a model provider. The Photon iMessage plugin writes three such keys (`photon`, `photon_project`, `photon_user`) that are messaging-platform credentials, not LLM API keys — so the picker showed three bogus "providers" (`photon`, `photon project`, `photon user`) each listing the full auto-detected model catalog. Pool detection is now gated on a new `_is_known_model_provider()` check (a `custom:*` slug, a static `_PROVIDER_DISPLAY`/`_PROVIDER_MODELS` entry, or a registered model-provider plugin) on both the `load_pool` and raw-dict fallback paths, and the group-builder's generic fallback no longer paints an unrecognized id with the global catalog. Real pool-keyed providers (`copilot`, aliased `google`→`gemini`) still surface. Reported by Nic; fix by @nesquena-hermes and independently by @rodboev (#4329/#4330).
+
 ## [v0.51.463] — 2026-06-16 — Release PX (tighter remote workspace boundaries)
 
 ### Fixed
