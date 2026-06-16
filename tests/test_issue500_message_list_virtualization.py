@@ -362,3 +362,44 @@ def test_tool_rows_do_not_carry_message_measurement_hook():
 
     assert "row.dataset.msgIdx" not in build_body
     assert "querySelectorAll(`[data-msg-idx=" not in js
+
+
+def test_viewport_intersection_helper_detects_visible_rendered_rows_only():
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+let rows = [];
+const container = {
+  getBoundingClientRect(){ return {top: 100, bottom: 300}; },
+  querySelectorAll(selector){
+    if(selector === '[data-msg-idx]') return rows;
+    return [];
+  },
+};
+function $(id){ return id === 'messages' ? container : null; }
+eval(extractFunc('_messageViewportIntersectsRenderedRow'));
+rows = [
+  { getBoundingClientRect(){ return {top: 10, bottom: 90}; } },
+  { getBoundingClientRect(){ return {top: 320, bottom: 360}; } },
+];
+const blank = _messageViewportIntersectsRenderedRow();
+rows = [
+  { getBoundingClientRect(){ return {top: 120, bottom: 180}; } },
+];
+const visible = _messageViewportIntersectsRenderedRow();
+console.log(JSON.stringify({blank, visible}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert metrics["blank"] is False
+    assert metrics["visible"] is True
+
+
+def test_render_messages_has_one_shot_virtual_blank_viewport_fallback():
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    render_start = js.index("function renderMessages(options)")
+    render_end = js.index("function _toolDisplayName", render_start)
+    render_body = js[render_start:render_end]
+
+    assert "const virtualFallback=!!(options&&options._virtualFallback);" in render_body
+    assert "const virtualWindow=virtualFallback" in render_body
+    assert "if(_maybeRecoverVirtualizedBlankViewport(options, preserveScroll, virtualWindow)) return;" in render_body
+    assert "renderMessages({...(options||{}),preserveScroll:true,_virtualFallback:true});" in js
