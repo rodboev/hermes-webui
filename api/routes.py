@@ -2914,6 +2914,14 @@ def _normalize_provider_id(value: str | None) -> str:
         return ""
     if raw in _PROVIDER_ALIASES:
         return _PROVIDER_ALIASES[raw]
+
+    def _matches_provider_family(prefix: str) -> bool:
+        if not raw.startswith(prefix):
+            return False
+        if raw == prefix:
+            return True
+        return raw[len(prefix)] in "-:/"
+
     for prefix, normalized in (
         ("openai-codex", "openai"),
         ("openai", "openai"),
@@ -2924,7 +2932,7 @@ def _normalize_provider_id(value: str | None) -> str:
         ("openrouter", "openrouter"),
         ("custom", "custom"),
     ):
-        if raw.startswith(prefix):
+        if _matches_provider_family(prefix):
             return normalized
     # Unknown prefix — return empty so callers treat it as "no match" and pass
     # the model through unchanged rather than incorrectly stripping it.

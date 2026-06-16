@@ -1733,6 +1733,57 @@ def test_custom_namespace_model_always_preserved_on_custom_provider(monkeypatch)
     assert effective == "custom/my-local-llm"
 
 
+def test_provider_family_normalization_requires_a_real_namespace_boundary():
+    """Only exact family tokens or separator-qualified namespaces should
+    normalize to first-party providers (#4278)."""
+    import api.routes as routes
+
+    expectations = {
+        "gemini": "google",
+        "gemini/gemini-2.5-pro": "google",
+        "openai-codex": "openai",
+        "openrouter:my-model": "openrouter",
+        "custom:agent37": "custom",
+        "gemini_cli": "",
+        "openai_compat": "",
+        "claudeRelay": "",
+    }
+
+    for raw, expected in expectations.items():
+        assert routes._normalize_provider_id(raw) == expected, raw
+
+
+def test_custom_provider_prefix_overlap_does_not_rewrite_model(monkeypatch):
+    """Custom namespaces that merely start with a first-party token must not
+    be rewritten to the active default model (#4278)."""
+    import api.routes as routes
+
+    monkeypatch.setattr(
+        routes,
+        "get_available_models",
+        lambda: {
+            "active_provider": "custom",
+            "default_model": "agent37/default",
+            "groups": [
+                {
+                    "provider": "Agent37",
+                    "provider_id": "custom:agent37",
+                    "models": [{"id": "agent37/default", "label": "default"}],
+                },
+            ],
+        },
+    )
+
+    effective, provider, changed = routes._resolve_compatible_session_model_state(
+        "gemini_cli/gemini-3-flash-preview",
+        "custom:agent37",
+    )
+
+    assert changed is False
+    assert effective == "gemini_cli/gemini-3-flash-preview"
+    assert provider == "custom:agent37"
+
+
 def test_explicit_pick_survives_profile_family_mismatch():
     """When explicit_model_pick=True, a cross-family bare model survives
     the profile-aware normalization instead of being rewritten to the
