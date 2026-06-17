@@ -300,7 +300,9 @@ let _messageVirtualHeightCacheLen = 2;
 let _messageVirtualHeightCacheSrc = null;
 let _messageVirtualEstimatedRowHeight = 200;
 let _messageVirtualWindowKey = 'stale-key';
+function _cancelMessageVirtualPreMeasure(){}
 function _clearMessageVirtualHeightCache() {
+  _cancelMessageVirtualPreMeasure();
   _messageVirtualHeightCache = [];
   _messageVirtualHeightCacheEntries = [];
   _messageVirtualHeightCacheLen = 0;
@@ -573,3 +575,125 @@ def test_virtualize_transcript_gate_present_in_current_window_fn():
         "_currentMessageVirtualWindow"
     )
     assert "virtualized:false" in body, "gate must return a non-virtualized window when opted out"
+
+
+def test_message_virtual_pre_measure_indices_returns_uncached_rows_after_window_end():
+    """Pre-measure indices should select uncached rows beyond the virtual window."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_messageVirtualPreMeasureIndices'));
+const window = {virtualized: true, start: 50, end: 100, tailStart: 200};
+const heights = Array.from({length: 200}, (_, i) => i < 80 ? 140 : 0);
+const indices = _messageVirtualPreMeasureIndices(window, 200, heights);
+console.log(JSON.stringify({
+  indices,
+  count: indices.length,
+  minIdx: Math.min(...indices),
+  maxIdx: Math.max(...indices),
+}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["count"] > 0
+    assert result["count"] <= 12
+    # Indices should include rows after window.end where height is not cached
+    assert any(idx >= 100 for idx in result["indices"])
+
+
+def test_message_virtual_pre_measure_indices_skips_cached_rows():
+    """Pre-measure should skip rows that already have cached heights."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_messageVirtualPreMeasureIndices'));
+const window = {virtualized: true, start: 50, end: 100, tailStart: 200};
+const heights = Array.from({length: 200}, () => 140);
+const indices = _messageVirtualPreMeasureIndices(window, 200, heights);
+console.log(JSON.stringify({count: indices.length}));
+"""
+    result = json.loads(_run_node(source))
+    # All heights are cached, so no rows to pre-measure
+    assert result["count"] == 0
+
+
+def test_message_virtual_pre_measure_indices_respects_12_item_cap():
+    """Pre-measure should cap at 12 indices to avoid overloading idle callback."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_messageVirtualPreMeasureIndices'));
+const window = {virtualized: true, start: 10, end: 20, tailStart: 200};
+const heights = Array.from({length: 200}, () => 0);
+const indices = _messageVirtualPreMeasureIndices(window, 200, heights);
+console.log(JSON.stringify({count: indices.length}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["count"] == 12
+
+
+def test_message_virtual_pre_measure_indices_non_virtualized_returns_empty():
+    """Non-virtualized windows should return no pre-measure indices."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_messageVirtualPreMeasureIndices'));
+const window = {virtualized: false, start: 0, end: 50, tailStart: 50};
+const heights = Array.from({length: 50}, () => 0);
+const indices = _messageVirtualPreMeasureIndices(window, 50, heights);
+console.log(JSON.stringify({count: indices.length}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["count"] == 0
+
+
+def test_cancel_message_virtual_pre_measure_clears_pending_handle():
+    """_cancelMessageVirtualPreMeasure should clear the requestIdleCallback handle."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+let _messageVirtualPreMeasureRic = 12345;
+let _messageVirtualPreMeasureContainer = null;
+let cancelCalls = [];
+function cancelIdleCallback(id) { cancelCalls.push(id); }
+eval(extractFunc('_cancelMessageVirtualPreMeasure'));
+_cancelMessageVirtualPreMeasure();
+console.log(JSON.stringify({
+  handle: _messageVirtualPreMeasureRic,
+  cancelCalls,
+}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["handle"] == 0
+    assert 12345 in result["cancelCalls"]
+
+
+def test_clear_message_virtual_height_cache_calls_cancel_pre_measure():
+    """_clearMessageVirtualHeightCache must call _cancelMessageVirtualPreMeasure first."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    # Check that _clearMessageVirtualHeightCache calls _cancelMessageVirtualPreMeasure
+    assert "_clearMessageVirtualHeightCache" in js
+    assert "_cancelMessageVirtualPreMeasure" in js
+
+    start = js.index("function _clearMessageVirtualHeightCache(){")
+    end = js.index("}", start + 100)
+    func_body = js[start:end]
+
+    assert "_cancelMessageVirtualPreMeasure();" in func_body, (
+        "_clearMessageVirtualHeightCache must call _cancelMessageVirtualPreMeasure as the first statement"
+    )
+    # Verify it's the first actual call (after opening brace and newline/whitespace)
+    first_call_idx = func_body.index("_cancelMessageVirtualPreMeasure();")
+    opening_brace_idx = func_body.index("{")
+    assert first_call_idx > opening_brace_idx, (
+        "_cancelMessageVirtualPreMeasure should be called near the start of _clearMessageVirtualHeightCache"
+    )
+
+
+def test_mark_message_virtual_measurements_settled_calls_pre_measure_schedule():
+    """_markMessageVirtualMeasurementsSettled must call _scheduleMessageVirtualPreMeasure."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    assert "_markMessageVirtualMeasurementsSettled" in js
+    assert "_scheduleMessageVirtualPreMeasure" in js
+
+    start = js.index("function _markMessageVirtualMeasurementsSettled(")
+    end = js.index("function _", start + 100)
+    func_body = js[start:end]
+
+    assert "_scheduleMessageVirtualPreMeasure(windowMetrics, _getVisibleMessagesWithIdx());" in func_body, (
+        "_markMessageVirtualMeasurementsSettled must call _scheduleMessageVirtualPreMeasure with windowMetrics and visWithIdx"
+    )
