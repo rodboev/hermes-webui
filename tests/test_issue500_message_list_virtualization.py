@@ -829,8 +829,14 @@ let _messageVirtualEstimatedRowHeight = 200;
 let _messageVirtualWindowKey = 'old-key';
 let _messageVirtualMeasurementCycleKey = 'old-cycle';
 let _messageVirtualMeasurementRetryCount = 3;
+let _messageVirtualScrollVelocity = 0;
+let _messageVirtualScrollVelocityLastTop = null;
+let _messageVirtualVelocityGuardActive = false;
+let _messageVirtualVelocityDecayTimer = 0;
+let _messageVirtualDeferredMeasurementPayload = null;
 const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT = 140;
 function clearTimeout(id){ timerCleared = (id === 99); }
+function _messageVirtualDefaultHeightForRole() { return 140; }
 eval(extractFunc('_clearMessageVirtualHeightCache'));
 _clearMessageVirtualHeightCache();
 console.log(JSON.stringify({
@@ -853,7 +859,8 @@ console.log(JSON.stringify({
     assert metrics["timerCleared"] is True, (
         "_clearMessageVirtualHeightCache must call clearTimeout on the pending settle timer"
     )
-=======
+
+
 def test_message_virtual_default_height_for_role_returns_correct_heights():
     """Verify per-role default heights are configured."""
     js = UI_JS_PATH.read_text(encoding="utf-8")
@@ -1117,4 +1124,220 @@ console.log(JSON.stringify({scrollTop, delta, windowCoversAll}));
     )
     # windowing function must also cover the same three rows
     assert metrics["windowCoversAll"] is True
->>>>>>> fork/pr/per-role-virtual-heights
+
+
+def test_velocity_ema_computation_fast_upward_scroll():
+    """EMA velocity tracker should compute negative velocity from fast upward scroll samples."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_updateMessageScrollVelocity'));
+let _messageVirtualScrollVelocity = 0;
+let _messageVirtualScrollVelocityTs = 0;
+let _messageVirtualScrollVelocityLastTop = null;
+let _messageVirtualVelocityGuardActive = false;
+const MESSAGE_VIRTUAL_VELOCITY_THRESHOLD = -1.5;
+const MESSAGE_VIRTUAL_VELOCITY_DECAY_MS = 80;
+let _messageVirtualDeferredMeasurementPayload = null;
+function _flushDeferredMeasurementPayload() {}
+// Simulate fast upward scroll: scrollTop decreases ~400px in 16ms intervals
+const samples = [
+  [5000, 1000],
+  [4600, 1016],
+  [4200, 1032],
+  [3800, 1048],
+];
+samples.forEach(([scrollTop, ts]) => {
+  _updateMessageScrollVelocity(scrollTop, ts);
+});
+console.log(JSON.stringify({velocity: _messageVirtualScrollVelocity, guardActive: _messageVirtualVelocityGuardActive}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["velocity"] < -1.5, (
+        f"velocity {result['velocity']} should be < -1.5 for fast upward scroll"
+    )
+
+
+def test_velocity_guard_activation():
+    """Guard should activate when velocity exceeds threshold."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_updateMessageScrollVelocity'));
+let _messageVirtualScrollVelocity = 0;
+let _messageVirtualScrollVelocityTs = 0;
+let _messageVirtualScrollVelocityLastTop = null;
+let _messageVirtualVelocityGuardActive = false;
+const MESSAGE_VIRTUAL_VELOCITY_THRESHOLD = -1.5;
+const MESSAGE_VIRTUAL_VELOCITY_DECAY_MS = 80;
+let _messageVirtualDeferredMeasurementPayload = null;
+function _flushDeferredMeasurementPayload() {}
+const samples = [
+  [5000, 1000],
+  [4600, 1016],
+  [4200, 1032],
+  [3800, 1048],
+];
+samples.forEach(([scrollTop, ts]) => {
+  _updateMessageScrollVelocity(scrollTop, ts);
+});
+console.log(JSON.stringify({guardActive: _messageVirtualVelocityGuardActive}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["guardActive"] is True, "guard should activate on fast upward scroll"
+
+
+def test_velocity_guard_not_activated_on_slow_scroll():
+    """Guard should stay inactive on slow scroll."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_updateMessageScrollVelocity'));
+let _messageVirtualScrollVelocity = 0;
+let _messageVirtualScrollVelocityTs = 0;
+let _messageVirtualScrollVelocityLastTop = null;
+let _messageVirtualVelocityGuardActive = false;
+const MESSAGE_VIRTUAL_VELOCITY_THRESHOLD = -1.5;
+const MESSAGE_VIRTUAL_VELOCITY_DECAY_MS = 80;
+let _messageVirtualDeferredMeasurementPayload = null;
+function _flushDeferredMeasurementPayload() {}
+const samples = [
+  [5000, 1000],
+  [4950, 1100],
+  [4900, 1200],
+  [4850, 1300],
+];
+samples.forEach(([scrollTop, ts]) => {
+  _updateMessageScrollVelocity(scrollTop, ts);
+});
+console.log(JSON.stringify({guardActive: _messageVirtualVelocityGuardActive}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["guardActive"] is False, "guard should not activate on slow scroll"
+
+
+def test_velocity_guard_not_activated_on_downward_scroll():
+    """Guard should stay inactive on downward scroll."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_updateMessageScrollVelocity'));
+let _messageVirtualScrollVelocity = 0;
+let _messageVirtualScrollVelocityTs = 0;
+let _messageVirtualScrollVelocityLastTop = null;
+let _messageVirtualVelocityGuardActive = false;
+const MESSAGE_VIRTUAL_VELOCITY_THRESHOLD = -1.5;
+const MESSAGE_VIRTUAL_VELOCITY_DECAY_MS = 80;
+let _messageVirtualDeferredMeasurementPayload = null;
+function _flushDeferredMeasurementPayload() {}
+const samples = [
+  [5000, 1000],
+  [5400, 1016],
+  [5800, 1032],
+  [6200, 1048],
+];
+samples.forEach(([scrollTop, ts]) => {
+  _updateMessageScrollVelocity(scrollTop, ts);
+});
+console.log(JSON.stringify({guardActive: _messageVirtualVelocityGuardActive}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["guardActive"] is False, "guard should not activate on downward scroll"
+
+
+def test_measurement_suppression_when_guard_active():
+    """Measurement refresh should be suppressed and deferred when guard is active."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_scheduleMessageVirtualMeasurementRefresh'));
+let _messageVirtualVelocityGuardActive = true;
+let _messageVirtualDeferredMeasurementPayload = null;
+let _messageVirtualScrollActive = false;
+let _messageVirtualMeasurementCycleKey = '';
+let _messageVirtualMeasurementRetryCount = 0;
+const MESSAGE_VIRTUAL_MEASUREMENT_MAX_RERENDERS = 5;
+let refreshTriggered = false;
+function requestAnimationFrame(fn) { refreshTriggered = true; }
+function _scheduleMessageVirtualizedRender() {}
+function _messageVirtualMeasurementCycleKeyFor() { return 'key'; }
+const windowMetrics = {virtualized: true};
+_scheduleMessageVirtualMeasurementRefresh(windowMetrics);
+console.log(JSON.stringify({refreshTriggered: refreshTriggered, hasDeferredPayload: _messageVirtualDeferredMeasurementPayload !== null}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["refreshTriggered"] is False, "refresh should not be triggered when guard is active"
+    assert result["hasDeferredPayload"] is True, "payload should be deferred when guard is active"
+
+
+def test_deferred_payload_flush_when_guard_deactivates():
+    """Deferred payload should be flushed when guard deactivates."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_scheduleMessageVirtualMeasurementRefresh'));
+eval(extractFunc('_flushDeferredMeasurementPayload'));
+let _messageVirtualVelocityGuardActive = false;
+let _messageVirtualDeferredMeasurementPayload = {virtualized: true};
+let _messageVirtualScrollActive = false;
+let _messageVirtualMeasurementCycleKey = '';
+let _messageVirtualMeasurementRetryCount = 0;
+const MESSAGE_VIRTUAL_MEASUREMENT_MAX_RERENDERS = 5;
+let refreshPayloads = [];
+function requestAnimationFrame(fn) { fn(); }
+function _scheduleMessageVirtualizedRender() { refreshPayloads.push(_messageVirtualDeferredMeasurementPayload); }
+function _messageVirtualMeasurementCycleKeyFor() { return 'key'; }
+_flushDeferredMeasurementPayload();
+console.log(JSON.stringify({payloadFlushed: refreshPayloads.length > 0, payloadNull: _messageVirtualDeferredMeasurementPayload === null}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["payloadFlushed"] is True, "deferred payload should be flushed"
+    assert result["payloadNull"] is True, "deferred payload should be null after flush"
+
+
+def test_scroll_listener_ordering_programmatic_before_mark_active():
+    """_programmaticScroll guard must appear before _markMessageVirtualScrollActive() in scroll listener."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    start = js.index("addEventListener('scroll'")
+    section = js[start:start + 2000]
+    programmatic_pos = section.find("_programmaticScroll")
+    mark_active_pos = section.find("_markMessageVirtualScrollActive")
+    assert programmatic_pos >= 0, "_programmaticScroll guard must exist in scroll listener"
+    assert mark_active_pos >= 0, "_markMessageVirtualScrollActive must exist in scroll listener"
+    assert programmatic_pos < mark_active_pos, (
+        "_programmaticScroll guard must appear before _markMessageVirtualScrollActive"
+    )
+
+
+def test_reset_velocity_state_on_clear_cache():
+    """_clearMessageVirtualHeightCache must reset all velocity guard state."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_clearMessageVirtualHeightCache'));
+let _messageVirtualHeightCache = [1, 2, 3];
+let _messageVirtualHeightCacheEntries = [1, 2];
+let _messageVirtualHeightCacheLen = 2;
+let _messageVirtualHeightCacheSrc = {};
+let _messageVirtualEstimatedRowHeight = 200;
+let _messageVirtualWindowKey = 'key';
+let _messageVirtualMeasurementCycleKey = 'cycle';
+let _messageVirtualMeasurementRetryCount = 5;
+let _messageVirtualScrollActive = true;
+let _messageVirtualScrollSettleTimer = 123;
+let _messageVirtualDeferredMeasurement = {test: true};
+let _messageVirtualScrollVelocity = -2.5;
+let _messageVirtualScrollVelocityLastTop = 5000;
+let _messageVirtualVelocityGuardActive = true;
+let _messageVirtualVelocityDecayTimer = 456;
+let _messageVirtualDeferredMeasurementPayload = {payload: true};
+function clearTimeout(id) {}
+function _messageVirtualDefaultHeightForRole() { return 140; }
+_clearMessageVirtualHeightCache();
+console.log(JSON.stringify({
+  velocityZero: _messageVirtualScrollVelocity === 0,
+  lastTopNull: _messageVirtualScrollVelocityLastTop === null,
+  guardInactive: _messageVirtualVelocityGuardActive === false,
+  decayTimerZero: _messageVirtualVelocityDecayTimer === 0,
+  payloadNull: _messageVirtualDeferredMeasurementPayload === null
+}));
+"""
+    result = json.loads(_run_node(source))
+    assert result["velocityZero"] is True, "velocity should be reset to 0"
+    assert result["lastTopNull"] is True, "velocity last top should be reset to null"
+    assert result["guardInactive"] is True, "velocity guard should be reset to false"
+    assert result["decayTimerZero"] is True, "decay timer should be reset to 0"
+    assert result["payloadNull"] is True, "deferred payload should be reset to null"

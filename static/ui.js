@@ -402,11 +402,55 @@ let _messageVirtualMeasurementRetryCount=0;
 let _messageVirtualScrollActive=false;
 let _messageVirtualScrollSettleTimer=0;
 let _messageVirtualDeferredMeasurement=null;
+let _messageVirtualScrollVelocity=0;
+let _messageVirtualScrollVelocityTs=0;
+let _messageVirtualScrollVelocityLastTop=null;
+let _messageVirtualVelocityGuardActive=false;
+let _messageVirtualVelocityDecayTimer=0;
+let _messageVirtualDeferredMeasurementPayload=null;
+const MESSAGE_VIRTUAL_VELOCITY_THRESHOLD=-1.5;
+const MESSAGE_VIRTUAL_VELOCITY_DECAY_MS=80;
+function _updateMessageScrollVelocity(scrollTop,timestamp){
+  if(_messageVirtualScrollVelocityLastTop===null){
+    _messageVirtualScrollVelocityLastTop=scrollTop;
+    _messageVirtualScrollVelocityTs=timestamp;
+    return;
+  }
+  const dt=timestamp-_messageVirtualScrollVelocityTs;
+  if(dt<1) return;
+  const raw=(scrollTop-_messageVirtualScrollVelocityLastTop)/dt;
+  const alpha=0.4;
+  _messageVirtualScrollVelocity=alpha*raw+(1-alpha)*_messageVirtualScrollVelocity;
+  _messageVirtualScrollVelocityLastTop=scrollTop;
+  _messageVirtualScrollVelocityTs=timestamp;
+  const wasActive=_messageVirtualVelocityGuardActive;
+  _messageVirtualVelocityGuardActive=_messageVirtualScrollVelocity<MESSAGE_VIRTUAL_VELOCITY_THRESHOLD;
+  if(wasActive&&!_messageVirtualVelocityGuardActive){
+    _flushDeferredMeasurementPayload();
+  }
+}
+function _flushDeferredMeasurementPayload(){
+  if(!_messageVirtualDeferredMeasurementPayload) return;
+  const payload=_messageVirtualDeferredMeasurementPayload;
+  _messageVirtualDeferredMeasurementPayload=null;
+  _scheduleMessageVirtualMeasurementRefresh(payload);
+}
 function _markMessageVirtualScrollActive(){
   _messageVirtualScrollActive=true;
   clearTimeout(_messageVirtualScrollSettleTimer);
+  clearTimeout(_messageVirtualVelocityDecayTimer);
+  _messageVirtualVelocityDecayTimer=setTimeout(()=>{
+    if(_messageVirtualVelocityGuardActive){
+      _messageVirtualVelocityGuardActive=false;
+      _flushDeferredMeasurementPayload();
+    }
+  },MESSAGE_VIRTUAL_VELOCITY_DECAY_MS);
   _messageVirtualScrollSettleTimer=setTimeout(()=>{
     _messageVirtualScrollActive=false;
+    _messageVirtualScrollVelocity=0;
+    _messageVirtualScrollVelocityLastTop=null;
+    _messageVirtualVelocityGuardActive=false;
+    _flushDeferredMeasurementPayload();
     if(_messageVirtualDeferredMeasurement){
       const deferred=_messageVirtualDeferredMeasurement;
       _messageVirtualDeferredMeasurement=null;
@@ -433,9 +477,15 @@ function _clearMessageVirtualHeightCache(){
   _messageVirtualMeasurementCycleKey='';
   _messageVirtualMeasurementRetryCount=0;
   _messageVirtualScrollActive=false;
+  clearTimeout(_messageVirtualVelocityDecayTimer);
+  _messageVirtualVelocityDecayTimer=0;
   clearTimeout(_messageVirtualScrollSettleTimer);
   _messageVirtualScrollSettleTimer=0;
   _messageVirtualDeferredMeasurement=null;
+  _messageVirtualScrollVelocity=0;
+  _messageVirtualScrollVelocityLastTop=null;
+  _messageVirtualVelocityGuardActive=false;
+  _messageVirtualDeferredMeasurementPayload=null;
 }
 function _resetMessageRenderWindow(sid){
   _messageRenderWindowSid=sid||null;
@@ -555,6 +605,10 @@ function _messageVirtualMeasurementCycleKeyFor(windowMetrics){
   ].join(':');
 }
 function _scheduleMessageVirtualMeasurementRefresh(windowMetrics){
+  if(_messageVirtualVelocityGuardActive){
+    _messageVirtualDeferredMeasurementPayload=windowMetrics||_messageVirtualDeferredMeasurementPayload;
+    return;
+  }
   if(_messageVirtualScrollActive){
     _messageVirtualDeferredMeasurement=windowMetrics;
     return;
@@ -3592,6 +3646,7 @@ if(typeof window!=='undefined'){
     _markMessageVirtualScrollActive();
     cancelAnimationFrame(_scrollRaf);
     _scrollRaf=requestAnimationFrame(()=>{
+      _updateMessageScrollVelocity(el.scrollTop,performance.now());
       const top=el.scrollTop;
       const nearBottom=el.scrollHeight-top-el.clientHeight<250;
       const movedUp=_lastScrollTop!==null&&top<_lastScrollTop-2;
