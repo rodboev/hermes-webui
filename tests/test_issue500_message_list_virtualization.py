@@ -427,3 +427,93 @@ console.log(JSON.stringify({recovered, deletes, renderCalls}));
     assert metrics["recovered"] is True
     assert metrics["deletes"] == ["sid-123"]
     assert metrics["renderCalls"] == [{"preserveScroll": True, "_virtualFallback": True}]
+
+
+def test_same_frame_restore_nudges_virtual_window_when_anchor_row_is_missing():
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + r"""
+const ROW_HEIGHT = 120;
+const TOTAL = 60;
+
+// Rows 10-59 are mounted (tail window); rows 0-9 are virtualized out.
+// Anchor points to rawIdx=5, which is in the virtualized zone.
+let mountedStart = 10;
+let scrollTopValue = 0;
+let renderCalls = [];
+let scrollTopHistory = [];
+let _messageVirtualWindowKey = 'stale-key';
+let _programmaticScroll = false;
+let _lastScrollTop = 0;
+let _messageUserUnpinned = true;
+let _scrollPinned = false;
+let _nearBottomCount = 0;
+let _messageVirtualHeightCache = Array.from({length: TOTAL}, () => ROW_HEIGHT);
+let _messageVirtualHeightCacheEntries = [];
+let _messageVirtualHeightCacheLen = TOTAL;
+let _messageVirtualHeightCacheSrc = null;
+let _messageVirtualEstimatedRowHeight = ROW_HEIGHT;
+
+function _clearMessageVirtualHeightCache(){}
+function _syncMessageVirtualHeightCache(){}
+
+const container = {
+  get scrollTop(){ return scrollTopValue; },
+  set scrollTop(v){ scrollTopHistory.push(v); scrollTopValue = v; },
+  get scrollHeight(){ return TOTAL * ROW_HEIGHT; },
+  get clientHeight(){ return 600; },
+  getBoundingClientRect(){ return {top: 0, bottom: 600}; },
+  querySelector(selector){
+    const m = selector && selector.match(/\[data-msg-idx="(\d+)"\]/);
+    if(!m) return null;
+    const idx = Number(m[1]);
+    if(idx < mountedStart || idx >= TOTAL) return null;
+    const top = (idx - mountedStart) * ROW_HEIGHT;
+    return { getBoundingClientRect(){ return {top, bottom: top + ROW_HEIGHT}; } };
+  },
+};
+function $(id){ return id === 'messages' ? container : null; }
+
+function _getVisibleMessagesWithIdx(){
+  return Array.from({length: TOTAL}, (_, i) => ({rawIdx: i}));
+}
+
+function renderMessages(opts){
+  renderCalls.push(JSON.parse(JSON.stringify(opts)));
+  mountedStart = 0;
+}
+
+function _restoreMessageViewportAnchor(anchor, delta){
+  const idx = Number(anchor.rawIdx) + Number(delta||0);
+  const row = container.querySelector(`[data-msg-idx="${idx}"]`);
+  if(!row) return false;
+  _programmaticScroll = true;
+  return true;
+}
+
+eval(extractFunc('_messageVisibleIndexForRawIdx'));
+eval(extractFunc('_messageVirtualScrollTopForVisibleIdx'));
+eval(extractFunc('_restoreMessageScrollSnapshotSameFrame'));
+
+const snapshot = {
+  anchor: {rawIdx: 5, topOffset: 50},
+  top: 100,
+  bottom: 6600,
+  scrollHeight: 7200,
+  pinned: false,
+  userUnpinned: true,
+};
+_restoreMessageScrollSnapshotSameFrame(snapshot);
+console.log(JSON.stringify({renderCalls, scrollTopHistory}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert len(metrics["renderCalls"]) == 1, (
+        "_restoreMessageScrollSnapshotSameFrame must call renderMessages to mount the virtualized-out anchor row"
+    )
+    assert metrics["renderCalls"][0].get("preserveScroll") is True, (
+        "re-render must use preserveScroll:true to avoid scrolling to bottom"
+    )
+    assert len(metrics["scrollTopHistory"]) >= 1, (
+        "scrollTop must be adjusted before re-render to place anchor row in the virtual window"
+    )
+    # rawIdx=5, visIdx=5: offset=5*120=600, viewport=600, scrollTop=round(600-600*0.35)=390
+    assert metrics["scrollTopHistory"][0] == 390
