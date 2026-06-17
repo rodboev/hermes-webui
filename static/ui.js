@@ -376,7 +376,17 @@ function _statusCardHtml(card){
 const MESSAGE_RENDER_WINDOW_DEFAULT=50;
 const MESSAGE_VIRTUAL_THRESHOLD_ROWS=80;
 const MESSAGE_VIRTUAL_BUFFER_PX=900;
-const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT=140;
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS={
+  user:120,
+  assistant:160,
+  tool_call:400,
+  default:140,
+};
+function _messageVirtualDefaultHeightForRole(role){
+  return MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS[
+    role&&Object.prototype.hasOwnProperty.call(MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS,role)?role:'default'
+  ];
+}
 const MESSAGE_VIRTUAL_MEASUREMENT_MAX_RERENDERS=2;
 let _messageRenderWindowSid=null;
 let _messageRenderWindowSize=MESSAGE_RENDER_WINDOW_DEFAULT;
@@ -384,7 +394,7 @@ let _messageVirtualHeightCache=[];
 let _messageVirtualHeightCacheEntries=[];
 let _messageVirtualHeightCacheLen=0;
 let _messageVirtualHeightCacheSrc=null;
-let _messageVirtualEstimatedRowHeight=MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT;
+let _messageVirtualEstimatedRowHeight=_messageVirtualDefaultHeightForRole('default');
 let _messageVirtualScrollRaf=0;
 let _messageVirtualWindowKey='';
 let _messageVirtualMeasurementCycleKey='';
@@ -403,7 +413,7 @@ function _clearMessageVirtualHeightCache(){
   _messageVirtualHeightCacheEntries=[];
   _messageVirtualHeightCacheLen=0;
   _messageVirtualHeightCacheSrc=null;
-  _messageVirtualEstimatedRowHeight=MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT;
+  _messageVirtualEstimatedRowHeight=_messageVirtualDefaultHeightForRole('default');
   _messageVirtualWindowKey='';
   _messageVirtualMeasurementCycleKey='';
   _messageVirtualMeasurementRetryCount=0;
@@ -450,15 +460,17 @@ function _getVisibleMessagesWithIdx(){
 function _messageVirtualWindow(opts){
   const total=Math.max(0, Number(opts&&opts.total)||0);
   const threshold=Math.max(1, Number(opts&&opts.threshold)||MESSAGE_VIRTUAL_THRESHOLD_ROWS);
-  const defaultHeight=Math.max(1, Number(opts&&opts.defaultHeight)||MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT);
+  const defaultHeight=Math.max(1, Number(opts&&opts.defaultHeight)||_messageVirtualDefaultHeightForRole('default'));
   const bufferPx=Math.max(0, Number(opts&&opts.bufferPx)||MESSAGE_VIRTUAL_BUFFER_PX);
   const viewportHeight=Math.max(defaultHeight, Number(opts&&opts.viewportHeight)||defaultHeight*6);
   const keepTailCount=Math.max(0, Number(opts&&opts.keepTailCount)||0);
   const tailStart=Math.max(0, total-keepTailCount);
   const heights=Array.isArray(opts&&opts.heights)?opts.heights:[];
+  const roleForIdx=typeof (opts&&opts.roleForIdx)==='function'?opts.roleForIdx:null;
   const rowHeightFor=(idx)=>{
     const cached=Number(heights[idx]);
-    return Number.isFinite(cached)&&cached>0?cached:defaultHeight;
+    if(Number.isFinite(cached)&&cached>0) return cached;
+    return roleForIdx?Math.max(1,_messageVirtualDefaultHeightForRole(roleForIdx(idx))):defaultHeight;
   };
   if(total<=Math.max(threshold, keepTailCount)){
     return {virtualized:false,start:0,end:total,topPad:0,bottomPad:0,total,tailStart};
@@ -609,6 +621,19 @@ function _syncMessageVirtualHeightCache(visWithIdx){
   _messageVirtualHeightCacheLen=S.messages.length;
   _messageVirtualHeightCacheSrc=S.messages;
 }
+function _messageVirtualRoleForEntry(entry){
+  const m=entry&&entry.m;
+  if(!m) return 'default';
+  if(m.role==='user') return 'user';
+  if(m.role==='assistant'){
+    if((Array.isArray(m.tool_calls)&&m.tool_calls.length>0)||
+       (Array.isArray(m.content)&&m.content.some(p=>p&&p.type==='tool_use'))||
+       (Array.isArray(m._partial_tool_calls)&&m._partial_tool_calls.length>0))
+      return 'tool_call';
+    return 'assistant';
+  }
+  return 'default';
+}
 function _currentMessageVirtualWindow(visWithIdx, keepTailCount){
   _syncMessageVirtualHeightCache(visWithIdx);
   const container=$('messages');
@@ -627,6 +652,7 @@ function _currentMessageVirtualWindow(visWithIdx, keepTailCount){
     viewportHeight:container?container.clientHeight:(_messageVirtualEstimatedRowHeight*6),
     heights:_messageVirtualHeightCache,
     defaultHeight:_messageVirtualEstimatedRowHeight,
+    roleForIdx:idx=>_messageVirtualRoleForEntry(visWithIdx[idx]),
     keepTailCount,
   });
 }

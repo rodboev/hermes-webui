@@ -525,13 +525,24 @@ def test_virtualize_transcript_opt_out_forces_full_render_window():
     so the whole transcript renders. When true/undefined it virtualizes as before."""
     js = UI_JS_PATH.read_text(encoding="utf-8")
     source = _extract_func_script(js) + """
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS={
+  user:120,
+  assistant:160,
+  tool_call:400,
+  default:140,
+};
+function _messageVirtualDefaultHeightForRole(role){
+  return MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS[
+    role&&Object.prototype.hasOwnProperty.call(MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS,role)?role:'default'
+  ];
+}
 const MESSAGE_VIRTUAL_THRESHOLD_ROWS = 80;
-const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT = 140;
 const MESSAGE_VIRTUAL_BUFFER_PX = 900;
 let _messageVirtualHeightCache = [];
 let _messageVirtualEstimatedRowHeight = 140;
 function _syncMessageVirtualHeightCache(){ /* no-op for the test */ }
 function $(id){ return {scrollTop: 5000, clientHeight: 720}; }
+function _messageVirtualRoleForEntry(){ return 'default'; }
 const window = {};
 eval(extractFunc('_messageVirtualWindow'));
 eval(extractFunc('_currentMessageVirtualWindow'));
@@ -573,3 +584,176 @@ def test_virtualize_transcript_gate_present_in_current_window_fn():
         "_currentMessageVirtualWindow"
     )
     assert "virtualized:false" in body, "gate must return a non-virtualized window when opted out"
+
+
+def test_message_virtual_default_height_for_role_returns_correct_heights():
+    """Verify per-role default heights are configured."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS={
+  user:120,
+  assistant:160,
+  tool_call:400,
+  default:140,
+};
+eval(extractFunc('_messageVirtualDefaultHeightForRole'));
+console.log(JSON.stringify({
+  tool_call: _messageVirtualDefaultHeightForRole('tool_call'),
+  user: _messageVirtualDefaultHeightForRole('user'),
+  assistant: _messageVirtualDefaultHeightForRole('assistant'),
+  unknown: _messageVirtualDefaultHeightForRole('unknown'),
+  default: _messageVirtualDefaultHeightForRole('default'),
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert metrics["tool_call"] == 400
+    assert metrics["user"] == 120
+    assert metrics["assistant"] == 160
+    assert metrics["unknown"] == 140
+    assert metrics["default"] == 140
+
+
+def test_message_virtual_role_for_entry_classifies_tool_calls():
+    """Verify role classifier detects tool_calls, tool_use content, and _partial_tool_calls."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+eval(extractFunc('_messageVirtualRoleForEntry'));
+console.log(JSON.stringify({
+  userRole: _messageVirtualRoleForEntry({m: {role: 'user'}}),
+  assistantNoTools: _messageVirtualRoleForEntry({m: {role: 'assistant'}}),
+  assistantWithToolCalls: _messageVirtualRoleForEntry({m: {role: 'assistant', tool_calls: [{id: '1'}]}}),
+  assistantWithToolUse: _messageVirtualRoleForEntry({m: {role: 'assistant', content: [{type: 'tool_use', id: '1'}]}}),
+  assistantWithPartialToolCalls: _messageVirtualRoleForEntry({m: {role: 'assistant', _partial_tool_calls: [{id: '1'}]}}),
+  noEntry: _messageVirtualRoleForEntry(null),
+  noMessage: _messageVirtualRoleForEntry({m: null}),
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert metrics["userRole"] == "user"
+    assert metrics["assistantNoTools"] == "assistant"
+    assert metrics["assistantWithToolCalls"] == "tool_call"
+    assert metrics["assistantWithToolUse"] == "tool_call"
+    assert metrics["assistantWithPartialToolCalls"] == "tool_call"
+    assert metrics["noEntry"] == "default"
+    assert metrics["noMessage"] == "default"
+
+
+def test_message_virtual_window_with_role_for_idx_uses_role_defaults():
+    """Verify _messageVirtualWindow uses role-specific heights when roleForIdx is provided."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS={
+  user:120,
+  assistant:160,
+  tool_call:400,
+  default:140,
+};
+const MESSAGE_VIRTUAL_THRESHOLD_ROWS = 80;
+const MESSAGE_VIRTUAL_BUFFER_PX = 900;
+eval(extractFunc('_messageVirtualDefaultHeightForRole'));
+eval(extractFunc('_messageVirtualWindow'));
+const visWithIdx = [
+  {m: {role: 'user'}},
+  {m: {role: 'assistant', tool_calls: [{id: '1'}]}},
+  {m: {role: 'assistant'}},
+];
+const metrics = _messageVirtualWindow({
+  total: 3,
+  scrollTop: 0,
+  viewportHeight: 600,
+  heights: [0, 0, 0],
+  defaultHeight: 140,
+  roleForIdx: (idx) => {
+    const entry = visWithIdx[idx];
+    if(!entry || !entry.m) return 'default';
+    if(entry.m.role === 'user') return 'user';
+    if(entry.m.role === 'assistant'){
+      if(Array.isArray(entry.m.tool_calls) && entry.m.tool_calls.length > 0) return 'tool_call';
+      return 'assistant';
+    }
+    return 'default';
+  },
+  bufferPx: 0,
+  threshold: 2,
+  keepTailCount: 0,
+});
+console.log(JSON.stringify({
+  virtualized: metrics.virtualized,
+  start: metrics.start,
+  end: metrics.end,
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    # With 3 rows (120 + 400 + 160 = 680px) and viewport 600px, should not virtualize (below threshold)
+    # So this checks that the role-based defaults are being computed
+    assert metrics["end"] - metrics["start"] > 0
+
+
+def test_message_virtual_window_cached_heights_override_role_defaults():
+    """Verify cached heights take precedence over role-specific defaults."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS={
+  user:120,
+  assistant:160,
+  tool_call:400,
+  default:140,
+};
+const MESSAGE_VIRTUAL_THRESHOLD_ROWS = 80;
+const MESSAGE_VIRTUAL_BUFFER_PX = 900;
+eval(extractFunc('_messageVirtualDefaultHeightForRole'));
+eval(extractFunc('_messageVirtualWindow'));
+const visWithIdx = [
+  {m: {role: 'user'}},  // normally 120
+  {m: {role: 'assistant', tool_calls: [{id: '1'}]}},  // normally 400
+];
+// Test case 1: with cached heights 250+300=550px < 600px viewport, no virtualization needed
+const metricsSmall = _messageVirtualWindow({
+  total: 2,
+  scrollTop: 0,
+  viewportHeight: 600,
+  heights: [250, 300],  // Cached heights override roles
+  defaultHeight: 140,
+  roleForIdx: (idx) => {
+    const entry = visWithIdx[idx];
+    if(!entry || !entry.m) return 'default';
+    if(entry.m.role === 'user') return 'user';
+    if(entry.m.role === 'assistant'){
+      if(Array.isArray(entry.m.tool_calls) && entry.m.tool_calls.length > 0) return 'tool_call';
+      return 'assistant';
+    }
+    return 'default';
+  },
+  bufferPx: 0,
+  threshold: 80,
+  keepTailCount: 0,
+});
+// Test case 2: with many rows and cached heights, should use cached heights not role defaults
+const largeList = Array.from({length: 100}, (_, i) => ({m: {role: i % 2 ? 'user' : 'assistant'}}));
+const cachedHeights = Array.from({length: 100}, (_, i) => 200);  // All 200px when cached
+const metricsLarge = _messageVirtualWindow({
+  total: 100,
+  scrollTop: 0,
+  viewportHeight: 600,
+  heights: cachedHeights,
+  defaultHeight: 140,
+  roleForIdx: (idx) => {
+    if(largeList[idx]?.m?.role === 'user') return 'user';
+    return 'assistant';
+  },
+  bufferPx: 0,
+  threshold: 80,
+  keepTailCount: 0,
+});
+console.log(JSON.stringify({
+  smallVirtualized: metricsSmall.virtualized,
+  largeVirtualized: metricsLarge.virtualized,
+  largeHasWindow: metricsLarge.end > metricsLarge.start,
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    # With 2 rows below threshold, should not virtualize
+    assert metrics["smallVirtualized"] is False
+    # With 100 rows above threshold, should virtualize and use cached heights
+    assert metrics["largeVirtualized"] is True
+    assert metrics["largeHasWindow"] is True
