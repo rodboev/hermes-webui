@@ -696,6 +696,25 @@ function _restoreMessageViewportAnchor(anchor, rawIdxDelta){
   requestAnimationFrame(()=>{ _programmaticScroll=false; });
   return true;
 }
+function _compensateScrollForMeasurementDelta(renderFn){
+  const container=$('messages');
+  if(!container) return renderFn();
+  const anchorBefore=_captureMessageViewportAnchor();
+  const scrollTopBefore=container.scrollTop;
+  renderFn();
+  if(!anchorBefore) return;
+  const row=container.querySelector(`[data-msg-idx="${anchorBefore.rawIdx}"]`);
+  if(!row) return;
+  const containerRect=container.getBoundingClientRect();
+  const rowRect=row.getBoundingClientRect();
+  const actualOffset=rowRect.top-containerRect.top;
+  const delta=actualOffset-anchorBefore.topOffset;
+  if(Math.abs(delta)<2) return;
+  _programmaticScroll=true;
+  container.scrollTop=scrollTopBefore+delta;
+  _lastScrollTop=container.scrollTop;
+  requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
+}
 function _messageViewportIntersectsRenderedRow(){
   const container=$('messages');
   if(!container) return true;
@@ -771,7 +790,7 @@ function _scheduleMessageVirtualizedRender(force){
     const liveWindow=_currentMessageVirtualWindow(liveVisWithIdx,_messageVirtualKeepTailCount());
     const liveKey=_messageVirtualWindowKeyFor(liveWindow);
     if(!force&&liveKey===_messageVirtualWindowKey) return;
-    renderMessages({ preserveScroll:true });
+    _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
   });
 }
 

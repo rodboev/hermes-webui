@@ -573,3 +573,202 @@ def test_virtualize_transcript_gate_present_in_current_window_fn():
         "_currentMessageVirtualWindow"
     )
     assert "virtualized:false" in body, "gate must return a non-virtualized window when opted out"
+
+
+def test_compensate_scroll_for_measurement_delta_no_anchor_does_not_throw():
+    """When _captureMessageViewportAnchor returns null, the compensation helper
+    should not throw and should not mutate scrollTop."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+let renderCalls = [];
+let scrollTopWasMutated = false;
+let scrollTopValue = 100;
+const container = {
+  get scrollTop(){ return scrollTopValue; },
+  set scrollTop(v){ scrollTopWasMutated = true; scrollTopValue = v; },
+  getBoundingClientRect(){ return {top: 0}; },
+  querySelector(){ return null; },
+};
+function $(id){ return id === 'messages' ? container : null; }
+function _captureMessageViewportAnchor(){ return null; }
+let _programmaticScroll = false;
+let _lastScrollTop = 0;
+function _scheduleMessageVirtualizedRender(){ renderCalls.push(true); }
+function requestAnimationFrame(cb){ cb(); }
+eval(extractFunc('_compensateScrollForMeasurementDelta'));
+_compensateScrollForMeasurementDelta(()=>{ _scheduleMessageVirtualizedRender(true); });
+console.log(JSON.stringify({
+  renderCalled: renderCalls.length > 0,
+  scrollTopMutated: scrollTopWasMutated,
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert metrics["renderCalled"] is True
+    assert metrics["scrollTopMutated"] is False
+
+
+def test_compensate_scroll_for_measurement_delta_shifts_scroll_when_anchor_moves():
+    """When the anchor row shifts position due to measurement changes,
+    scrollTop should be adjusted by the delta."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+let scrollTopValue = 200;
+let scrollHistory = [];
+const container = {
+  get scrollTop(){ return scrollTopValue; },
+  set scrollTop(v){ scrollHistory.push(v); scrollTopValue = v; },
+  getBoundingClientRect(){ return {top: 50, bottom: 650}; },
+  querySelector(selector){
+    if(selector === '[data-msg-idx="42"]'){
+      // After render, the row moved from relative offset 100 to 150 (50px shift)
+      return {
+        getBoundingClientRect(){ return {top: 100}; }
+      };
+    }
+    return null;
+  },
+};
+function $(id){ return id === 'messages' ? container : null; }
+function _captureMessageViewportAnchor(){
+  // Anchor was at topOffset 100 before the render
+  return {rawIdx: 42, topOffset: 100};
+}
+let _programmaticScroll = false;
+let _lastScrollTop = 0;
+let renderCalls = [];
+function _scheduleMessageVirtualizedRender(){ renderCalls.push(true); }
+function requestAnimationFrame(cb){ cb(); }
+eval(extractFunc('_compensateScrollForMeasurementDelta'));
+_compensateScrollForMeasurementDelta(()=>{ _scheduleMessageVirtualizedRender(true); });
+console.log(JSON.stringify({
+  scrollHistory: scrollHistory,
+  renderCalled: renderCalls.length > 0,
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert metrics["renderCalled"] is True
+    # actualOffset = 100 - 50 = 50, delta = 50 - 100 = -50 (row moved up 50px)
+    # scrollTop should adjust: 200 + (-50) = 150
+    assert metrics["scrollHistory"] == [150], (
+        "scrollTop should shift by -50px to keep anchor in place"
+    )
+
+
+def test_compensate_scroll_for_measurement_delta_skips_small_delta():
+    """When delta < 2px, no compensation is applied (tolerance)."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+let scrollTopValue = 200;
+let scrollHistory = [];
+const container = {
+  get scrollTop(){ return scrollTopValue; },
+  set scrollTop(v){ scrollHistory.push(v); scrollTopValue = v; },
+  getBoundingClientRect(){ return {top: 50, bottom: 650}; },
+  querySelector(selector){
+    if(selector === '[data-msg-idx="42"]'){
+      // Row moved by only 1px, within tolerance
+      return {
+        getBoundingClientRect(){ return {top: 251}; }
+      };
+    }
+    return null;
+  },
+};
+function $(id){ return id === 'messages' ? container : null; }
+function _captureMessageViewportAnchor(){
+  return {rawIdx: 42, topOffset: 200};
+}
+let _programmaticScroll = false;
+let _lastScrollTop = 0;
+let renderCalls = [];
+function _scheduleMessageVirtualizedRender(){ renderCalls.push(true); }
+function requestAnimationFrame(cb){ cb(); }
+eval(extractFunc('_compensateScrollForMeasurementDelta'));
+_compensateScrollForMeasurementDelta(()=>{ _scheduleMessageVirtualizedRender(true); });
+console.log(JSON.stringify({
+  scrollHistory: scrollHistory,
+  renderCalled: renderCalls.length > 0,
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert metrics["renderCalled"] is True
+    assert metrics["scrollHistory"] == [], (
+        "scrollTop should not change for delta < 2px"
+    )
+
+
+def test_compensate_scroll_for_measurement_delta_sets_programmatic_scroll_flag():
+    """_programmaticScroll should be set during compensation and cleared after rAF+setTimeout."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+let scrollTopValue = 200;
+let _programmaticScroll = false;
+let _lastScrollTop = 0;
+let scrollSetCount = 0;
+const container = {
+  get scrollTop(){ return scrollTopValue; },
+  set scrollTop(v){
+    scrollSetCount++;
+    scrollTopValue = v;
+  },
+  getBoundingClientRect(){ return {top: 50, bottom: 650}; },
+  querySelector(selector){
+    if(selector === '[data-msg-idx="42"]'){
+      return {
+        getBoundingClientRect(){ return {top: 300}; }
+      };
+    }
+    return null;
+  },
+};
+function $(id){ return id === 'messages' ? container : null; }
+function _captureMessageViewportAnchor(){
+  return {rawIdx: 42, topOffset: 200};
+}
+let renderCalls = [];
+function _scheduleMessageVirtualizedRender(){ renderCalls.push(true); }
+let timeoutCbBeingCalled = false;
+function requestAnimationFrame(cb){
+  // This is called with a callback that will eventually clear _programmaticScroll
+  cb();
+}
+function setTimeout(cb, delay){
+  // This is called from within the rAF callback (after scrollTop is set)
+  // The callback should clear _programmaticScroll
+  timeoutCbBeingCalled = true;
+  cb();
+  timeoutCbBeingCalled = false;
+}
+eval(extractFunc('_compensateScrollForMeasurementDelta'));
+_compensateScrollForMeasurementDelta(()=>{ _scheduleMessageVirtualizedRender(true); });
+console.log(JSON.stringify({
+  programmaticScrollWasTrue: _programmaticScroll === true || scrollSetCount > 0,
+  programmaticScrollNowFalse: _programmaticScroll === false,
+  scrollWasSet: scrollSetCount > 0,
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    # _programmaticScroll should have been set to true when scrollTop was adjusted
+    assert metrics["scrollWasSet"] is True, (
+        "scrollTop should be set when delta > 2px"
+    )
+    # _programmaticScroll should have been cleared after the setTimeout callback
+    assert metrics["programmaticScrollNowFalse"] is True, (
+        "_programmaticScroll should be false after setTimeout completes"
+    )
+
+
+def test_virtualized_render_uses_compensation_helper():
+    """_scheduleMessageVirtualizedRender must wrap renderMessages with _compensateScrollForMeasurementDelta."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    start = js.index("function _scheduleMessageVirtualizedRender(")
+    end = js.index("\n// ──", start)
+    body = js[start:end]
+
+    assert "_compensateScrollForMeasurementDelta" in body, (
+        "_scheduleMessageVirtualizedRender must call "
+        "_compensateScrollForMeasurementDelta to compensate scroll after measurement-driven rerenders"
+    )
+    assert "renderMessages(" in body, (
+        "the compensation helper should wrap the actual renderMessages call"
+    )
