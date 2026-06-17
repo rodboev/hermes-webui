@@ -8,6 +8,7 @@ pathspecs, and keeps all Git subprocess calls shell-free and bounded.
 from __future__ import annotations
 
 import difflib
+import logging
 import os
 import shutil
 import subprocess
@@ -18,6 +19,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+logger = logging.getLogger(__name__)
 
 from api.workspace import rmtree_anchored, safe_resolve_ws, unlink_anchored
 
@@ -81,7 +84,6 @@ def _hardened_git_argv(
     destructive: bool = False,
     attributes_file: str | None = None,
     hooks_path: str | None = None,
-    extra_configs: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     argv = ["git"]
     for key, value in _GIT_HARDENED_CONFIG:
@@ -93,8 +95,6 @@ def _hardened_git_argv(
             argv.extend(["-c", f"core.hooksPath={hooks_path}"])
     if attributes_file:
         argv.extend(["-c", f"core.attributesFile={attributes_file}"])
-    for key, value in extra_configs or ():
-        argv.extend(["-c", f"{key}={value}"])
     argv.extend(args)
     return argv
 
@@ -228,13 +228,17 @@ def _run_git(
         if effective_destructive:
             hooks_path = tempfile.mkdtemp(prefix="hermes-webui-git-hooks-")
             temporary_dirs = [hooks_path]
+        if extra_configs:
+            run_env["GIT_CONFIG_COUNT"] = str(len(extra_configs))
+            for i, (key, value) in enumerate(extra_configs):
+                run_env[f"GIT_CONFIG_KEY_{i}"] = key
+                run_env[f"GIT_CONFIG_VALUE_{i}"] = value
         result = subprocess.run(
             _hardened_git_argv(
                 args,
                 destructive=effective_destructive,
                 attributes_file=attributes_file,
                 hooks_path=hooks_path,
-                extra_configs=extra_configs,
             ),
             cwd=str(cwd),
             shell=False,
@@ -359,6 +363,9 @@ def _destructive_filter_overrides(cwd: Path, env: dict[str, str]) -> list[tuple[
     )
     overrides: list[tuple[str, str]] = []
     for name in sorted(names):
+        if "=" in name or "\n" in name:
+            logger.warning("Skipping filter name with illegal characters: %r", name)
+            continue
         overrides.extend(
             [
                 (f"filter.{name}.clean", "cat"),
@@ -380,7 +387,13 @@ def _destructive_merge_driver_overrides(cwd: Path, env: dict[str, str]) -> list[
     )
     # Replace repo-defined merge drivers with Git's trusted three-way merge
     # binary so stash restores cannot invoke workspace-controlled helpers.
-    return [(f"merge.{name}.driver", 'git merge-file "%A" "%O" "%B"') for name in sorted(names)]
+    overrides: list[tuple[str, str]] = []
+    for name in sorted(names):
+        if "=" in name or "\n" in name:
+            logger.warning("Skipping merge driver name with illegal characters: %r", name)
+            continue
+        overrides.append((f"merge.{name}.driver", 'git merge-file "%A" "%O" "%B"'))
+    return overrides
 
 
 def _destructive_remote_helper_overrides(cwd: Path, env: dict[str, str]) -> list[tuple[str, str]]:
@@ -393,6 +406,9 @@ def _destructive_remote_helper_overrides(cwd: Path, env: dict[str, str]) -> list
     )
     overrides: list[tuple[str, str]] = []
     for name in sorted(names):
+        if "=" in name or "\n" in name:
+            logger.warning("Skipping remote helper name with illegal characters: %r", name)
+            continue
         overrides.extend(
             [
                 (f"remote.{name}.uploadpack", "git-upload-pack"),
@@ -420,6 +436,12 @@ def _destructive_remote_command_args(args: list[str], cwd: Path, env: dict[str, 
     if command == "push":
         return [command, "--receive-pack=git-receive-pack", *args[1:]]
     return args
+
+
+def _has_repo_local_filters(cwd: Path, env: dict[str, str]) -> bool:
+    names = _filter_names_for_scope("--local", cwd, env)
+    names |= _filter_names_for_scope("--worktree", cwd, env, ignore_unsupported=True)
+    return bool(names)
 
 
 def resolve_git_context(workspace: str | Path) -> GitContext | None:
@@ -910,7 +932,8 @@ def _validate_new_branch_name(ctx: GitContext, name: str) -> str:
 
 
 def _dirty_worktree(ctx: GitContext) -> bool:
-    result = _run_git(ctx, ["status", "--porcelain=v2", "--untracked-files=all"], check=True)
+    result = _run_git(ctx, ["status", "--porcelain=v2", "--untracked-files=all"],
+                      check=True, neutralize_filter_programs=True)
     return bool(result.stdout.strip())
 
 
@@ -952,6 +975,11 @@ def _hermes_branch_switch_stashes(ctx: GitContext) -> list[dict]:
 
 
 def _restore_branch_switch_stash_locked(ctx: GitContext, branch: str) -> dict:
+    if _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+        return {
+            "restore_blocked": True,
+            "restore_reason": "Repository defines local filter programs",
+        }
     if _dirty_worktree(ctx):
         return {}
     for item in _hermes_branch_switch_stashes(ctx):
@@ -1008,6 +1036,11 @@ def _perform_checkout_locked(
     new_branch: str | None,
     track: bool,
 ) -> subprocess.CompletedProcess[str]:
+    if _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+        raise GitWorkspaceError(
+            "Cannot checkout: repository defines local filter programs that would alter file content",
+            "filtered_path",
+        )
     if mode == "local":
         target = _validate_local_branch(ctx, ref)
         return _run_git(
@@ -1116,6 +1149,11 @@ def git_stash_and_checkout(
     restored: dict = {}
     with _git_mutation_lock(ctx):
         _validate_checkout_request_locked(ctx, ref, mode, new_branch)
+        if _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+            raise GitWorkspaceError(
+                "Cannot stash: repository defines local filter programs that would alter file content",
+                "filtered_path",
+            )
         stashed = False
         if _dirty_worktree(ctx):
             stash_result = _run_git(
@@ -1301,6 +1339,12 @@ def git_discard(workspace: str | Path, paths: Iterable[str], *, delete_untracked
     if ctx is None:
         raise GitWorkspaceError("Workspace is not a Git repository", "not_a_repo")
     with _git_mutation_lock(ctx):
+        if _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+            raise GitWorkspaceError(
+                "Repository uses local Git filters; discard may corrupt working-tree content. "
+                "Use the terminal to discard manually.",
+                "filtered_path",
+            )
         status = git_status(workspace)
         by_path = {f["path"]: f for f in status.get("files", [])}
         for path in _clean_paths(paths):
