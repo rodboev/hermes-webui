@@ -2215,6 +2215,6 @@ def test_dirty_worktree_uses_filter_neutralization(tmp_path):
     _git(repo, "config", "filter.demo.clean", f'"{sys.executable}" "{helper}"')
 
     ctx = resolve_git_context(repo)
-    result = _dirty_worktree(ctx)
+    _dirty_worktree(ctx)
 
     assert not marker.exists()

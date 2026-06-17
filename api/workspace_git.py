@@ -363,7 +363,7 @@ def _destructive_filter_overrides(cwd: Path, env: dict[str, str]) -> list[tuple[
     )
     overrides: list[tuple[str, str]] = []
     for name in sorted(names):
-        if "=" in name or "\n" in name:
+        if "\n" in name or "\0" in name:
             logger.warning("Skipping filter name with illegal characters: %r", name)
             continue
         overrides.extend(
@@ -389,7 +389,7 @@ def _destructive_merge_driver_overrides(cwd: Path, env: dict[str, str]) -> list[
     # binary so stash restores cannot invoke workspace-controlled helpers.
     overrides: list[tuple[str, str]] = []
     for name in sorted(names):
-        if "=" in name or "\n" in name:
+        if "\n" in name or "\0" in name:
             logger.warning("Skipping merge driver name with illegal characters: %r", name)
             continue
         overrides.append((f"merge.{name}.driver", 'git merge-file "%A" "%O" "%B"'))
@@ -406,7 +406,7 @@ def _destructive_remote_helper_overrides(cwd: Path, env: dict[str, str]) -> list
     )
     overrides: list[tuple[str, str]] = []
     for name in sorted(names):
-        if "=" in name or "\n" in name:
+        if "\n" in name or "\0" in name:
             logger.warning("Skipping remote helper name with illegal characters: %r", name)
             continue
         overrides.extend(
@@ -975,7 +975,7 @@ def _hermes_branch_switch_stashes(ctx: GitContext) -> list[dict]:
 
 
 def _restore_branch_switch_stash_locked(ctx: GitContext, branch: str) -> dict:
-    if _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+    if workspace_git_destructive_enabled() and _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
         return {
             "restore_blocked": True,
             "restore_reason": "Repository defines local filter programs",
@@ -1036,7 +1036,7 @@ def _perform_checkout_locked(
     new_branch: str | None,
     track: bool,
 ) -> subprocess.CompletedProcess[str]:
-    if _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+    if workspace_git_destructive_enabled() and _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
         raise GitWorkspaceError(
             "Cannot checkout: repository defines local filter programs that would alter file content",
             "filtered_path",
@@ -1149,7 +1149,7 @@ def git_stash_and_checkout(
     restored: dict = {}
     with _git_mutation_lock(ctx):
         _validate_checkout_request_locked(ctx, ref, mode, new_branch)
-        if _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+        if workspace_git_destructive_enabled() and _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
             raise GitWorkspaceError(
                 "Cannot stash: repository defines local filter programs that would alter file content",
                 "filtered_path",
@@ -1339,7 +1339,7 @@ def git_discard(workspace: str | Path, paths: Iterable[str], *, delete_untracked
     if ctx is None:
         raise GitWorkspaceError("Workspace is not a Git repository", "not_a_repo")
     with _git_mutation_lock(ctx):
-        if _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+        if workspace_git_destructive_enabled() and _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
             raise GitWorkspaceError(
                 "Repository uses local Git filters; discard may corrupt working-tree content. "
                 "Use the terminal to discard manually.",
