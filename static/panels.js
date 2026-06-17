@@ -6765,9 +6765,8 @@ async function loadSettingsPanel(){
     }
     const virtualizeTranscriptCb=$('settingsVirtualizeTranscript');
     if(virtualizeTranscriptCb){
-      // #4325: opt-out toggle, default ON. settings.virtualize_transcript may be
-      // undefined on older configs → treat as enabled (!==false).
-      virtualizeTranscriptCb.checked=settings.virtualize_transcript!==false;
+      // #4343: opt-in toggle, default OFF. Only enabled when explicitly true.
+      virtualizeTranscriptCb.checked=settings.virtualize_transcript===true;
       window._virtualizeTranscript=virtualizeTranscriptCb.checked;
       virtualizeTranscriptCb.addEventListener('change',()=>{
         window._virtualizeTranscript=virtualizeTranscriptCb.checked;

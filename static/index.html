@@ -1080,10 +1080,10 @@
             </div>
             <div class="settings-field">
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                <input type="checkbox" id="settingsVirtualizeTranscript" style="width:15px;height:15px;accent-color:var(--accent)" checked>
-                <span data-i18n="settings_label_virtualize_transcript">Virtualize long transcripts</span>
+                <input type="checkbox" id="settingsVirtualizeTranscript" style="width:15px;height:15px;accent-color:var(--accent)">
+                <span data-i18n="settings_label_virtualize_transcript">Virtualize long transcripts (experimental)</span>
               </label>
-              <div style="font-size:11px;color:var(--muted);margin-top:4px" data-i18n="settings_desc_virtualize_transcript">Render only the visible portion of very long chat transcripts (over 80 messages) for smoother scrolling. Turn this off if you see any rendering or scroll issues, or want the browser's Find (Ctrl+F) to match the whole conversation — the full transcript will render at once.</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px" data-i18n="settings_desc_virtualize_transcript">Experimental: render only the visible portion of very long chat transcripts (over 80 messages). This can cause scroll flicker on sessions with many tall tool-call blocks. Leave this off unless you want to test virtualized scrolling. The browser's Find (Ctrl+F) only searches rendered rows when enabled.</div>
             </div>
             <div class="settings-field">
               <label for="settingsSendKey" data-i18n="settings_label_send_key">Send Key</label>
