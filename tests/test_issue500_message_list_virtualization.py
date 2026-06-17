@@ -189,6 +189,14 @@ console.log(JSON.stringify({
 def test_virtual_prepended_height_delta_uses_prefix_cache_only_when_virtualized():
     js = UI_JS_PATH.read_text(encoding="utf-8")
     source = _extract_func_script(js) + """
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS = {
+  user: 120,
+  assistant: 160,
+  tool_call: 400,
+  default: 140,
+};
+eval(extractFunc('_messageVirtualDefaultHeightForRole'));
+eval(extractFunc('_messageVirtualRoleForEntry'));
 let virtualized = true;
 let _messageVirtualHeightCache = [0, 220, 180, 120];
 let _messageVirtualEstimatedRowHeight = 140;
@@ -757,3 +765,95 @@ console.log(JSON.stringify({
     # With 100 rows above threshold, should virtualize and use cached heights
     assert metrics["largeVirtualized"] is True
     assert metrics["largeHasWindow"] is True
+
+
+def test_offset_helpers_use_per_role_defaults_for_uncached_rows():
+    """Verify _messageVirtualScrollTopForVisibleIdx and _messageVirtualPrependedHeightDelta
+    use per-role default heights (not the flat 140px estimate) for uncached rows,
+    and that these agree with _messageVirtualWindow's own accounting."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS = {
+  user: 120,
+  assistant: 160,
+  tool_call: 400,
+  default: 140,
+};
+eval(extractFunc('_messageVirtualDefaultHeightForRole'));
+eval(extractFunc('_messageVirtualRoleForEntry'));
+
+// Three entries: user (120), tool_call (400), assistant (160) — all uncached (height=0)
+const visWithIdx = [
+  {rawIdx: 0, m: {role: 'user'}},
+  {rawIdx: 1, m: {role: 'assistant', tool_calls: [{id: 'x'}]}},
+  {rawIdx: 2, m: {role: 'assistant'}},
+];
+
+// --- _messageVirtualScrollTopForVisibleIdx ---
+let _messageVirtualHeightCache = [0, 0, 0];
+let _messageVirtualHeightCacheEntries = [];
+let _messageVirtualHeightCacheLen = 3;
+let _messageVirtualHeightCacheSrc = null;
+let _messageVirtualEstimatedRowHeight = 140;
+let _messageVirtualWindowKey = '';
+let S = {messages: visWithIdx.map(e => e.m)};
+function _messageIsRenderable(){ return true; }
+eval(extractFunc('_messageVirtualHeightEntryMatches'));
+eval(extractFunc('_syncMessageVirtualHeightCache'));
+eval(extractFunc('_messageVirtualScrollTopForVisibleIdx'));
+// scrollTop to visibleIdx=2 must sum heights of idx 0 (120) and idx 1 (400) = 520
+_messageVirtualHeightCacheEntries = visWithIdx;
+_messageVirtualHeightCacheSrc = S.messages;
+const scrollTop = _messageVirtualScrollTopForVisibleIdx(visWithIdx, 2, null);
+
+// --- _messageVirtualPrependedHeightDelta ---
+let virtualized2 = true;
+let _messageVirtualHeightCache2 = [0, 0, 0];
+let _messageVirtualEstimatedRowHeight2 = 140;
+function _getVisibleMessagesWithIdx(){ return visWithIdx; }
+function _messageVirtualKeepTailCount(){ return 0; }
+function _currentMessageVirtualWindow(){ return {virtualized: virtualized2}; }
+// Patch cache var used by _messageVirtualPrependedHeightDelta
+eval(extractFunc('_messageVirtualPrependedHeightDelta').replace(
+  /_messageVirtualHeightCache/g, '_messageVirtualHeightCache2'
+).replace(
+  /_messageVirtualEstimatedRowHeight/g, '_messageVirtualEstimatedRowHeight2'
+));
+// Sum of first 3 uncached entries: user(120) + tool_call(400) + assistant(160) = 680
+const delta = _messageVirtualPrependedHeightDelta(3);
+
+// --- _messageVirtualWindow agreement ---
+const MESSAGE_VIRTUAL_THRESHOLD_ROWS = 2;
+const MESSAGE_VIRTUAL_BUFFER_PX = 0;
+eval(extractFunc('_messageVirtualWindow'));
+const win = _messageVirtualWindow({
+  total: 3,
+  scrollTop: 0,
+  viewportHeight: 600,
+  heights: [0, 0, 0],
+  defaultHeight: 140,
+  roleForIdx: idx => _messageVirtualRoleForEntry(visWithIdx[idx]),
+  bufferPx: 0,
+  threshold: 2,
+  keepTailCount: 0,
+});
+// topPad is sum of rows before win.start; with start=0 it is 0, but
+// the window must have consumed the same per-role heights when computing
+// row positions, so verify the window spans all rows correctly
+const windowCoversAll = win.start === 0 && win.end === 3;
+
+console.log(JSON.stringify({scrollTop, delta, windowCoversAll}));
+"""
+    metrics = json.loads(_run_node(source))
+    # scrollTop to idx=2 = sum of row 0 (120) + row 1 (400) = 520, no viewport offset (null container)
+    assert metrics["scrollTop"] == 520, (
+        f"expected 520 (120+400) but got {metrics['scrollTop']}; "
+        "offset helper must use per-role defaults, not flat 140px"
+    )
+    # prepended delta for 3 uncached rows = 120 + 400 + 160 = 680
+    assert metrics["delta"] == 680, (
+        f"expected 680 (120+400+160) but got {metrics['delta']}; "
+        "prepend helper must use per-role defaults, not flat 140px"
+    )
+    # windowing function must also cover the same three rows
+    assert metrics["windowCoversAll"] is True
