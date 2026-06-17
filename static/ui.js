@@ -389,6 +389,21 @@ let _messageVirtualScrollRaf=0;
 let _messageVirtualWindowKey='';
 let _messageVirtualMeasurementCycleKey='';
 let _messageVirtualMeasurementRetryCount=0;
+let _messageVirtualScrollActive=false;
+let _messageVirtualScrollSettleTimer=0;
+let _messageVirtualDeferredMeasurement=null;
+function _markMessageVirtualScrollActive(){
+  _messageVirtualScrollActive=true;
+  clearTimeout(_messageVirtualScrollSettleTimer);
+  _messageVirtualScrollSettleTimer=setTimeout(()=>{
+    _messageVirtualScrollActive=false;
+    if(_messageVirtualDeferredMeasurement){
+      const deferred=_messageVirtualDeferredMeasurement;
+      _messageVirtualDeferredMeasurement=null;
+      _scheduleMessageVirtualMeasurementRefresh(deferred);
+    }
+  },150);
+}
 // Cached visWithIdx array — invalidated when S.messages.length changes.
 let _visWithIdxCache=null;
 let _visWithIdxCacheLen=0;
@@ -524,6 +539,10 @@ function _messageVirtualMeasurementCycleKeyFor(windowMetrics){
   ].join(':');
 }
 function _scheduleMessageVirtualMeasurementRefresh(windowMetrics){
+  if(_messageVirtualScrollActive){
+    _messageVirtualDeferredMeasurement=windowMetrics;
+    return;
+  }
   const cycleKey=_messageVirtualMeasurementCycleKeyFor(windowMetrics);
   if(_messageVirtualMeasurementCycleKey!==cycleKey){
     _messageVirtualMeasurementCycleKey=cycleKey;
@@ -3539,6 +3558,7 @@ if(typeof window!=='undefined'){
   if(!el) return;
   let _scrollRaf=0;
   el.addEventListener('scroll',()=>{
+    _markMessageVirtualScrollActive();
     if(_programmaticScroll) return; // ignore scrolls we triggered ourselves
     cancelAnimationFrame(_scrollRaf);
     _scrollRaf=requestAnimationFrame(()=>{
