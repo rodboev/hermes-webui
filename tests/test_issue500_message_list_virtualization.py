@@ -772,3 +772,65 @@ def test_virtualized_render_uses_compensation_helper():
     assert "renderMessages(" in body, (
         "the compensation helper should wrap the actual renderMessages call"
     )
+
+
+def test_scroll_listener_guards_programmatic_scroll_before_marking_active():
+    """The _programmaticScroll guard must appear before _markMessageVirtualScrollActive
+    in the scroll listener so that programmatic scrolls (e.g. from
+    _compensateScrollForMeasurementDelta) do not arm the 150ms settle timer."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    listener_start = js.index("el.addEventListener('scroll',()=>{")
+    listener_end = js.index("});", listener_start)
+    listener_body = js[listener_start:listener_end]
+
+    guard_pos = listener_body.index("if(_programmaticScroll) return;")
+    mark_pos = listener_body.index("_markMessageVirtualScrollActive();")
+    assert guard_pos < mark_pos, (
+        "Scroll listener must check _programmaticScroll before calling "
+        "_markMessageVirtualScrollActive so programmatic scrolls do not arm "
+        "the 150ms settle timer and chain measurement delays"
+    )
+
+
+def test_clear_height_cache_resets_scroll_settle_globals():
+    """_clearMessageVirtualHeightCache must zero out the three scroll-settle globals
+    so that a deferred measurement from a previous session cannot fire against the
+    new session's DOM after a session switch."""
+    js = UI_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + """
+let timerCleared = false;
+let _messageVirtualScrollActive = true;
+let _messageVirtualScrollSettleTimer = 99;
+let _messageVirtualDeferredMeasurement = {some: 'stale-metrics'};
+let _messageVirtualHeightCache = [100, 200];
+let _messageVirtualHeightCacheEntries = [{rawIdx: 0}];
+let _messageVirtualHeightCacheLen = 2;
+let _messageVirtualHeightCacheSrc = {};
+let _messageVirtualEstimatedRowHeight = 200;
+let _messageVirtualWindowKey = 'old-key';
+let _messageVirtualMeasurementCycleKey = 'old-cycle';
+let _messageVirtualMeasurementRetryCount = 3;
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT = 140;
+function clearTimeout(id){ timerCleared = (id === 99); }
+eval(extractFunc('_clearMessageVirtualHeightCache'));
+_clearMessageVirtualHeightCache();
+console.log(JSON.stringify({
+  scrollActive: _messageVirtualScrollActive,
+  settleTimer: _messageVirtualScrollSettleTimer,
+  deferred: _messageVirtualDeferredMeasurement,
+  timerCleared: timerCleared,
+}));
+"""
+    metrics = json.loads(_run_node(source))
+    assert metrics["scrollActive"] is False, (
+        "_clearMessageVirtualHeightCache must reset _messageVirtualScrollActive to false"
+    )
+    assert metrics["settleTimer"] == 0, (
+        "_clearMessageVirtualHeightCache must reset _messageVirtualScrollSettleTimer to 0"
+    )
+    assert metrics["deferred"] is None, (
+        "_clearMessageVirtualHeightCache must clear _messageVirtualDeferredMeasurement to null"
+    )
+    assert metrics["timerCleared"] is True, (
+        "_clearMessageVirtualHeightCache must call clearTimeout on the pending settle timer"
+    )

@@ -422,6 +422,10 @@ function _clearMessageVirtualHeightCache(){
   _messageVirtualWindowKey='';
   _messageVirtualMeasurementCycleKey='';
   _messageVirtualMeasurementRetryCount=0;
+  _messageVirtualScrollActive=false;
+  clearTimeout(_messageVirtualScrollSettleTimer);
+  _messageVirtualScrollSettleTimer=0;
+  _messageVirtualDeferredMeasurement=null;
 }
 function _resetMessageRenderWindow(sid){
   _messageRenderWindowSid=sid||null;
@@ -3558,8 +3562,8 @@ if(typeof window!=='undefined'){
   if(!el) return;
   let _scrollRaf=0;
   el.addEventListener('scroll',()=>{
-    _markMessageVirtualScrollActive();
     if(_programmaticScroll) return; // ignore scrolls we triggered ourselves
+    _markMessageVirtualScrollActive();
     cancelAnimationFrame(_scrollRaf);
     _scrollRaf=requestAnimationFrame(()=>{
       const top=el.scrollTop;
