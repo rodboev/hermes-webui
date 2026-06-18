@@ -5461,17 +5461,28 @@ async function loadProfilesPanel() {
     const data = await api('/api/profiles');
     _profilesCache = data;
     panel.innerHTML = '';
-    const explainer = document.createElement('div');
-    explainer.className = 'profile-card profile-help-card';
-    explainer.innerHTML = `
-      <div class="profile-card-header">
-        <div style="min-width:0;flex:1">
-          <div class="profile-card-name">Profiles vs workspaces</div>
-          <div class="profile-card-meta">Use profiles for how the agent works; use workspaces for what files it works on.</div>
-        </div>
-      </div>`;
-    explainer.onclick = () => _renderProfileConceptHelp(data.active || 'default');
-    panel.appendChild(explainer);
+
+    // Hide "New profile" button in single profile mode
+    const newProfileBtn = document.querySelector('[onclick="openProfileCreate()"]');
+    if (newProfileBtn) {
+      newProfileBtn.style.display = data.single_profile_mode ? 'none' : '';
+    }
+
+    // In single profile mode, don't show the explanatory card
+    if (!data.single_profile_mode) {
+      const explainer = document.createElement('div');
+      explainer.className = 'profile-card profile-help-card';
+      explainer.innerHTML = `
+        <div class="profile-card-header">
+          <div style="min-width:0;flex:1">
+            <div class="profile-card-name">Profiles vs workspaces</div>
+            <div class="profile-card-meta">Use profiles for how the agent works; use workspaces for what files it works on.</div>
+          </div>
+        </div>`;
+      explainer.onclick = () => _renderProfileConceptHelp(data.active || 'default');
+      panel.appendChild(explainer);
+    }
+
     if (!data.profiles || !data.profiles.length) {
       const emptyMsg = document.createElement('div');
       emptyMsg.style.cssText = 'padding:16px;color:var(--muted);font-size:12px';
@@ -5669,12 +5680,14 @@ function renderProfileDropdown(data) {
     };
     dd.appendChild(opt);
   }
-  // Divider + Manage link
-  const div = document.createElement('div'); div.className = 'ws-divider'; dd.appendChild(div);
-  const mgmt = document.createElement('div'); mgmt.className = 'profile-opt ws-manage';
-  mgmt.innerHTML = `${li('settings',12)} ${esc(t('manage_profiles'))}`;
-  mgmt.onclick = () => { closeProfileDropdown(); mobileSwitchPanel('profiles'); };
-  dd.appendChild(mgmt);
+  // Divider + Manage link (hidden in single profile mode)
+  if (!data.single_profile_mode) {
+    const div = document.createElement('div'); div.className = 'ws-divider'; dd.appendChild(div);
+    const mgmt = document.createElement('div'); mgmt.className = 'profile-opt ws-manage';
+    mgmt.innerHTML = `${li('settings',12)} ${esc(t('manage_profiles'))}`;
+    mgmt.onclick = () => { closeProfileDropdown(); mobileSwitchPanel('profiles'); };
+    dd.appendChild(mgmt);
+  }
 }
 
 function toggleProfileDropdown() {
@@ -5684,6 +5697,11 @@ function toggleProfileDropdown() {
   closeWsDropdown(); // close workspace dropdown if open
   if(typeof closeModelDropdown==='function') closeModelDropdown();
   api('/api/profiles').then(data => {
+    // In single profile mode, don't show profile dropdown at all
+    if (data.single_profile_mode) {
+      closeProfileDropdown();
+      return;
+    }
     renderProfileDropdown(data);
     dd.classList.add('open');
     _positionProfileDropdown();

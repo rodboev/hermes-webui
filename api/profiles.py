@@ -116,6 +116,33 @@ def _unwrap_profile_home_to_base(home: Path) -> Path:
     return home
 
 
+def _is_isolated_profile_mode() -> bool:
+    """Detect isolated single-profile mode from HERMES_HOME env var.
+
+    Returns True when HERMES_HOME points at a concrete profile subdirectory
+    (e.g., ~/.hermes/profiles/user1) rather than the base home (~/.hermes).
+    This indicates a single-profile deployment where the WebUI should pin to
+    that profile and reject cross-profile operations.
+
+    HERMES_BASE_HOME env var, if set, overrides and forces non-isolated mode
+    (allows deployments to explicitly opt out of isolation detection).
+    """
+    # Explicit HERMES_BASE_HOME opt-out takes precedence
+    if os.getenv('HERMES_BASE_HOME', '').strip():
+        return False
+
+    hermes_home = os.getenv('HERMES_HOME', '').strip()
+    if not hermes_home:
+        return False
+
+    p = Path(hermes_home).expanduser()
+    # Check if this path looks like ~/.hermes/profiles/<name>
+    # i.e., parent dir is named 'profiles' and grandparent exists
+    if p.parent.name == 'profiles' and p.parent.parent.exists():
+        return True
+    return False
+
+
 def _resolve_base_hermes_home() -> Path:
     """Return the BASE ~/.hermes directory — the root that contains profiles/.
 
@@ -978,6 +1005,9 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
     Validates the profile exists, updates process state, patches module caches,
     reloads .env, and reloads config.yaml.
 
+    In isolated profile mode, switching to a different profile is rejected (403).
+    Switching to the isolated profile itself is allowed (idempotent).
+
     Args:
         name: Profile name to switch to.
         process_wide: If True (default), updates the process-global
@@ -988,6 +1018,15 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
     Raises ValueError if profile doesn't exist or agent is busy.
     """
     global _active_profile
+
+    # In isolated profile mode, reject switching to other profiles
+    if _is_isolated_profile_mode():
+        active = get_active_profile_name()
+        if name != active:
+            raise ValueError(
+                f"Profile switching is not allowed in isolated profile mode. "
+                f"Currently pinned to profile '{active}'."
+            )
 
     # Import here to avoid circular import at module load
     from api.config import STREAMS, STREAMS_LOCK, reload_config
@@ -1281,6 +1320,9 @@ def _build_profile_rows_fast() -> list | None:
 def list_profiles_api() -> list:
     """List all profiles with metadata, serialized for JSON response.
 
+    In isolated profile mode (HERMES_HOME points to ~/.hermes/profiles/<name>),
+    returns only that single profile and skips other profiles entirely.
+
     Fast path: build the rows from upstream's cheap per-profile helpers and skip
     ``find_alias_for_profile`` (whose result the WebUI discards) — see
     ``_build_profile_rows_fast``. Results are cached for a short TTL so rapid
@@ -1291,6 +1333,35 @@ def list_profiles_api() -> list:
     import time
     global _LIST_PROFILES_CACHE
     now = time.time()
+
+    # In isolated profile mode, return only the active (isolated) profile
+    if _is_isolated_profile_mode():
+        active = get_active_profile_name()
+        try:
+            from hermes_cli.profiles import list_profiles
+            infos = list_profiles()
+            # Find the current profile and return only that one
+            for p in infos:
+                if p.name == active:
+                    enabled_count, total_count = _get_profile_skills_stats(p.path)
+                    return [{
+                        'name': p.name,
+                        'path': str(p.path),
+                        'is_default': p.is_default,
+                        'is_active': True,  # Always true in isolated mode
+                        'gateway_running': p.gateway_running,
+                        'model': p.model,
+                        'provider': p.provider,
+                        'has_env': p.has_env,
+                        'visible': _profile_visible_from_meta(p.path),
+                        'skill_count': enabled_count,
+                        'enabled_skills': enabled_count,
+                        'total_skills': total_count,
+                    }]
+        except ImportError:
+            pass
+        # Fallback to default-only in isolated mode
+        return [_default_profile_dict()]
 
     with _LIST_PROFILES_CACHE_LOCK:
         cached = _LIST_PROFILES_CACHE
@@ -1709,7 +1780,12 @@ def create_profile_api(name: str, clone_from: str = None,
                        api_key: str = None,
                        default_model: str = None,
                        model_provider: str = None) -> dict:
-    """Create a new profile. Returns the new profile info dict."""
+    """Create a new profile. Returns the new profile info dict.
+
+    In isolated profile mode, profile creation is rejected (403).
+    """
+    if _is_isolated_profile_mode():
+        raise ValueError("Profile creation is not allowed in isolated profile mode.")
     _validate_profile_name(name)
     # Defense-in-depth: validate clone_from here too, even though routes.py
     # also validates it. Any caller that bypasses the HTTP layer gets protection.
@@ -1808,7 +1884,12 @@ def create_profile_api(name: str, clone_from: str = None,
 
 
 def delete_profile_api(name: str) -> dict:
-    """Delete a profile. Switches to default first if it's the active one."""
+    """Delete a profile. Switches to default first if it's the active one.
+
+    In isolated profile mode, profile deletion is rejected (403).
+    """
+    if _is_isolated_profile_mode():
+        raise ValueError("Profile deletion is not allowed in isolated profile mode.")
     if _is_root_profile(name):
         raise ValueError("Cannot delete the default profile.")
     _validate_profile_name(name)
