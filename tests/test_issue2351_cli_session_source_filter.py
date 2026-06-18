@@ -20,7 +20,8 @@ def test_cli_filter_keeps_cli_rows_out_of_default_webui_list():
     src = SESSIONS_JS.read_text(encoding="utf-8")
     assert "let webuiSessionCount=0;" in src
     assert "let cliSessionCount=0;" in src
-    assert "if(_isCliSession(s)) cliSessionCount++;" in src
+    assert "const isCli=_isCliSession(s);" in src
+    assert "if(isCli) cliSessionCount++;" in src
     assert "else webuiSessionCount++;" in src
     assert "_activeOriginFilters.has(origin)" in src
     assert "if(_activeOriginFilters.has('cli')&&cliSessionCount===0&&(webuiSessionCount===0||!_activeOriginFilters.has('webui'))){" in src
