@@ -1492,7 +1492,7 @@ def test_git_pull_skips_repo_local_hooks_when_destructive_mode_enabled(tmp_path,
     assert not marker.exists()
 
 
-def test_git_stage_skips_repo_local_filters_when_destructive_mode_enabled(tmp_path, monkeypatch):
+def test_git_stage_skips_repo_local_filters_when_destructive_mode_disabled(tmp_path, monkeypatch):
     import os
     import sys
 
@@ -1521,7 +1521,7 @@ def test_git_stage_skips_repo_local_filters_when_destructive_mode_enabled(tmp_pa
     marker.unlink(missing_ok=True)
     (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
 
-    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    monkeypatch.delenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, raising=False)
     staged = git_stage(repo, ["tracked.txt"])
 
     assert staged["totals"]["staged"] == 1
@@ -1569,6 +1569,42 @@ def test_git_checkout_blocks_repo_local_filters_when_destructive_mode_enabled(tm
     monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
     with pytest.raises(GitWorkspaceError) as exc:
         git_checkout(repo, "feature", "local")
+    assert exc.value.code == "filtered_path"
+    assert not marker.exists()
+
+
+def test_git_stage_blocks_repo_local_filters_when_destructive_mode_enabled(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted filter helper setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, GitWorkspaceError, git_stage
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.txt filter=demo\n", encoding="utf-8")
+    marker = tmp_path / "filter-stage-ran"
+    helper = tmp_path / "filter_stage_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('filter ran', encoding='utf-8')\n"
+        "print(sys.stdin.read(), end='')\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _git(repo, "config", "filter.demo.clean", f"\"{sys.executable}\" \"{helper}\" \"{marker}\"")
+    _git(repo, "config", "filter.demo.smudge", f"\"{sys.executable}\" \"{helper}\" \"{marker}\"")
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+    marker.unlink(missing_ok=True)
+    (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    with pytest.raises(GitWorkspaceError) as exc:
+        git_stage(repo, ["tracked.txt"])
+
     assert exc.value.code == "filtered_path"
     assert not marker.exists()
 
@@ -1742,6 +1778,134 @@ def test_git_fetch_and_pull_disable_submodule_recursion(monkeypatch, tmp_path):
     assert ["pull", "--ff-only", "--no-recurse-submodules"] in calls
 
 
+def test_git_fetch_forces_destructive_hardening_without_flag(monkeypatch, tmp_path):
+    from api import workspace_git
+
+    ctx = workspace_git.GitContext(tmp_path, tmp_path, "")
+    captured = {}
+
+    def fake_run_git(ctx_or_cwd, args, **kwargs):
+        captured["args"] = list(args)
+        captured["kwargs"] = dict(kwargs)
+        return types.SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(workspace_git, "resolve_git_context", lambda workspace: ctx)
+    monkeypatch.setattr(workspace_git, "_run_git", fake_run_git)
+    monkeypatch.setattr(workspace_git, "git_status", lambda workspace: {"is_git": True})
+
+    workspace_git.git_fetch(tmp_path)
+
+    assert captured["args"] == ["fetch", "--prune", "--no-recurse-submodules"]
+    assert captured["kwargs"]["force_destructive_hardening"] is True
+
+
+def test_run_git_force_destructive_hardening_applies_hook_redirect_without_flag(monkeypatch, tmp_path):
+    from api import workspace_git
+
+    captured = {}
+    hooks_dir = tmp_path / "hooks"
+    hooks_dir.mkdir()
+
+    def fake_subprocess_run(argv, **kwargs):
+        captured["argv"] = list(argv)
+        captured["kwargs"] = dict(kwargs)
+        return types.SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(workspace_git, "workspace_git_destructive_enabled", lambda: False)
+    monkeypatch.setattr(workspace_git.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(workspace_git.tempfile, "mkdtemp", lambda prefix: str(hooks_dir))
+
+    workspace_git._run_git(tmp_path, ["fetch"], force_destructive_hardening=True)
+
+    assert any(str(arg).startswith("core.hooksPath=") for arg in captured["argv"])
+    assert "core.alternateRefsCommand=" in captured["argv"]
+
+
+def test_git_pull_blocks_repo_local_filters_before_run_when_destructive_mode_enabled(monkeypatch, tmp_path):
+    from api import workspace_git
+
+    ctx = workspace_git.GitContext(tmp_path, tmp_path, "")
+
+    monkeypatch.setattr(workspace_git, "resolve_git_context", lambda workspace: ctx)
+    monkeypatch.setattr(workspace_git, "workspace_git_destructive_enabled", lambda: True)
+    monkeypatch.setattr(workspace_git, "_has_repo_local_filters", lambda cwd, env: True)
+
+    with pytest.raises(workspace_git.GitWorkspaceError) as exc:
+        workspace_git.git_pull(tmp_path)
+
+    assert exc.value.code == "filtered_path"
+
+
+def test_git_stage_blocks_repo_local_filters_before_run_when_destructive_mode_enabled(monkeypatch, tmp_path):
+    from api import workspace_git
+
+    ctx = workspace_git.GitContext(tmp_path, tmp_path, "")
+
+    monkeypatch.setattr(workspace_git, "resolve_git_context", lambda workspace: ctx)
+    monkeypatch.setattr(workspace_git, "workspace_git_destructive_enabled", lambda: True)
+    monkeypatch.setattr(workspace_git, "_has_repo_local_filters", lambda cwd, env: True)
+
+    with pytest.raises(workspace_git.GitWorkspaceError) as exc:
+        workspace_git.git_stage(tmp_path, ["tracked.txt"])
+
+    assert exc.value.code == "filtered_path"
+
+
+def test_git_fetch_skips_repo_local_reference_transaction_hook_without_destructive_mode(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("hook script setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, git_fetch
+
+    remote = _init_bare_repo(tmp_path / "remote.git")
+    origin = _init_repo(tmp_path / "origin")
+    (origin / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(origin)
+    _git(origin, "branch", "-M", "main")
+    _git(origin, "remote", "add", "origin", str(remote))
+    _git(origin, "push", "-u", "origin", "main")
+    _git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", str(remote), str(clone))
+    _git(clone, "config", "user.email", "hermes-tests@example.invalid")
+    _git(clone, "config", "user.name", "Hermes Tests")
+
+    (origin / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+    _commit_all(origin, "Remote update")
+    _git(origin, "push")
+
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    marker = tmp_path / "reference-transaction-ran"
+    helper = tmp_path / "reference_transaction_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('reference-transaction executed', encoding='utf-8')\n"
+        "sys.stdin.read()\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    hook = hooks / "reference-transaction"
+    hook.write_text(
+        "#!/bin/sh\n"
+        f"\"{sys.executable}\" \"{helper}\" \"{marker}\" \"$@\"\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    _git(clone, "config", "core.hooksPath", str(hooks))
+
+    monkeypatch.delenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, raising=False)
+    fetched = git_fetch(clone)
+
+    assert fetched["status"]["behind"] == 1
+    assert not marker.exists()
+
+
 def test_git_checkout_disables_submodule_recursion(monkeypatch, tmp_path):
     from api import workspace_git
 
@@ -1793,7 +1957,7 @@ def test_perform_checkout_locked_disables_submodule_recursion_across_modes(monke
     assert ["switch", "--recurse-submodules=no", "--detach", "deadbeef"] in calls
 
 
-def test_git_stage_skips_included_repo_local_filters_when_destructive_mode_enabled(tmp_path, monkeypatch):
+def test_git_stage_skips_included_repo_local_filters_when_destructive_mode_disabled(tmp_path, monkeypatch):
     import os
     import sys
 
@@ -1828,10 +1992,67 @@ def test_git_stage_skips_included_repo_local_filters_when_destructive_mode_enabl
     marker.unlink(missing_ok=True)
     (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
 
-    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    monkeypatch.delenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, raising=False)
     staged = git_stage(repo, ["tracked.txt"])
 
     assert staged["totals"]["staged"] == 1
+    assert not marker.exists()
+
+
+def test_selected_temp_index_env_blocks_repo_local_filters_when_destructive_mode_enabled(monkeypatch, tmp_path):
+    from api import workspace_git
+
+    ctx = workspace_git.GitContext(tmp_path, tmp_path, "")
+
+    monkeypatch.setattr(workspace_git, "workspace_git_destructive_enabled", lambda: True)
+    monkeypatch.setattr(workspace_git, "_has_repo_local_filters", lambda cwd, env: True)
+
+    with pytest.raises(workspace_git.GitWorkspaceError) as exc:
+        workspace_git._selected_temp_index_env(ctx, ["tracked.txt"])
+
+    assert exc.value.code == "filtered_path"
+
+
+def test_git_stage_blocks_included_repo_local_filters_when_destructive_mode_enabled(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted filter helper setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, GitWorkspaceError, git_stage
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.txt filter=demo\n", encoding="utf-8")
+    marker = tmp_path / "included-filter-block-ran"
+    helper = tmp_path / "included_filter_block_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('filter ran', encoding='utf-8')\n"
+        "print(sys.stdin.read(), end='')\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    included = tmp_path / "included-filter-block.cfg"
+    included.write_text(
+        "[filter \"demo\"]\n"
+        f"\tclean = \"{sys.executable}\" \"{helper}\" \"{marker}\"\n"
+        f"\tsmudge = \"{sys.executable}\" \"{helper}\" \"{marker}\"\n",
+        encoding="utf-8",
+    )
+    _git(repo, "config", "include.path", str(included))
+
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+    marker.unlink(missing_ok=True)
+    (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    with pytest.raises(GitWorkspaceError) as exc:
+        git_stage(repo, ["tracked.txt"])
+
+    assert exc.value.code == "filtered_path"
     assert not marker.exists()
 
 
@@ -1916,6 +2137,82 @@ def test_git_commit_skips_repo_local_gpg_program_when_destructive_mode_enabled(t
     result = git_commit(repo, "Signed commit path blocked")
 
     assert result["ok"] is True
+    assert not marker.exists()
+
+
+def test_git_pull_blocks_repo_local_filters_when_destructive_mode_enabled(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted filter helper setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, GitWorkspaceError, git_pull
+
+    remote = _init_bare_repo(tmp_path / "remote.git")
+    origin = _init_repo(tmp_path / "origin")
+    (origin / ".gitattributes").write_text("*.txt filter=demo\n", encoding="utf-8")
+    (origin / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _git(origin, "config", "filter.demo.clean", "cat")
+    _git(origin, "config", "filter.demo.smudge", "cat")
+    _commit_all(origin)
+    _git(origin, "branch", "-M", "main")
+    _git(origin, "remote", "add", "origin", str(remote))
+    _git(origin, "push", "-u", "origin", "main")
+    _git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", str(remote), str(clone))
+    _git(clone, "config", "user.email", "hermes-tests@example.invalid")
+    _git(clone, "config", "user.name", "Hermes Tests")
+    _git(clone, "config", "filter.demo.clean", f"\"{sys.executable}\" -c \"import sys; print(sys.stdin.read(), end='')\"")
+    _git(clone, "config", "filter.demo.smudge", f"\"{sys.executable}\" -c \"import sys; print(sys.stdin.read(), end='')\"")
+
+    (origin / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+    _commit_all(origin, "Remote update")
+    _git(origin, "push")
+
+    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    with pytest.raises(GitWorkspaceError) as exc:
+        git_pull(clone)
+
+    assert exc.value.code == "filtered_path"
+    assert (clone / "tracked.txt").read_text(encoding="utf-8") == "one\n"
+
+
+def test_git_commit_selected_blocks_repo_local_filters_when_destructive_mode_enabled(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("scripted filter helper setup is POSIX-only")
+
+    from api.workspace_git import WORKSPACE_GIT_DESTRUCTIVE_ENV, GitWorkspaceError, git_commit_selected
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.txt filter=demo\n", encoding="utf-8")
+    marker = tmp_path / "selected-filter-ran"
+    helper = tmp_path / "selected_filter_helper.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('filter ran', encoding='utf-8')\n"
+        "print(sys.stdin.read(), end='')\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _git(repo, "config", "filter.demo.clean", f"\"{sys.executable}\" \"{helper}\" \"{marker}\"")
+    _git(repo, "config", "filter.demo.smudge", f"\"{sys.executable}\" \"{helper}\" \"{marker}\"")
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _commit_all(repo)
+    marker.unlink(missing_ok=True)
+    (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    monkeypatch.setenv(WORKSPACE_GIT_DESTRUCTIVE_ENV, "1")
+    with pytest.raises(GitWorkspaceError) as exc:
+        git_commit_selected(repo, "Commit selected path", ["tracked.txt"])
+
+    assert exc.value.code == "filtered_path"
     assert not marker.exists()
 
 

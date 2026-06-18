@@ -198,6 +198,7 @@ def _run_git(
     check: bool = False,
     env: dict[str, str] | None = None,
     destructive: bool = False,
+    force_destructive_hardening: bool = False,
     disable_filter_attributes: bool = False,
     neutralize_filter_programs: bool = False,
     neutralize_remote_helpers: bool = False,
@@ -205,6 +206,7 @@ def _run_git(
     cwd = ctx_or_cwd.repo_root if isinstance(ctx_or_cwd, GitContext) else ctx_or_cwd
     run_env = _clean_git_env(env)
     effective_destructive = destructive and workspace_git_destructive_enabled()
+    hardened_destructive_path = effective_destructive or force_destructive_hardening
     attributes_file = None
     hooks_path = None
     extra_configs: list[tuple[str, str]] = []
@@ -225,7 +227,7 @@ def _run_git(
         if effective_destructive or neutralize_remote_helpers:
             extra_configs.extend(_destructive_remote_helper_overrides(cwd, run_env))
             args = _destructive_remote_command_args(args, cwd, run_env)
-        if effective_destructive:
+        if hardened_destructive_path:
             hooks_path = tempfile.mkdtemp(prefix="hermes-webui-git-hooks-")
             temporary_dirs = [hooks_path]
         if extra_configs:
@@ -236,7 +238,7 @@ def _run_git(
         result = subprocess.run(
             _hardened_git_argv(
                 args,
-                destructive=effective_destructive,
+                destructive=hardened_destructive_path,
                 attributes_file=attributes_file,
                 hooks_path=hooks_path,
             ),
@@ -442,6 +444,11 @@ def _has_repo_local_filters(cwd: Path, env: dict[str, str]) -> bool:
     names = _filter_names_for_scope("--local", cwd, env)
     names |= _filter_names_for_scope("--worktree", cwd, env, ignore_unsupported=True)
     return bool(names)
+
+
+def _block_filtered_destructive_write(ctx: GitContext, message: str) -> None:
+    if workspace_git_destructive_enabled() and _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
+        raise GitWorkspaceError(message, "filtered_path")
 
 
 def resolve_git_context(workspace: str | Path) -> GitContext | None:
@@ -1307,6 +1314,10 @@ def git_stage(workspace: str | Path, paths: Iterable[str]) -> dict:
     if ctx is None:
         raise GitWorkspaceError("Workspace is not a Git repository", "not_a_repo")
     with _git_mutation_lock(ctx):
+        _block_filtered_destructive_write(
+            ctx,
+            "Repository uses local Git filters; stage may corrupt index content. Use the terminal to stage manually.",
+        )
         _run_git(
             ctx,
             ["add", "--", *_pathspecs(ctx, paths)],
@@ -1339,12 +1350,11 @@ def git_discard(workspace: str | Path, paths: Iterable[str], *, delete_untracked
     if ctx is None:
         raise GitWorkspaceError("Workspace is not a Git repository", "not_a_repo")
     with _git_mutation_lock(ctx):
-        if workspace_git_destructive_enabled() and _has_repo_local_filters(ctx.repo_root, _clean_git_env()):
-            raise GitWorkspaceError(
-                "Repository uses local Git filters; discard may corrupt working-tree content. "
-                "Use the terminal to discard manually.",
-                "filtered_path",
-            )
+        _block_filtered_destructive_write(
+            ctx,
+            "Repository uses local Git filters; discard may corrupt working-tree content. "
+            "Use the terminal to discard manually.",
+        )
         status = git_status(workspace)
         by_path = {f["path"]: f for f in status.get("files", [])}
         for path in _clean_paths(paths):
@@ -1416,6 +1426,11 @@ def _staged_diff_text(ctx: GitContext) -> tuple[str, bool]:
 
 
 def _selected_temp_index_env(ctx: GitContext, specs: list[str]) -> tuple[dict[str, str], str]:
+    _block_filtered_destructive_write(
+        ctx,
+        "Repository uses local Git filters; selected commit staging may corrupt index content. "
+        "Use the terminal to commit manually.",
+    )
     fd, index_path = tempfile.mkstemp(prefix="hermes-webui-git-index-")
     os.close(fd)
     Path(index_path).unlink(missing_ok=True)
@@ -1673,6 +1688,7 @@ def git_fetch(workspace: str | Path) -> dict:
             ["fetch", "--prune", "--no-recurse-submodules"],
             timeout=GIT_REMOTE_TIMEOUT,
             check=True,
+            force_destructive_hardening=True,
             disable_filter_attributes=workspace_git_destructive_enabled(),
             neutralize_filter_programs=True,
             neutralize_remote_helpers=True,
@@ -1685,6 +1701,10 @@ def git_pull(workspace: str | Path) -> dict:
     if ctx is None:
         raise GitWorkspaceError("Workspace is not a Git repository", "not_a_repo")
     with _git_mutation_lock(ctx):
+        _block_filtered_destructive_write(
+            ctx,
+            "Repository uses local Git filters; pull may corrupt working-tree content. Use the terminal to pull manually.",
+        )
         result = _run_git(
             ctx,
             ["pull", "--ff-only", "--no-recurse-submodules"],
