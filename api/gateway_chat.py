@@ -440,6 +440,7 @@ def _clear_gateway_pending_state(session: Any, stream_id: str) -> None:
     session.pending_user_message = None
     session.pending_attachments = None
     session.pending_started_at = None
+    session.pending_user_source = None
     session.save()
 
 
@@ -713,6 +714,9 @@ def _run_gateway_chat_streaming(
             # role/content ordering instead of turn order.
             assistant_ts = now + 0.000001
             user_msg = {"role": "user", "content": str(msg_text or ""), "timestamp": now}
+            pending_source = getattr(s, "pending_user_source", None) or "webui"
+            if pending_source != "webui":
+                user_msg["_source"] = pending_source
             if attachments:
                 user_msg["attachments"] = list(attachments)
             assistant_msg = {"role": "assistant", "content": assistant_text, "timestamp": assistant_ts}
@@ -744,6 +748,7 @@ def _run_gateway_chat_streaming(
                     previous_context,
                     s.context_messages,
                     str(msg_text or ""),
+                    source=pending_source,
                 )
             except Exception:
                 logger.debug("Failed to merge gateway display transcript", exc_info=True)
@@ -760,6 +765,7 @@ def _run_gateway_chat_streaming(
             s.pending_user_message = None
             s.pending_attachments = None
             s.pending_started_at = None
+            s.pending_user_source = None
             s.workspace = str(workspace)
             s.model = model
             s.model_provider = model_provider

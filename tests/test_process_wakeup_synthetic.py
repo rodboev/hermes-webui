@@ -3,6 +3,7 @@
 import time
 from api.models import Session, _append_recovered_pending_turn
 from api.routes import _checkpoint_user_message_for_eager_session_save
+from api.streaming import _merge_display_messages_after_agent_result
 
 
 def test_append_recovered_pending_turn_stamps_process_wakeup_source():
@@ -116,3 +117,48 @@ def test_session_pending_user_source_persisted():
     # Reconstruct from dict
     s2 = Session(**s_dict)
     assert s2.pending_user_source == "process_wakeup"
+
+
+def test_merge_display_materializes_missing_process_wakeup_user_turn():
+    merged = _merge_display_messages_after_agent_result(
+        [],
+        [],
+        [{"role": "assistant", "content": "done"}],
+        "[IMPORTANT: Wakeup prompt]",
+        source="process_wakeup",
+    )
+
+    assert merged[0]["role"] == "user"
+    assert merged[0]["content"] == "[IMPORTANT: Wakeup prompt]"
+    assert merged[0]["_source"] == "process_wakeup"
+    assert merged[1]["role"] == "assistant"
+
+
+def test_merge_display_stamps_process_wakeup_source_on_echoed_user_turn():
+    merged = _merge_display_messages_after_agent_result(
+        [],
+        [],
+        [
+            {"role": "user", "content": "[IMPORTANT: Wakeup prompt]"},
+            {"role": "assistant", "content": "done"},
+        ],
+        "[IMPORTANT: Wakeup prompt]",
+        source="process_wakeup",
+    )
+
+    assert merged[0]["role"] == "user"
+    assert merged[0]["_source"] == "process_wakeup"
+    assert merged[1]["role"] == "assistant"
+
+
+def test_merge_display_leaves_webui_user_turn_unmarked():
+    merged = _merge_display_messages_after_agent_result(
+        [],
+        [],
+        [{"role": "assistant", "content": "done"}],
+        "Normal user message",
+        source="webui",
+    )
+
+    assert merged[0]["role"] == "user"
+    assert "_source" not in merged[0]

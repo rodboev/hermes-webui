@@ -15008,6 +15008,7 @@ def _handle_chat_sync(handler, body):
             _previous_context_messages,
             _restore_display_reasoning_metadata(_previous_messages, _result_messages),
             msg,
+            source=getattr(s, "pending_user_source", None) or "webui",
         )
         # Only auto-generate title when still default; preserves user renames
         if s.title == "Untitled":
