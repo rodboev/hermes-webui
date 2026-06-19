@@ -13,12 +13,21 @@ from unittest import mock
 
 import pytest
 
+import api.profiles as _profiles_mod
 from api.profiles import (
     _is_isolated_profile_mode,
     list_profiles_api,
     create_profile_api,
     delete_profile_api,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_profile_cache():
+    """Clear the profile list cache before and after each test to prevent cross-test leakage."""
+    _profiles_mod._LIST_PROFILES_CACHE = None
+    yield
+    _profiles_mod._LIST_PROFILES_CACHE = None
 
 
 @pytest.fixture
