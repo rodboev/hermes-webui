@@ -143,15 +143,18 @@ class TestListProfilesInIsolatedMode:
             for subdir in ["memories", "sessions", "skills", "skins", "logs", "plans", "workspace", "cron"]:
                 (prof_dir / subdir).mkdir(exist_ok=True)
 
-        with mock.patch.dict(os.environ, {"HERMES_HOME": str(temp_single_profile)}):
+        # Clear HERMES_BASE_HOME to allow isolated mode detection to fire
+        env_dict = {
+            "HERMES_HOME": str(temp_single_profile),
+            "HERMES_BASE_HOME": "",
+        }
+        with mock.patch.dict(os.environ, env_dict, clear=False):
             with mock.patch("api.profiles._DEFAULT_HERMES_HOME", base_home):
-                with mock.patch("api.profiles._is_isolated_profile_mode", return_value=True):
-                    with mock.patch("api.profiles._resolve_base_hermes_home", return_value=base_home):
-                        with mock.patch("api.profiles.get_active_profile_name", return_value="user1"):
-                            profiles = list_profiles_api()
-                            # Should only have user1
-                            assert len(profiles) == 1
-                            assert profiles[0]["name"] == "user1"
+                with mock.patch("api.profiles.get_active_profile_name", return_value="user1"):
+                    profiles = list_profiles_api()
+                    # Should only have user1
+                    assert len(profiles) == 1
+                    assert profiles[0]["name"] == "user1"
 
     def test_list_includes_single_profile_mode_flag(self, temp_single_profile):
         """Response includes single_profile_mode: true in isolated mode."""
@@ -173,19 +176,29 @@ class TestProfileMutationsInIsolatedMode:
     def test_create_profile_rejected_in_isolated_mode(self, temp_single_profile):
         """create_profile_api should reject creation in isolated mode."""
         base_home = temp_single_profile.parent.parent
-        with mock.patch.dict(os.environ, {"HERMES_HOME": str(temp_single_profile)}):
+        # Clear HERMES_BASE_HOME to allow isolated mode detection to fire
+        env_dict = {
+            "HERMES_HOME": str(temp_single_profile),
+            "HERMES_BASE_HOME": "",
+        }
+        with mock.patch.dict(os.environ, env_dict, clear=False):
             with mock.patch("api.profiles._DEFAULT_HERMES_HOME", base_home):
-                with mock.patch("api.profiles._is_isolated_profile_mode", return_value=True):
-                    with pytest.raises(ValueError, match=".*isolated.*|.*single.*|.*403"):
+                with mock.patch("api.profiles.get_active_profile_name", return_value="user1"):
+                    with pytest.raises(PermissionError, match=".*isolated.*|.*single.*"):
                         create_profile_api("newprofile")
 
     def test_delete_profile_rejected_in_isolated_mode(self, temp_single_profile):
         """delete_profile_api should reject deletion in isolated mode."""
         base_home = temp_single_profile.parent.parent
-        with mock.patch.dict(os.environ, {"HERMES_HOME": str(temp_single_profile)}):
+        # Clear HERMES_BASE_HOME to allow isolated mode detection to fire
+        env_dict = {
+            "HERMES_HOME": str(temp_single_profile),
+            "HERMES_BASE_HOME": "",
+        }
+        with mock.patch.dict(os.environ, env_dict, clear=False):
             with mock.patch("api.profiles._DEFAULT_HERMES_HOME", base_home):
-                with mock.patch("api.profiles._is_isolated_profile_mode", return_value=True):
-                    with pytest.raises(ValueError, match=".*isolated.*|.*single.*|.*403"):
+                with mock.patch("api.profiles.get_active_profile_name", return_value="user1"):
+                    with pytest.raises(PermissionError, match=".*isolated.*|.*single.*"):
                         delete_profile_api("user1")
 
 

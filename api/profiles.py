@@ -1015,7 +1015,7 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
             WebUI where the profile is managed via cookie + thread-local (#798).
 
     Returns: {'profiles': [...], 'active': name}
-    Raises ValueError if profile doesn't exist or agent is busy.
+    Raises PermissionError if profile doesn't exist or agent is busy.
     """
     global _active_profile
 
@@ -1023,7 +1023,7 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
     if _is_isolated_profile_mode():
         active = get_active_profile_name()
         if name != active:
-            raise ValueError(
+            raise PermissionError(
                 f"Profile switching is not allowed in isolated profile mode. "
                 f"Currently pinned to profile '{active}'."
             )
@@ -1337,6 +1337,7 @@ def list_profiles_api() -> list:
     # In isolated profile mode, return only the active (isolated) profile
     if _is_isolated_profile_mode():
         active = get_active_profile_name()
+        hermes_home = get_active_hermes_home()
         try:
             from hermes_cli.profiles import list_profiles
             infos = list_profiles()
@@ -1360,8 +1361,22 @@ def list_profiles_api() -> list:
                     }]
         except ImportError:
             pass
-        # Fallback to default-only in isolated mode
-        return [_default_profile_dict()]
+        # Fallback: construct profile dict with actual active name and hermes_home path
+        enabled_count, total_count = _get_profile_skills_stats(hermes_home)
+        return [{
+            'name': active,
+            'path': str(hermes_home),
+            'is_default': False,
+            'is_active': True,
+            'gateway_running': False,
+            'model': None,
+            'provider': None,
+            'has_env': (hermes_home / '.env').exists(),
+            'visible': _profile_visible_from_meta(hermes_home),
+            'skill_count': enabled_count,
+            'enabled_skills': enabled_count,
+            'total_skills': total_count,
+        }]
 
     with _LIST_PROFILES_CACHE_LOCK:
         cached = _LIST_PROFILES_CACHE
@@ -1785,7 +1800,7 @@ def create_profile_api(name: str, clone_from: str = None,
     In isolated profile mode, profile creation is rejected (403).
     """
     if _is_isolated_profile_mode():
-        raise ValueError("Profile creation is not allowed in isolated profile mode.")
+        raise PermissionError("Profile creation is not allowed in isolated profile mode.")
     _validate_profile_name(name)
     # Defense-in-depth: validate clone_from here too, even though routes.py
     # also validates it. Any caller that bypasses the HTTP layer gets protection.
@@ -1889,7 +1904,7 @@ def delete_profile_api(name: str) -> dict:
     In isolated profile mode, profile deletion is rejected (403).
     """
     if _is_isolated_profile_mode():
-        raise ValueError("Profile deletion is not allowed in isolated profile mode.")
+        raise PermissionError("Profile deletion is not allowed in isolated profile mode.")
     if _is_root_profile(name):
         raise ValueError("Cannot delete the default profile.")
     _validate_profile_name(name)

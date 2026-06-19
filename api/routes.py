@@ -9837,6 +9837,8 @@ def handle_post(handler, parsed) -> bool:
             return j(handler, result, extra_headers={
                 'Set-Cookie': build_profile_cookie(name, handler),
             })
+        except PermissionError as e:
+            return bad(handler, _sanitize_error(e), 403)
         except (ValueError, FileNotFoundError) as e:
             return bad(handler, _sanitize_error(e), 404)
         except RuntimeError as e:
@@ -9877,6 +9879,8 @@ def handle_post(handler, parsed) -> bool:
                 model_provider=model_provider,
             )
             return j(handler, {"ok": True, "profile": result})
+        except PermissionError as e:
+            return bad(handler, str(e), 403)
         except (ValueError, FileExistsError, RuntimeError) as e:
             return bad(handler, str(e))
 
@@ -9890,6 +9894,8 @@ def handle_post(handler, parsed) -> bool:
             _validate_profile_name(name)
             result = delete_profile_api(name)
             return j(handler, result)
+        except PermissionError as e:
+            return bad(handler, _sanitize_error(e), 403)
         except (ValueError, FileNotFoundError) as e:
             return bad(handler, _sanitize_error(e))
         except RuntimeError as e:
