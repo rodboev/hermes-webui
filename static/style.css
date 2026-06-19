@@ -2639,6 +2639,7 @@
 /* ── Message action buttons (copy, edit, retry) ── */
 .msg-actions{display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .15s;margin-left:auto;}
 .msg-row:hover .msg-actions{opacity:1;}
+/* Keep !important so this beats equal-specificity .msg-foot-with-usage fades during measurement rerenders. */
 .vscroll-measuring .msg-foot,
 .vscroll-measuring .msg-actions,
 .vscroll-measuring .msg-time{transition:none !important;}

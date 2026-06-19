@@ -12,18 +12,14 @@ def test_css_vscroll_measuring_guard():
     """style.css suppresses opacity transitions on .msg-foot and .msg-actions
     while .vscroll-measuring is present on the scroll container."""
     assert 'vscroll-measuring' in CSS
-    assert re.search(
-        r'\.vscroll-measuring\s+\.msg-foot.*transition\s*:\s*none\s*!important',
-        CSS, re.DOTALL
-    ), "missing transition:none !important for .vscroll-measuring .msg-foot"
-    assert re.search(
-        r'\.vscroll-measuring\s+\.msg-actions.*transition\s*:\s*none\s*!important',
-        CSS, re.DOTALL
-    ), "missing transition:none !important for .vscroll-measuring .msg-actions"
-    assert re.search(
-        r'\.vscroll-measuring\s+\.msg-time.*transition\s*:\s*none\s*!important',
-        CSS, re.DOTALL
-    ), "missing transition:none !important for .vscroll-measuring .msg-time"
+    guard_match = re.search(
+        r'(?m)^\.vscroll-measuring\s+\.msg-foot,\n'
+        r'^\.vscroll-measuring\s+\.msg-actions,\n'
+        r'^\.vscroll-measuring\s+\.msg-time\{transition:none !important;\}$',
+        CSS,
+    )
+    assert guard_match, \
+        "missing contiguous .vscroll-measuring transition:none !important guard block"
 
 
 def test_js_compensate_adds_vscroll_measuring():
