@@ -1,107 +1,70 @@
-"""
-Test for issue #4300: Gateway approval unsupported notice.
+"""Regression coverage for #4300 legacy gateway approval unsupported notice."""
 
-Validates that:
-1. Legacy gateway branch emits exactly one approval_gateway_unsupported event per session
-2. The event is not repeated on subsequent turns
-3. Client-side event handling prefers the i18n key for that event type
-4. Other apperror events still use the generic path
-"""
+from pathlib import Path
 
-import pytest
+REPO = Path(__file__).resolve().parents[1]
+GATEWAY_CHAT = (REPO / "api" / "gateway_chat.py").read_text(encoding="utf-8")
+MESSAGES_JS = (REPO / "static" / "messages.js").read_text(encoding="utf-8")
+I18N_JS = (REPO / "static" / "i18n.js").read_text(encoding="utf-8")
 
 
-class MockSession:
-    """Mock session object to track approval notice emission state."""
-    def __init__(self):
-        self.session_id = "test-session-123"
-        self._approval_notice_emitted = False
+def test_gateway_chat_has_approval_notice_emitted_attribute_check():
+    """Verify _approval_notice_emitted attribute is checked before emitting."""
+    assert "if not hasattr(s, \"_approval_notice_emitted\"):" in GATEWAY_CHAT
+    assert "s._approval_notice_emitted = False" in GATEWAY_CHAT
 
 
-def test_session_approval_notice_flag_tracks_state():
-    """
-    Test that the session flag tracks whether the approval notice was emitted.
-    """
-    session = MockSession()
-
-    # Initially flag should be False
-    assert session._approval_notice_emitted is False
-
-    # After first "turn", flag should be True
-    if not session._approval_notice_emitted:
-        session._approval_notice_emitted = True
-
-    assert session._approval_notice_emitted is True
-
-    # On second "turn", the flag prevents re-emission
-    should_emit = not session._approval_notice_emitted
-    assert should_emit is False
+def test_gateway_chat_emits_approval_gateway_unsupported_event():
+    """Verify put_gateway_event is called with approval_gateway_unsupported type."""
+    assert "put_gateway_event(\"apperror\"" in GATEWAY_CHAT
+    assert "\"type\": \"approval_gateway_unsupported\"" in GATEWAY_CHAT
 
 
-def test_approval_gateway_unsupported_event_type():
-    """
-    Test that the event type constant is correctly defined.
-    """
-    event_type = "approval_gateway_unsupported"
-
-    # Verify the type string is as expected
-    assert event_type == "approval_gateway_unsupported"
-    assert isinstance(event_type, str)
-
-
-def test_approval_notice_per_session_isolation():
-    """
-    Test that different sessions have independent approval notice flags.
-    """
-    session1 = MockSession()
-    session1.session_id = "session-1"
-    session2 = MockSession()
-    session2.session_id = "session-2"
-
-    # Session 1 emits notice
-    if not session1._approval_notice_emitted:
-        session1._approval_notice_emitted = True
-
-    # Session 2 is independent
-    assert session1._approval_notice_emitted is True
-    assert session2._approval_notice_emitted is False
-
-    # Session 2 can emit independently
-    if not session2._approval_notice_emitted:
-        session2._approval_notice_emitted = True
-
-    assert session2._approval_notice_emitted is True
+def test_gateway_chat_once_per_session_guard_pattern():
+    """Verify the once-per-session guard: hasattr check + flag check + flag set."""
+    # The guard pattern should be: hasattr + flag check + flag set
+    assert "if not hasattr(s, \"_approval_notice_emitted\"):" in GATEWAY_CHAT
+    assert "if not s._approval_notice_emitted:" in GATEWAY_CHAT
+    assert "s._approval_notice_emitted = True" in GATEWAY_CHAT
+    # Verify order: hasattr must come before the flag checks
+    hasattr_pos = GATEWAY_CHAT.find("if not hasattr(s, \"_approval_notice_emitted\"):")
+    flag_check_pos = GATEWAY_CHAT.find("if not s._approval_notice_emitted:")
+    flag_set_pos = GATEWAY_CHAT.find("s._approval_notice_emitted = True")
+    assert hasattr_pos < flag_check_pos < flag_set_pos
 
 
-def test_event_data_structure():
-    """
-    Test that the event data has the expected structure.
-    """
-    event_data = {
-        "type": "approval_gateway_unsupported",
-        "label": "Approvals not supported",
-        "message": "Approvals require a newer gateway. Upgrade the connected Hermes gateway to enable this.",
-    }
-
-    # Verify all required fields are present
-    assert event_data["type"] == "approval_gateway_unsupported"
-    assert "label" in event_data
-    assert "message" in event_data
-    assert "gateway" in event_data["message"].lower()
+def test_gateway_chat_event_payload_contains_type_label_message():
+    """Verify the event payload has all required fields."""
+    assert "\"type\": \"approval_gateway_unsupported\"" in GATEWAY_CHAT
+    assert "\"label\": \"Approvals not supported\"" in GATEWAY_CHAT
+    assert "\"message\": \"Approvals require a newer gateway. Upgrade the connected Hermes gateway to enable this.\"" in GATEWAY_CHAT
 
 
-def test_i18n_key_exists():
-    """
-    Test that the i18n key for approval_gateway_unsupported exists.
-    This is a simple verification that the key is defined.
-    """
-    # The key should exist in i18n.js
-    # This test just verifies the constant is the right format
-    i18n_key = "approval_gateway_unsupported"
-    assert i18n_key == "approval_gateway_unsupported"
-    assert "_" in i18n_key
-    assert i18n_key.islower()
+def test_messages_js_handles_approval_gateway_unsupported_event():
+    """Verify client-side handler recognizes the event type in conditional chain."""
+    assert "isApprovalGatewayUnsupported=d.type==='approval_gateway_unsupported'" in MESSAGES_JS
+
+
+def test_messages_js_references_i18n_key_for_approval_gateway_unsupported():
+    """Verify the i18n key is referenced in messages.js."""
+    # The key should be used in the message handling logic
+    assert "approval_gateway_unsupported" in MESSAGES_JS
+
+
+def test_i18n_js_has_approval_gateway_unsupported_key():
+    """Verify the i18n key exists in at least the English locale (first occurrence)."""
+    # Find the English locale definition (first occurrence without locale prefix)
+    assert "approval_gateway_unsupported: 'Approvals require a newer gateway" in I18N_JS
+    # Verify it appears at least once at the start (English locale)
+    lines = I18N_JS.split("\n")
+    found_in_english = False
+    for i, line in enumerate(lines):
+        if "approval_gateway_unsupported:" in line and i < 200:  # Early in file = English
+            found_in_english = True
+            break
+    assert found_in_english, "approval_gateway_unsupported key not found in English i18n locale"
 
 
 if __name__ == "__main__":
+    import pytest
     pytest.main([__file__, "-v"])
