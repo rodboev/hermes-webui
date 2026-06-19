@@ -217,6 +217,40 @@ def test_llm_wiki_status_log_heading_rechecks_identity(monkeypatch, tmp_path):
     assert status["last_writer"] == "ai-agent"
 
 
+def test_llm_wiki_status_log_heading_rechecks_preopen_symlink_swap(monkeypatch, tmp_path):
+    import api.routes as routes
+
+    wiki = tmp_path / "wiki"
+    _write(wiki / "log.md", "## [2026-06-19] update | safe\n")
+    _write(wiki / ".env", "## [2026-06-19] leak | hidden\n")
+
+    try:
+        link = wiki / "probe"
+        link.symlink_to(".env")
+        link.unlink()
+    except (OSError, NotImplementedError):
+        import pytest
+        pytest.skip("symlinks not supported on this platform")
+
+    monkeypatch.setenv("WIKI_PATH", str(wiki))
+
+    original_lstat = Path.lstat
+    swapped = {"done": False}
+
+    def fake_lstat(self):
+        if not swapped["done"] and self == wiki / "log.md":
+            swapped["done"] = True
+            (wiki / "log.md").unlink()
+            (wiki / "log.md").symlink_to(".env")
+        return original_lstat(self)
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+
+    status = routes._build_llm_wiki_status()
+
+    assert status["last_writer"] == "ai-agent"
+
+
 def test_llm_wiki_status_last_updated_rechecks_status_file_identity(monkeypatch, tmp_path):
     import os as _os
     import api.routes as routes

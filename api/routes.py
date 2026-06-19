@@ -5995,8 +5995,8 @@ def _llm_wiki_allowlisted_entries(wiki_path: Path) -> dict[str, tuple[Path, tupl
     return entries
 
 
-def _llm_wiki_verified_status_file_stat(wiki_path: Path, path: Path) -> os.stat_result | None:
-    """Return identity-checked metadata for a top-level wiki status file."""
+def _llm_wiki_status_file_entry_stat(wiki_path: Path, path: Path) -> os.stat_result | None:
+    """Return the current top-level status-file entry metadata when it is safe to trust."""
     try:
         wiki_root = wiki_path.resolve()
     except OSError:
@@ -6007,6 +6007,14 @@ def _llm_wiki_verified_status_file_stat(wiki_path: Path, path: Path) -> os.stat_
     except (OSError, ValueError):
         return None
     if not _stat.S_ISREG(st_entry.st_mode):
+        return None
+    return st_entry
+
+
+def _llm_wiki_verified_status_file_stat(wiki_path: Path, path: Path) -> os.stat_result | None:
+    """Return identity-checked metadata for a top-level wiki status file."""
+    st_entry = _llm_wiki_status_file_entry_stat(wiki_path, path)
+    if st_entry is None:
         return None
     fd = None
     try:
@@ -6109,13 +6117,13 @@ def _llm_wiki_last_writer(
 
     # Priority 2: log.md last entry action verb (heading lines only, bounded)
     log_path = wiki_path / "log.md"
-    if _within_wiki(log_path) and log_path.is_file() and not log_path.is_symlink():
+    log_entry = _llm_wiki_status_file_entry_stat(wiki_path, log_path)
+    if log_entry is not None:
         try:
-            log_stat = log_path.stat()
             fd = os.open(str(log_path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             try:
                 st_open = os.fstat(fd)
-                if (st_open.st_dev, st_open.st_ino) != (log_stat.st_dev, log_stat.st_ino):
+                if (st_open.st_dev, st_open.st_ino) != (log_entry.st_dev, log_entry.st_ino):
                     raise FileNotFoundError("wiki log changed before open")
                 with os.fdopen(fd, encoding="utf-8", errors="replace") as fh:
                     fd = None
