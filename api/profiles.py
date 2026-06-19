@@ -133,17 +133,18 @@ def _is_isolated_profile_mode() -> bool:
     This indicates a single-profile deployment where the WebUI should pin to
     that profile and reject cross-profile operations.
 
-    HERMES_BASE_HOME env var, if set, overrides and forces non-isolated mode
-    (allows deployments to explicitly opt out of isolation detection).
+    Isolation is derived only from the literal ``*/profiles/<name>`` shape of
+    HERMES_HOME at startup. A normal multi-profile deployment points
+    HERMES_HOME at the base home (``~/.hermes``), which does not match the
+    shape, so isolation stays off. We deliberately do not key this off
+    HERMES_BASE_HOME: that variable normally points at the base home already,
+    so using it as an opt-out silently disables legitimate isolated-profile
+    deployments.
 
     Uses _INITIAL_HERMES_HOME (snapshotted at import time) to detect isolation,
     not the current os.environ value. init_profile_state() overwrites HERMES_HOME
     at startup, which would disable isolation detection if we read it here.
     """
-    # Explicit HERMES_BASE_HOME opt-out takes precedence
-    if os.getenv('HERMES_BASE_HOME', '').strip():
-        return False
-
     hermes_home = _INITIAL_HERMES_HOME
     if not hermes_home:
         return False
@@ -375,6 +376,10 @@ def _resolve_profile_home_for_name(name: str) -> Path:
     names fall back to the base home so traversal-shaped cookie values cannot
     influence filesystem paths.
     """
+    # In isolated mode, the pinned profile name, including a literal
+    # "default", must resolve to the configured startup HERMES_HOME.
+    if _is_isolated_profile_mode() and name == _isolated_profile_name():
+        return Path(_INITIAL_HERMES_HOME).expanduser()
     if not name or _is_root_profile(name):
         return _DEFAULT_HERMES_HOME
     if not _PROFILE_ID_RE.fullmatch(name):
@@ -1378,9 +1383,15 @@ def list_profiles_api() -> list:
         try:
             from hermes_cli.profiles import list_profiles
             infos = list_profiles()
-            # Find the current profile and return only that one
+            # When the isolated profile is literally named "default", upstream
+            # can surface the base-home row first. Only trust a row whose path
+            # resolves to the same directory as the isolated startup home.
             for p in infos:
-                if p.name == active:
+                try:
+                    same_home = Path(p.path).expanduser().resolve() == hermes_home.resolve()
+                except OSError:
+                    same_home = False
+                if p.name == active and same_home:
                     enabled_count, total_count = _get_profile_skills_stats(p.path)
                     return [{
                         'name': p.name,
@@ -1403,7 +1414,7 @@ def list_profiles_api() -> list:
         return [{
             'name': active,
             'path': str(hermes_home),
-            'is_default': False,
+            'is_default': _is_root_profile(active),
             'is_active': True,
             'gateway_running': False,
             'model': None,

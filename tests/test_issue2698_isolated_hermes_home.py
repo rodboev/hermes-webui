@@ -88,8 +88,8 @@ class TestIsolatedProfileModeDetection:
                     isolated = _is_isolated_profile_mode()
                     assert isolated is True, f"Expected isolated mode for {temp_single_profile}"
 
-    def test_hermes_base_home_override_forces_normal_mode(self, temp_single_profile):
-        """HERMES_BASE_HOME env var override forces normal mode even with profile subdir."""
+    def test_hermes_base_home_does_not_disable_isolation(self, temp_single_profile):
+        """HERMES_BASE_HOME must not disable isolation for a profiles/<name> path."""
         base_home = temp_single_profile.parent.parent
         with mock.patch.dict(
             os.environ,
@@ -101,7 +101,7 @@ class TestIsolatedProfileModeDetection:
             with mock.patch("api.profiles._DEFAULT_HERMES_HOME", base_home):
                 with mock.patch("api.profiles._INITIAL_HERMES_HOME", str(temp_single_profile)):
                     isolated = _is_isolated_profile_mode()
-                    assert isolated is False
+                    assert isolated is True
 
 
 class TestListProfilesInIsolatedMode:
@@ -271,6 +271,54 @@ class TestIsolatedRuntimePinning:
 
         assert get_active_profile_name() == "default"
         assert get_active_hermes_home() == isolated_default
+
+    def test_explicit_profile_resolution_for_isolated_default_uses_pinned_home(self, temp_hermes_home, monkeypatch):
+        """Explicit default-profile resolution must stay on the isolated home."""
+        from api.profiles import get_hermes_home_for_profile, _resolve_profile_home_for_name
+
+        isolated_default = temp_hermes_home / "profiles" / "default"
+        isolated_default.mkdir()
+        for subdir in ["memories", "sessions", "skills", "skins", "logs", "plans", "workspace", "cron"]:
+            (isolated_default / subdir).mkdir(exist_ok=True)
+
+        monkeypatch.setenv("HERMES_HOME", str(isolated_default))
+        monkeypatch.setattr(_profiles_mod, "_DEFAULT_HERMES_HOME", temp_hermes_home)
+        monkeypatch.setattr(_profiles_mod, "_INITIAL_HERMES_HOME", str(isolated_default))
+
+        assert _resolve_profile_home_for_name("default") == isolated_default
+        assert get_hermes_home_for_profile("default") == isolated_default
+        assert get_hermes_home_for_profile("default") != temp_hermes_home
+
+    def test_list_profiles_prefers_matching_isolated_default_home(self, temp_hermes_home, monkeypatch):
+        """The isolated profiles/default row must not collapse to the base-home row."""
+        isolated_default = temp_hermes_home / "profiles" / "default"
+        isolated_default.mkdir(parents=True)
+        for subdir in ["memories", "sessions", "skills", "skins", "logs", "plans", "workspace", "cron"]:
+            (isolated_default / subdir).mkdir(exist_ok=True)
+
+        class _Info:
+            def __init__(self, name, path, is_default):
+                self.name = name
+                self.path = path
+                self.is_default = is_default
+                self.gateway_running = False
+                self.model = None
+                self.provider = None
+                self.has_env = False
+
+        monkeypatch.setenv("HERMES_HOME", str(isolated_default))
+        monkeypatch.setattr(_profiles_mod, "_DEFAULT_HERMES_HOME", temp_hermes_home)
+        monkeypatch.setattr(_profiles_mod, "_INITIAL_HERMES_HOME", str(isolated_default))
+        monkeypatch.setattr(_profiles_mod, "_get_profile_skills_stats", lambda _path: (0, 0))
+
+        with mock.patch("hermes_cli.profiles.list_profiles", return_value=[
+            _Info("default", temp_hermes_home, True),
+            _Info("default", isolated_default, False),
+        ]):
+            rows = list_profiles_api()
+
+        assert len(rows) == 1
+        assert Path(rows[0]["path"]) == isolated_default
 
 
 class TestProfileMutationsInIsolatedMode:
