@@ -19,6 +19,7 @@ from api.profiles import (
     list_profiles_api,
     create_profile_api,
     delete_profile_api,
+    switch_profile,
 )
 
 
@@ -216,6 +217,39 @@ class TestProfileMutationsInIsolatedMode:
                 with mock.patch("api.profiles._INITIAL_HERMES_HOME", str(temp_single_profile)):
                     with pytest.raises(PermissionError, match=".*isolated.*|.*single.*"):
                         delete_profile_api("user1")
+
+    def test_switch_to_different_profile_rejected(self, temp_single_profile):
+        """switch_profile should reject switching to another profile in isolated mode."""
+        base_home = temp_single_profile.parent.parent
+        env_dict = {
+            "HERMES_HOME": str(temp_single_profile),
+            "HERMES_BASE_HOME": "",
+        }
+        with mock.patch.dict(os.environ, env_dict, clear=False):
+            with mock.patch("api.profiles._DEFAULT_HERMES_HOME", base_home):
+                with mock.patch("api.profiles._INITIAL_HERMES_HOME", str(temp_single_profile)):
+                    with pytest.raises(PermissionError, match=".*isolated.*|.*pinned.*"):
+                        switch_profile("other_user")
+
+    def test_switch_to_same_profile_idempotent(self, temp_single_profile):
+        """switch_profile to the isolated profile itself should pass through."""
+        base_home = temp_single_profile.parent.parent
+        env_dict = {
+            "HERMES_HOME": str(temp_single_profile),
+            "HERMES_BASE_HOME": "",
+        }
+        with mock.patch.dict(os.environ, env_dict, clear=False):
+            with mock.patch("api.profiles._DEFAULT_HERMES_HOME", base_home):
+                with mock.patch("api.profiles._INITIAL_HERMES_HOME", str(temp_single_profile)):
+                    # Should not raise PermissionError; may fail downstream
+                    # for other reasons (missing hermes_cli), but the isolation
+                    # guard must pass for the same-name case.
+                    try:
+                        switch_profile("user1")
+                    except PermissionError:
+                        pytest.fail("switch_profile should allow switching to the isolated profile itself")
+                    except (ImportError, ValueError, RuntimeError):
+                        pass  # expected in test env without hermes_cli
 
 
 class TestNormalModePreservation:
