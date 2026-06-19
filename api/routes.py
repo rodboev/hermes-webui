@@ -6150,7 +6150,7 @@ def _build_llm_wiki_status() -> dict:
         page_files = [target for target, _, _ in verified_page_entries]
         status_files: list[tuple[Path, float]] = []
         for path in (wiki_path / "SCHEMA.md", wiki_path / "index.md", wiki_path / "log.md"):
-            if not path.exists() or not path.is_file():
+            if not path.exists() or not path.is_file() or path.is_symlink():
                 continue
             try:
                 status_files.append((path, path.stat().st_mtime))
