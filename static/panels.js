@@ -6655,7 +6655,7 @@ async function loadSettingsPanel(){
       window._renderUserMarkdown=renderUserMarkdownCb.checked;
       renderUserMarkdownCb.onchange=function(){
         window._renderUserMarkdown=this.checked;
-        _clearRenderCache();
+        if(typeof clearMessageRenderCache==='function') clearMessageRenderCache();
         if(typeof renderMessages==='function') renderMessages();
         _scheduleAppearanceAutosave();
       };
