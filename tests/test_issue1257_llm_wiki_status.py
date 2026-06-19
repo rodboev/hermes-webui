@@ -252,7 +252,6 @@ def test_llm_wiki_status_log_heading_rechecks_preopen_symlink_swap(monkeypatch, 
 
 
 def test_llm_wiki_status_last_updated_rechecks_status_file_identity(monkeypatch, tmp_path):
-    import os as _os
     import api.routes as routes
 
     wiki = tmp_path / "wiki"
