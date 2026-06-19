@@ -5984,6 +5984,8 @@ def _llm_wiki_allowlisted_entries(wiki_path: Path) -> dict[str, tuple[Path, tupl
                 if not _wiki_read_relpath_is_clean(rel_resolved):
                     continue
                 st0 = resolved_target.stat()
+                if listed_path.resolve() != resolved_target:
+                    continue
                 entries[rel_listed.as_posix()] = (resolved_target, (st0.st_dev, st0.st_ino))
             except (OSError, ValueError):
                 continue
@@ -6079,7 +6081,7 @@ def _llm_wiki_last_writer(
 
     # Priority 2: log.md last entry action verb (heading lines only, bounded)
     log_path = wiki_path / "log.md"
-    if _within_wiki(log_path) and log_path.is_file():
+    if _within_wiki(log_path) and log_path.is_file() and not log_path.is_symlink():
         try:
             log_stat = log_path.stat()
             fd = os.open(str(log_path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -6146,14 +6148,17 @@ def _build_llm_wiki_status() -> dict:
             verified_page_entries.append((target, identity, st))
         page_entries = [(target, identity) for target, identity, _ in verified_page_entries]
         page_files = [target for target, _, _ in verified_page_entries]
-        status_files = [p for p in (wiki_path / "SCHEMA.md", wiki_path / "index.md", wiki_path / "log.md") if p.exists() and p.is_file()]
-        status_files.extend(page_files)
-        latest = None
-        for item in status_files:
+        status_files: list[tuple[Path, float]] = []
+        for path in (wiki_path / "SCHEMA.md", wiki_path / "index.md", wiki_path / "log.md"):
+            if not path.exists() or not path.is_file():
+                continue
             try:
-                mtime = item.stat().st_mtime
+                status_files.append((path, path.stat().st_mtime))
             except Exception:
                 continue
+        status_files.extend((target, st.st_mtime) for target, _, st in verified_page_entries)
+        latest = None
+        for _, mtime in status_files:
             latest = mtime if latest is None else max(latest, mtime)
 
         base.update({
