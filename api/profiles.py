@@ -40,6 +40,7 @@ _CLONE_CONFIG_FILES = ['config.yaml', '.env', 'SOUL.md']
 # base home, which would disable isolation detection. Snapshot it here at import
 # time (before init_profile_state runs) and use the snapshot in the detector.
 _INITIAL_HERMES_HOME = os.getenv('HERMES_HOME', '').strip()
+_ISOLATED_SYMLINK_WARNING_EMITTED = False
 
 # ── Module state ────────────────────────────────────────────────────────────
 _active_profile = 'default'
@@ -152,6 +153,15 @@ def _is_isolated_profile_mode() -> bool:
     # i.e., parent dir is named 'profiles' and grandparent exists
     if p.parent.name == 'profiles' and p.parent.parent.exists():
         return True
+    if p.is_symlink():
+        global _ISOLATED_SYMLINK_WARNING_EMITTED
+        if not _ISOLATED_SYMLINK_WARNING_EMITTED:
+            logger.warning(
+                "HERMES_HOME symlink %s does not literally match */profiles/<name>; "
+                "isolated profile mode is disabled unless the literal profile path is used.",
+                p,
+            )
+            _ISOLATED_SYMLINK_WARNING_EMITTED = True
     return False
 
 
@@ -325,9 +335,12 @@ def get_active_profile_name() -> str:
     """Return the currently active profile name.
 
     Priority:
-      1. Thread-local (set per-request from hermes_profile cookie) — issue #798
-      2. Process-level default (_active_profile)
+      1. Isolated-profile deployment name from the configured HERMES_HOME path
+      2. Thread-local (set per-request from hermes_profile cookie) — issue #798
+      3. Process-level default (_active_profile)
     """
+    if _is_isolated_profile_mode():
+        return _isolated_profile_name()
     tls_name = getattr(_tls, 'profile', None)
     if tls_name is not None:
         return tls_name
@@ -1009,8 +1022,12 @@ def init_profile_state() -> None:
     module-level cached paths.  Called once from config.py after imports.
     """
     global _active_profile
-    _active_profile = _read_active_profile_file()
-    home = get_active_hermes_home()
+    if _is_isolated_profile_mode():
+        _active_profile = _isolated_profile_name()
+        home = Path(_INITIAL_HERMES_HOME).expanduser()
+    else:
+        _active_profile = _read_active_profile_file()
+        home = get_active_hermes_home()
     _set_hermes_home(home)
     install_cron_scheduler_profile_isolation()
     _reload_dotenv(home)

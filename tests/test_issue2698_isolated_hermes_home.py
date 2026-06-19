@@ -16,9 +16,14 @@ import pytest
 import api.profiles as _profiles_mod
 from api.profiles import (
     _is_isolated_profile_mode,
+    clear_request_profile,
     list_profiles_api,
     create_profile_api,
     delete_profile_api,
+    get_active_hermes_home,
+    get_active_profile_name,
+    init_profile_state,
+    set_request_profile,
     switch_profile,
 )
 
@@ -185,6 +190,71 @@ class TestListProfilesInIsolatedMode:
                                 # Check for single_profile_mode flag in response structure
                                 # For now, profiles should be a list; the flag will be in routes.py response
                                 assert len(profiles) == 1
+
+
+class TestIsolatedRuntimePinning:
+    """Test that isolated mode pins both detection and active runtime home."""
+
+    def test_get_active_profile_name_ignores_tls_and_global_in_isolated_mode(self, temp_single_profile):
+        """Isolated mode must ignore request TLS and process-global active profile."""
+        base_home = temp_single_profile.parent.parent
+        env_dict = {
+            "HERMES_HOME": str(temp_single_profile),
+            "HERMES_BASE_HOME": "",
+        }
+        with mock.patch.dict(os.environ, env_dict, clear=False):
+            with mock.patch("api.profiles._DEFAULT_HERMES_HOME", base_home):
+                with mock.patch("api.profiles._INITIAL_HERMES_HOME", str(temp_single_profile)):
+                    with mock.patch("api.profiles._active_profile", "other_profile"):
+                        set_request_profile("tls_profile")
+                        try:
+                            assert get_active_profile_name() == "user1"
+                        finally:
+                            clear_request_profile()
+
+    @pytest.mark.parametrize("active_profile_contents", [None, "user2"])
+    def test_init_profile_state_pins_runtime_home_to_isolated_profile(
+        self,
+        temp_single_profile,
+        monkeypatch,
+        active_profile_contents,
+    ):
+        """init_profile_state must ignore the base active_profile file in isolated mode."""
+        base_home = temp_single_profile.parent.parent
+        other_profile = base_home / "profiles" / "user2"
+        other_profile.mkdir()
+        for subdir in ["memories", "sessions", "skills", "skins", "logs", "plans", "workspace", "cron"]:
+            (other_profile / subdir).mkdir(exist_ok=True)
+
+        active_profile_file = base_home / "active_profile"
+        if active_profile_contents is None:
+            active_profile_file.unlink(missing_ok=True)
+        else:
+            active_profile_file.write_text(active_profile_contents, encoding="utf-8")
+
+        monkeypatch.setenv("HERMES_HOME", str(temp_single_profile))
+        monkeypatch.setenv("HERMES_BASE_HOME", "")
+        monkeypatch.setattr(_profiles_mod, "_DEFAULT_HERMES_HOME", base_home)
+        monkeypatch.setattr(_profiles_mod, "_INITIAL_HERMES_HOME", str(temp_single_profile))
+        monkeypatch.setattr(_profiles_mod, "_active_profile", "default")
+        monkeypatch.setattr(_profiles_mod, "install_cron_scheduler_profile_isolation", lambda: None)
+
+        reloaded = []
+        real_reload_dotenv = _profiles_mod._reload_dotenv
+
+        def _record_reload(home):
+            reloaded.append(home)
+            return real_reload_dotenv(home)
+
+        monkeypatch.setattr(_profiles_mod, "_reload_dotenv", _record_reload)
+
+        init_profile_state()
+
+        assert _profiles_mod._active_profile == "user1"
+        assert get_active_profile_name() == "user1"
+        assert get_active_hermes_home() == temp_single_profile
+        assert Path(os.environ["HERMES_HOME"]) == temp_single_profile
+        assert reloaded == [temp_single_profile]
 
 
 class TestProfileMutationsInIsolatedMode:
