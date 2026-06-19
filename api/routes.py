@@ -5964,7 +5964,8 @@ def _llm_wiki_allowlisted_entries(wiki_path: Path) -> dict[str, tuple[Path, tupl
         return {}
 
     def _wiki_read_relpath_is_clean(rel: Path) -> bool:
-        return bool(rel.parts) and not any(part.startswith(".") for part in rel.parts)
+        rel_text = rel.as_posix()
+        return bool(rel.parts) and "\\" not in rel_text and not any(part.startswith(".") for part in rel.parts)
 
     entries: dict[str, tuple[Path, tuple[int, int]]] = {}
     try:

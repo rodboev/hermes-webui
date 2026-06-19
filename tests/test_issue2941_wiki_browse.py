@@ -83,7 +83,11 @@ def test_wiki_browse_skips_pages_that_disappear_during_listing(monkeypatch, tmp_
     missing = wiki_root / "gone.md"
 
     monkeypatch.setattr(routes, "_llm_wiki_resolve_path", lambda: (wiki_root, None, None))
-    monkeypatch.setattr(routes, "_llm_wiki_page_files", lambda root: [missing, ok])
+    monkeypatch.setattr(
+        routes,
+        "_llm_wiki_allowlisted_entries",
+        lambda root: {"gone.md": (missing, (0, 0)), "ok.md": (ok, (0, 0))},
+    )
 
     handler = _FakeHandler()
     routes.handle_get(handler, urlparse("http://example.com/api/wiki/browse"))
@@ -106,31 +110,10 @@ def test_wiki_page_vanished_between_check_and_read_returns_404_not_500(monkeypat
 
     wiki_root = tmp_path / "wiki"
     wiki_root.mkdir()
+    missing = (wiki_root / "gone.md").resolve()
 
     monkeypatch.setattr(routes, "_llm_wiki_resolve_path", lambda: (wiki_root, None, None))
-
-    # Path resolves inside the root and passes the containment guard, but the
-    # read itself raises FileNotFoundError (simulating a vanished/racing file).
-    class _GonePath(type(wiki_root)):
-        def is_file(self):  # noqa: D401 - test stub
-            return True
-
-        def read_text(self, *a, **k):
-            raise FileNotFoundError("vanished between list and read")
-
-    real_path_join = routes.os.path.join
-
-    monkeypatch.setattr(routes, "_skill_path_within", lambda root, p: True)
-
-    orig_Path = routes.Path
-
-    def _fake_Path(arg):
-        # Only wrap the wiki page target; leave the root resolution alone.
-        if isinstance(arg, str) and arg == real_path_join(str(wiki_root), "gone.md"):
-            return _GonePath(arg)
-        return orig_Path(arg)
-
-    monkeypatch.setattr(routes, "Path", _fake_Path)
+    monkeypatch.setattr(routes, "_llm_wiki_allowlisted_entries", lambda root: {"gone.md": (missing, (0, 0))})
 
     handler = _FakeHandler()
     routes.handle_get(handler, urlparse("http://example.com/api/wiki/page?path=gone.md"))
