@@ -2349,9 +2349,10 @@ function _kanbanLinksHtml(links){
   const children = (links && links.children) || [];
   const taskId = _kanbanCurrentTaskId;
   const item = (id, isParent) => {
+    // Stored dependency orientation is parent -> child.
     const parentId = isParent ? id : taskId;
     const childId = isParent ? taskId : id;
-    return `<code>${esc(id)} <button class="btn mini" onclick="removeKanbanDependency('${esc(parentId)}','${esc(childId)}')" data-i18n="kanban_remove_dependency" title="${esc(t('kanban_remove_dependency') || 'Remove')}">✕</button></code>`;
+    return `<code>${esc(id)} <button class="btn mini kanban-remove-dependency-btn" data-kanban-parent-id="${esc(parentId)}" data-kanban-child-id="${esc(childId)}" data-i18n="kanban_remove_dependency" title="${esc(t('kanban_remove_dependency') || 'Remove')}">✕</button></code>`;
   };
   const hasLinks = parents.length || children.length;
   return `<div class="kanban-detail-links-section">
@@ -2361,7 +2362,7 @@ function _kanbanLinksHtml(links){
     </div>` : ''}
     <div class="kanban-detail-links-controls">
       <input type="text" id="kanbanDependencyInput" maxlength="255" autocomplete="off" data-i18n-placeholder="kanban_dependency_placeholder" placeholder="Task ID to link">
-      <button class="btn secondary" onclick="addKanbanDependency('${esc(taskId)}')" data-i18n="kanban_add_dependency">Add dependency</button>
+      <button class="btn secondary kanban-add-dependency-btn" data-kanban-task-id="${esc(taskId)}" data-i18n="kanban_add_dependency">Add dependency</button>
     </div>
   </div>`;
 }
@@ -2896,7 +2897,7 @@ async function addKanbanDependency(taskId){
   try {
     await api('/api/kanban/links' + _kanbanBoardQuery(), {
       method: 'POST',
-      body: JSON.stringify({parent_id: taskId, child_id: linkTo}),
+      body: JSON.stringify({parent_id: linkTo, child_id: taskId}),
     });
     if (input) input.value = '';
     await loadKanbanTask(taskId);
@@ -2912,6 +2913,24 @@ async function removeKanbanDependency(parentId, childId){
     });
     await loadKanbanTask(_kanbanCurrentTaskId);
   } catch(e) { showToast(t('kanban_unavailable') + ': ' + (e.message || e), 'error'); }
+}
+
+function _bindKanbanDependencyHandlers(){
+  const preview = $('kanbanTaskPreview');
+  if (!preview) return;
+
+  const addBtn = preview.querySelector('.kanban-add-dependency-btn[data-kanban-task-id]');
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      addKanbanDependency(addBtn.dataset.kanbanTaskId);
+    });
+  }
+
+  preview.querySelectorAll('.kanban-remove-dependency-btn[data-kanban-parent-id][data-kanban-child-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      removeKanbanDependency(button.dataset.kanbanParentId, button.dataset.kanbanChildId);
+    });
+  });
 }
 
 function _kanbanRenderTaskDetail(data){
@@ -2970,6 +2989,7 @@ async function loadKanbanTask(taskId){
     if (preview) {
       preview.style.display = '';
       preview.innerHTML = _kanbanRenderTaskDetail(data);
+      _bindKanbanDependencyHandlers();
     }
     showToast(`${t('kanban_task')}: ${title}`);
   } catch(e) { showToast(t('kanban_unavailable') + ': ' + (e.message || e), 'error'); }

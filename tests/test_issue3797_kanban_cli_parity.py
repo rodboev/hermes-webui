@@ -124,12 +124,22 @@ class TestDependencyControls:
         # Look for dependency input in the function
         assert "kanbanDependencyInput" in PANELS_JS
         # Button to add dependency
-        assert "onclick=\"addKanbanDependency" in PANELS_JS
+        assert "kanban-add-dependency-btn" in PANELS_JS
+        assert "data-kanban-task-id" in PANELS_JS
+        assert "_bindKanbanDependencyHandlers" in PANELS_JS
 
     def test_remove_dependency_button_on_each_link(self):
         """_kanbanLinksHtml must render a remove button for each parent/child link."""
         # Each link renders a remove button
-        assert "onclick=\"removeKanbanDependency" in PANELS_JS
+        assert "kanban-remove-dependency-btn" in PANELS_JS
+        assert "data-kanban-parent-id" in PANELS_JS
+        assert "data-kanban-child-id" in PANELS_JS
+
+    def test_dependency_handlers_are_non_inline(self):
+        """Dependency actions should be wired via JS listeners, not inline onclick."""
+        assert "onclick=\"addKanbanDependency" not in PANELS_JS
+        assert "onclick=\"removeKanbanDependency" not in PANELS_JS
+        assert "addEventListener('click'" in PANELS_JS
 
     def test_i18n_keys_for_dependencies(self):
         """All dependency-related i18n keys must be defined."""
@@ -147,10 +157,11 @@ class TestAPIIntegration:
 
     def test_add_dependency_payload_structure(self):
         """addKanbanDependency must send correct payload to /api/kanban/links."""
-        # Payload must include parent (task being edited) and child (linked task)
+        # Payload must include the typed prerequisite as parent and current task as child
         assert "addKanbanDependency" in PANELS_JS
         # Must use board query suffix
         assert "_kanbanBoardQuery()" in PANELS_JS
+        assert re.search(r"JSON\.stringify\(\{parent_id:\s*linkTo,\s*child_id:\s*taskId\}\)", PANELS_JS), "add dependency payload must use parent_id=linkTo and child_id=taskId"
 
     def test_remove_dependency_deletes_via_post(self):
         """removeKanbanDependency must POST to /api/kanban/links/delete."""
@@ -161,6 +172,7 @@ class TestAPIIntegration:
         # Payload must have parent_id and child_id fields
         assert "parent_id:" in PANELS_JS or '"parent_id":' in PANELS_JS
         assert "child_id:" in PANELS_JS or '"child_id":' in PANELS_JS
+        assert re.search(r"JSON\.stringify\(\{parent_id:\s*parentId,\s*child_id:\s*childId\}\)", PANELS_JS), "remove dependency payload must retain parent_id/child_id orientation"
 
     def test_links_refreshed_after_dependency_operation(self):
         """After adding or removing a dependency, loadKanbanTask must refresh the detail view."""
