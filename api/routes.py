@@ -5978,6 +5978,8 @@ def _llm_wiki_allowlisted_entries(wiki_path: Path) -> dict[str, tuple[Path, tupl
                 section_real.relative_to(wiki_real)
                 resolved_target = listed_path.resolve()
                 resolved_target.relative_to(section_real)
+                if not resolved_target.is_file():
+                    continue
                 rel_resolved = resolved_target.relative_to(wiki_real)
                 if not _wiki_read_relpath_is_clean(rel_resolved):
                     continue

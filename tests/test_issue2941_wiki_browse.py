@@ -292,6 +292,32 @@ def test_wiki_browse_cached_entry_rechecks_resolved_containment(monkeypatch, tmp
     assert handler.get_json()["pages"] == []
 
 
+def test_wiki_browse_drops_cached_entry_replaced_by_directory(monkeypatch, tmp_path):
+    from api import routes
+
+    wiki_root = tmp_path / "wiki"
+    section = wiki_root / "concepts"
+    nested = section / "sub"
+    nested.mkdir(parents=True)
+    page = nested / "real.md"
+    page.write_text("# real\n", encoding="utf-8")
+
+    routes._llm_wiki_clear_page_files_cache()
+    monkeypatch.setattr(routes, "_WIKI_ALLOWLIST_TTL", 60.0)
+    monkeypatch.setattr(routes, "_llm_wiki_resolve_path", lambda: (wiki_root, None, None))
+
+    assert routes._llm_wiki_page_files(wiki_root) == [page]
+
+    page.unlink()
+    page.mkdir()
+
+    handler = _FakeHandler()
+    routes.handle_get(handler, urlparse("http://example.com/api/wiki/browse"))
+
+    assert handler.status == 200
+    assert handler.get_json()["pages"] == []
+
+
 def test_wiki_page_cached_entry_cannot_jump_sections(monkeypatch, tmp_path):
     import os as _os
     from api import routes
