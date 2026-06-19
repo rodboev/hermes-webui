@@ -7,6 +7,8 @@ of other profiles, and hide multi-profile UI affordances.
 """
 
 import os
+import io
+import sys
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -320,6 +322,27 @@ class TestIsolatedRuntimePinning:
         assert len(rows) == 1
         assert Path(rows[0]["path"]) == isolated_default
 
+    def test_list_profiles_isolated_fallback_does_not_reenter_root_profile_lookup(self, temp_single_profile, monkeypatch):
+        """The isolated fallback must not recurse back through _is_root_profile."""
+        base_home = temp_single_profile.parent.parent
+        monkeypatch.setenv("HERMES_HOME", str(temp_single_profile))
+        monkeypatch.setenv("HERMES_BASE_HOME", "")
+        monkeypatch.setattr(_profiles_mod, "_DEFAULT_HERMES_HOME", base_home)
+        monkeypatch.setattr(_profiles_mod, "_INITIAL_HERMES_HOME", str(temp_single_profile))
+        monkeypatch.setattr(_profiles_mod, "_get_profile_skills_stats", lambda _path: (0, 0))
+        monkeypatch.setattr(
+            _profiles_mod,
+            "_is_root_profile",
+            lambda _name: (_ for _ in ()).throw(AssertionError("_is_root_profile should not run in isolated fallback")),
+        )
+
+        with mock.patch.dict(sys.modules, {"hermes_cli": None, "hermes_cli.profiles": None}):
+            rows = list_profiles_api()
+
+        assert len(rows) == 1
+        assert rows[0]["name"] == "user1"
+        assert rows[0]["is_default"] is False
+
 
 class TestProfileMutationsInIsolatedMode:
     """Test that create/delete/switch are rejected (403) in isolated mode."""
@@ -385,6 +408,52 @@ class TestProfileMutationsInIsolatedMode:
                     except (ImportError, ValueError, RuntimeError):
                         pass  # expected in test env without hermes_cli
 
+    def test_scheduled_cron_jobs_stay_pinned_to_isolated_home(self, temp_single_profile, monkeypatch):
+        """Scheduler jobs must not resolve foreign profile homes in isolated mode."""
+        base_home = temp_single_profile.parent.parent
+        monkeypatch.setenv("HERMES_HOME", str(temp_single_profile))
+        monkeypatch.setenv("HERMES_BASE_HOME", "")
+        monkeypatch.setattr(_profiles_mod, "_DEFAULT_HERMES_HOME", base_home)
+        monkeypatch.setattr(_profiles_mod, "_INITIAL_HERMES_HOME", str(temp_single_profile))
+
+        assert _profiles_mod._home_for_scheduled_cron_job({"id": "job2698", "profile": "other"}) == temp_single_profile
+
+    def test_cli_import_all_profiles_is_rejected_in_isolated_mode(self, monkeypatch):
+        """Direct all_profiles CLI imports must not bypass isolated-profile boundaries."""
+        import api.routes as routes
+
+        captured = {}
+
+        class _Handler:
+            def __init__(self):
+                self.wfile = io.BytesIO()
+
+            def send_response(self, status):
+                self.status = status
+
+            def send_header(self, key, value):
+                pass
+
+            def end_headers(self):
+                pass
+
+        monkeypatch.setattr(routes, "_is_isolated_profile_mode", lambda: True)
+        monkeypatch.setattr(
+            routes,
+            "bad",
+            lambda h, m, c=400: (captured.__setitem__("bad", (m, c)), True)[1],
+        )
+
+        routes._handle_session_import_cli(
+            _Handler(),
+            {"session_id": "foreign-cli-2698", "all_profiles": 1, "profile": "other"},
+        )
+
+        assert captured["bad"] == (
+            "all_profiles import is not allowed in isolated profile mode",
+            403,
+        )
+
 
 class TestNormalModePreservation:
     """Test that normal mode behavior is completely unchanged."""
@@ -410,3 +479,10 @@ class TestNormalModePreservation:
                     except ImportError:
                         # hermes_cli not available, skip
                         pass
+
+
+def test_profiles_panel_hides_delete_controls_in_single_profile_mode():
+    panels_js = (Path(__file__).resolve().parents[1] / "static" / "panels.js").read_text(encoding="utf-8")
+
+    assert "const singleProfileMode = !!(_profilesCache && _profilesCache.single_profile_mode);" in panels_js
+    assert "if (isDefault || singleProfileMode) hide(delBtn); else show(delBtn);" in panels_js

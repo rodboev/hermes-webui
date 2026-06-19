@@ -5601,8 +5601,9 @@ function _setProfileHeaderButtons(mode, p, activeName){
   if (mode === 'read') {
     const isActive = p && p.name === activeName;
     const isDefault = !!(p && p.is_default);
-    if (isActive) hide(actBtn); else show(actBtn);
-    if (isDefault) hide(delBtn); else show(delBtn);
+    const singleProfileMode = !!(_profilesCache && _profilesCache.single_profile_mode);
+    if (isActive || singleProfileMode) hide(actBtn); else show(actBtn);
+    if (isDefault || singleProfileMode) hide(delBtn); else show(delBtn);
     hide(cancelBtn); hide(saveBtn);
   } else if (mode === 'create') {
     hide(actBtn); hide(delBtn); show(cancelBtn); show(saveBtn);

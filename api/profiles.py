@@ -442,6 +442,14 @@ def _home_for_scheduled_cron_job(job: dict) -> Path:
     fall back to the server default rather than crashing every scheduler tick.
     """
     raw = str((job or {}).get('profile') or '').strip()
+    if _is_isolated_profile_mode():
+        active = _isolated_profile_name()
+        if raw and not _profiles_match(raw, active):
+            logger.warning(
+                "Cron job %s references profile %r outside isolated profile %r; falling back to isolated home",
+                (job or {}).get('id', '?'), raw, active,
+            )
+        return get_active_hermes_home()
     if not raw:
         return get_active_hermes_home()
     if _is_root_profile(raw):
@@ -1414,7 +1422,7 @@ def list_profiles_api() -> list:
         return [{
             'name': active,
             'path': str(hermes_home),
-            'is_default': _is_root_profile(active),
+            'is_default': active == 'default',
             'is_active': True,
             'gateway_running': False,
             'model': None,
