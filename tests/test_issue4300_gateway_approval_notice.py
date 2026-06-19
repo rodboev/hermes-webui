@@ -21,16 +21,17 @@ def test_gateway_chat_emits_approval_gateway_unsupported_event():
 
 
 def test_gateway_chat_once_per_session_guard_pattern():
-    """Verify the once-per-session guard: hasattr check + flag check + flag set."""
-    # The guard pattern should be: hasattr + flag check + flag set
+    """Verify the once-per-session guard: capability check + hasattr + flag check + flag set."""
+    assert "if not gateway_supports_approval(base_url, api_key):" in GATEWAY_CHAT
     assert "if not hasattr(s, \"_approval_notice_emitted\"):" in GATEWAY_CHAT
     assert "if not s._approval_notice_emitted:" in GATEWAY_CHAT
     assert "s._approval_notice_emitted = True" in GATEWAY_CHAT
-    # Verify order: hasattr must come before the flag checks
+    # Verify order: capability gate before session guard before flag set
+    cap_pos = GATEWAY_CHAT.find("if not gateway_supports_approval(base_url, api_key):")
     hasattr_pos = GATEWAY_CHAT.find("if not hasattr(s, \"_approval_notice_emitted\"):")
     flag_check_pos = GATEWAY_CHAT.find("if not s._approval_notice_emitted:")
     flag_set_pos = GATEWAY_CHAT.find("s._approval_notice_emitted = True")
-    assert hasattr_pos < flag_check_pos < flag_set_pos
+    assert cap_pos < hasattr_pos < flag_check_pos < flag_set_pos
 
 
 def test_gateway_chat_event_payload_contains_type_and_message():
