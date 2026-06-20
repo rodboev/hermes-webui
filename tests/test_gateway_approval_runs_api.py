@@ -135,12 +135,20 @@ def test_gateway_runs_api_submission():
     captured = {}
     original_text = "hello from runs"
 
-    def fake_runs_streaming(*args, **kwargs):
+    def fake_runs_streaming(
+        session_id,
+        msg_text,
+        model,
+        workspace,
+        stream_id,
+        base_url,
+        api_key,
+        prefill_messages,
+        body_extras,
+        **kwargs,
+    ):
         runs_called["called"] = True
-        captured["body_extras"] = kwargs.get("body_extras")
-        if captured["body_extras"] is None:
-            if len(args) > 8:
-                captured["body_extras"] = args[8]
+        captured["body_extras"] = body_extras
         return (original_text, {"input_tokens": 10, "output_tokens": 5})
 
     mock_session = MagicMock()
