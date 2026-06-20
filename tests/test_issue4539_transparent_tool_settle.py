@@ -10,16 +10,18 @@ UI_JS = (ROOT / "static" / "ui.js").read_text(encoding="utf-8")
 
 def _settled_cleanup_selector():
     """Extract the settled-node cleanup querySelectorAll string."""
+    anchor = ".tool-worklog-group:not([data-compression-card])"
+    idx = UI_JS.index(anchor)
     marker = ".forEach(el=>el.remove())"
-    idx = UI_JS.index(marker)
+    end = UI_JS.index(marker, idx) + len(marker)
     line_start = UI_JS.rfind("\n", 0, idx) + 1
-    return UI_JS[line_start:idx + len(marker)]
+    return UI_JS[line_start:end]
 
 
 def _tool_bucketing_block():
-    """Extract the tool-call bucketing loop that iterates S.toolCalls."""
-    start = UI_JS.index("for(const tc of (S.toolCalls||[])){")
-    end = UI_JS.index("\n    }", start) + len("\n    }")
+    """Extract the tool-call bucketing region including burst-ID pre-scan."""
+    start = UI_JS.index("const knownBurstIds=")
+    end = UI_JS.index("\n    }", UI_JS.index("for(const tc of (S.toolCalls||[])){", start)) + len("\n    }")
     return UI_JS[start:end]
 
 
@@ -57,11 +59,13 @@ class TestBurstIdFallbackWhenSegmentLacksBurstAttribute:
             "before using 'burst:' as the bucket key"
         )
 
-    def test_burst_resolvable_scans_assistant_segments(self):
+    def test_burst_ids_pre_scanned_from_assistant_segments(self):
         block = _tool_bucketing_block()
         assert "assistantSegments.values()" in block, (
-            "burstResolvable must scan assistantSegments to check whether "
-            "any segment carries the matching data-activity-burst-id"
+            "knownBurstIds must be built from assistantSegments before the loop"
+        )
+        assert "knownBurstIds.has(burstId)" in block, (
+            "burstResolvable must use the pre-scanned knownBurstIds set"
         )
 
     def test_fallback_uses_burst_resolvable_not_raw_burst_id(self):
