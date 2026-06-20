@@ -128,6 +128,9 @@ var S = {
   activeProfile: 'default',
 };
 
+if (args.preapplyModel) {
+  _applyModelToDropdown(args.preapplyModel, modelSelect, args.preapplyProvider || null);
+}
 syncTopbar();
 
 process.stdout.write(JSON.stringify({
@@ -146,7 +149,17 @@ def driver_path(tmp_path_factory):
     return str(p)
 
 
-def _run_sync(driver_path, *, session_model, initial_value="@expensive:gpt-5.5", default_model="@safe:gpt-4o-mini", dropdown_open=False, model_resolution_deferred=False):
+def _run_sync(
+    driver_path,
+    *,
+    session_model,
+    initial_value="@expensive:gpt-5.5",
+    default_model="@safe:gpt-4o-mini",
+    dropdown_open=False,
+    model_resolution_deferred=False,
+    preapply_model=None,
+    preapply_provider=None,
+):
     payload = {
         "sessionModel": session_model,
         "sessionProvider": None,
@@ -155,6 +168,8 @@ def _run_sync(driver_path, *, session_model, initial_value="@expensive:gpt-5.5",
         "activeProvider": "safe",
         "dropdownOpen": dropdown_open,
         "modelResolutionDeferred": model_resolution_deferred,
+        "preapplyModel": preapply_model,
+        "preapplyProvider": preapply_provider,
         "options": [
             {"provider": "expensive", "value": "@expensive:gpt-5.5", "label": "GPT-5.5"},
             {"provider": "safe", "value": "@safe:gpt-4o-mini", "label": "GPT-4o mini"},
@@ -192,8 +207,38 @@ def test_sync_topbar_rerenders_open_visible_model_dropdown_after_session_model_c
     got = _run_sync(driver_path, session_model="", dropdown_open=True)
 
     assert got["selectValue"] == "@safe:gpt-4o-mini"
-    assert got["calls"]["renderModelDropdown"] >= 1
-    assert got["calls"]["positionModelDropdown"] >= 1
+    assert got["calls"]["renderModelDropdown"] == 1
+    assert got["calls"]["positionModelDropdown"] == 1
+
+
+def test_sync_topbar_does_not_rerender_open_visible_model_dropdown_when_session_model_unchanged(driver_path):
+    got = _run_sync(
+        driver_path,
+        session_model="@safe:gpt-4o-mini",
+        initial_value="@safe:gpt-4o-mini",
+        dropdown_open=True,
+    )
+
+    assert got["selectValue"] == "@safe:gpt-4o-mini"
+    assert got["sessionModel"] == "@safe:gpt-4o-mini"
+    assert got["calls"]["renderModelDropdown"] == 0
+    assert got["calls"]["positionModelDropdown"] == 0
+
+
+def test_sync_topbar_rerender_count_remains_one_for_preapply_plus_sync(driver_path):
+    got = _run_sync(
+        driver_path,
+        session_model="@safe:gpt-4o-mini",
+        initial_value="@expensive:gpt-5.5",
+        dropdown_open=True,
+        preapply_model="@safe:gpt-4o-mini",
+        preapply_provider="safe",
+    )
+
+    assert got["selectValue"] == "@safe:gpt-4o-mini"
+    assert got["sessionModel"] == "@safe:gpt-4o-mini"
+    assert got["calls"]["renderModelDropdown"] == 1
+    assert got["calls"]["positionModelDropdown"] == 1
 
 
 
