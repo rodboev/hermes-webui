@@ -493,8 +493,9 @@ def main() -> int:
         agent_dir = discover_agent_dir()
 
     python_exe = ensure_python_has_webui_deps(discover_launcher_python(agent_dir), agent_dir)
+    configured_state_dir = (os.getenv("HERMES_WEBUI_STATE_DIR") or "").strip()
     state_dir = Path(
-        os.getenv("HERMES_WEBUI_STATE_DIR")
+        configured_state_dir
         or Path(os.getenv("HERMES_HOME") or (Path.home() / ".hermes")) / "webui"
     ).expanduser()
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -502,7 +503,7 @@ def main() -> int:
     # Mutate os.environ so child (or post-execv) inherits the resolved values.
     os.environ["HERMES_WEBUI_HOST"] = args.host
     os.environ["HERMES_WEBUI_PORT"] = str(args.port)
-    os.environ.setdefault("HERMES_WEBUI_STATE_DIR", str(state_dir))
+    os.environ["HERMES_WEBUI_STATE_DIR"] = str(state_dir)
     if agent_dir:
         os.environ["HERMES_WEBUI_AGENT_DIR"] = str(agent_dir)
 
