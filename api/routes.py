@@ -8376,7 +8376,6 @@ def handle_get(handler, parsed) -> bool:
         from api.profiles import (
             list_profiles_api,
             get_active_profile_name,
-            _is_isolated_profile_mode,
         )
 
         return j(
