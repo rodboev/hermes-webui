@@ -10,6 +10,7 @@ import os
 import io
 import sys
 import tempfile
+import types
 from pathlib import Path
 from unittest import mock
 
@@ -421,6 +422,28 @@ class TestProfileMutationsInIsolatedMode:
                     except (ImportError, ValueError, RuntimeError):
                         pass  # expected in test env without hermes_cli
 
+    def test_switch_to_same_default_profile_keeps_pinned_home(self, temp_hermes_home, monkeypatch, tmp_path):
+        """A same-name switch for isolated profiles/default must keep using the pinned home."""
+        isolated_default = temp_hermes_home / "profiles" / "default"
+        isolated_default.mkdir(parents=True)
+        (isolated_default / "workspace").mkdir()
+        base_workspace = tmp_path / "base-workspace"
+        isolated_workspace = tmp_path / "isolated-workspace"
+        base_workspace.mkdir()
+        isolated_workspace.mkdir()
+        (temp_hermes_home / "config.yaml").write_text(f"workspace: {base_workspace}\n", encoding="utf-8")
+        (isolated_default / "config.yaml").write_text(f"workspace: {isolated_workspace}\n", encoding="utf-8")
+
+        monkeypatch.setenv("HERMES_HOME", str(isolated_default))
+        monkeypatch.setenv("HERMES_BASE_HOME", "")
+        monkeypatch.setattr(_profiles_mod, "_DEFAULT_HERMES_HOME", temp_hermes_home)
+        monkeypatch.setattr(_profiles_mod, "_INITIAL_HERMES_HOME", str(isolated_default))
+        monkeypatch.setattr(_profiles_mod, "list_profiles_api", lambda: [])
+
+        result = switch_profile("default", process_wide=False)
+
+        assert result["default_workspace"] == str(isolated_workspace.resolve())
+
     def test_scheduled_cron_jobs_stay_pinned_to_isolated_home(self, temp_single_profile, monkeypatch):
         """Scheduler jobs must not resolve foreign profile homes in isolated mode."""
         base_home = temp_single_profile.parent.parent
@@ -466,6 +489,46 @@ class TestProfileMutationsInIsolatedMode:
             "all_profiles import is not allowed in isolated profile mode",
             403,
         )
+
+    def test_scheduler_publishes_isolated_profile_after_foreign_job_profile(self, temp_single_profile, monkeypatch):
+        """Scheduled cron completion must publish the isolated profile identity."""
+        events = []
+        base_home = temp_single_profile.parent.parent
+
+        cron_pkg = types.ModuleType("cron")
+        cron_pkg.__path__ = []
+        cron_scheduler = types.ModuleType("cron.scheduler")
+        cron_scheduler.run_job = lambda job: events.append(("run", job["id"])) or "ok"
+
+        class _Ctx:
+            def __init__(self, home):
+                self.home = str(home)
+
+            def __enter__(self):
+                events.append(("enter", self.home))
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append(("exit", self.home))
+                return False
+
+        monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+        monkeypatch.setitem(sys.modules, "cron.scheduler", cron_scheduler)
+        monkeypatch.setenv("HERMES_HOME", str(temp_single_profile))
+        monkeypatch.setenv("HERMES_BASE_HOME", "")
+        monkeypatch.setattr(_profiles_mod, "_DEFAULT_HERMES_HOME", base_home)
+        monkeypatch.setattr(_profiles_mod, "_INITIAL_HERMES_HOME", str(temp_single_profile))
+        monkeypatch.setattr(_profiles_mod, "cron_profile_context_for_home", _Ctx)
+        monkeypatch.setattr(
+            _profiles_mod,
+            "publish_session_list_changed",
+            lambda reason, profile=None: events.append(("publish", reason, profile)),
+        )
+
+        _profiles_mod.install_cron_scheduler_profile_isolation()
+
+        assert cron_scheduler.run_job({"id": "job2698", "profile": "other"}) == "ok"
+        assert events[-1] == ("publish", "cron_complete", "user1")
 
 
 class TestNormalModePreservation:

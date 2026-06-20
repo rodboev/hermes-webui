@@ -549,6 +549,8 @@ def main() -> int:
             # for SO_EXCLUSIVEADDRUSE.
             _CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             subprocess.Popen([python_exe, server_path],
+                             cwd=server_cwd,
+                             env=os.environ.copy(),
                              creationflags=_CREATE_NEW_PROCESS_GROUP)
             sys.exit(0)
         os.execv(python_exe, [python_exe, server_path])

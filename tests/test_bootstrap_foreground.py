@@ -429,6 +429,28 @@ class TestForegroundEnvAndCwd:
 
         assert chdir_calls == [str(workspace)]
 
+    def test_windows_foreground_popen_uses_server_cwd_override(self, setup, monkeypatch, clean_env, tmp_path):
+        bs, _agent_dir = setup
+        workspace = tmp_path / "workspace-win"
+        workspace.mkdir()
+        monkeypatch.setenv("HERMES_WEBUI_SERVER_CWD", str(workspace))
+        monkeypatch.setattr(sys, "argv", ["bootstrap.py", "--foreground"])
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        popen_calls = []
+
+        def fake_popen(*args, **kwargs):
+            popen_calls.append((args, kwargs))
+            return None
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+        with pytest.raises(SystemExit):
+            bs.main()
+
+        assert popen_calls[0][1]["cwd"] == str(workspace)
+
     def test_foreground_exports_resolved_env_vars(self, setup, monkeypatch, clean_env):
         bs, agent_dir = setup
         monkeypatch.setattr(sys, "argv", [

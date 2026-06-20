@@ -507,6 +507,8 @@ def install_cron_scheduler_profile_isolation() -> None:
                 return original(job, *args, **kwargs)
         finally:
             event_profile = str((job or {}).get("profile") or "").strip() or None
+            if _is_isolated_profile_mode():
+                event_profile = _isolated_profile_name()
             try:
                 publish_session_list_changed("cron_complete", profile=event_profile)
             except TypeError:
@@ -1102,7 +1104,9 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
                 )
 
     # Resolve profile directory
-    if _is_root_profile(name):
+    if _is_isolated_profile_mode():
+        home = Path(_INITIAL_HERMES_HOME).expanduser()
+    elif _is_root_profile(name):
         home = _DEFAULT_HERMES_HOME
     else:
         home = _resolve_named_profile_home(name)
