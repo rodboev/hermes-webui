@@ -8726,8 +8726,17 @@ function _mainModelSupportsServiceTier(cfg){
  const selected=$('settingsModel');
  const selectedOpt=selected&&selected.selectedIndex>=0?selected.options[selected.selectedIndex]:null;
  const optgroup=selectedOpt&&selectedOpt.parentElement&&selectedOpt.parentElement.tagName==='OPTGROUP'?selectedOpt.parentElement:null;
- const provider=((optgroup&&optgroup.dataset&&optgroup.dataset.provider)||(cfg&&cfg.provider)||'').trim().toLowerCase();
- return provider==='openai'||provider==='openai-api'||provider==='openai-codex';
+ const provider=((selectedOpt&&selectedOpt.dataset&&selectedOpt.dataset.provider)||(optgroup&&optgroup.dataset&&optgroup.dataset.provider)||(cfg&&cfg.provider)||'').trim().toLowerCase();
+ if(provider!=='openai'&&provider!=='openai-api'&&provider!=='openai-codex') return false;
+ const rawModel=String((selectedOpt&&selectedOpt.value)||(selected&&selected.value)||(cfg&&cfg.model)||'').trim().toLowerCase();
+ if(!rawModel) return true;
+ let bareModel=rawModel;
+ if(rawModel.includes('/')){
+  const slash=rawModel.indexOf('/');
+  if(rawModel.slice(0,slash)!=='openai') return false;
+  bareModel=rawModel.slice(slash+1);
+ }
+ return bareModel.startsWith('gpt-')||bareModel.startsWith('o1')||bareModel.startsWith('o3')||bareModel.startsWith('o4');
 }
 
 function _openAuxAdvancedOptions(taskKey,cfg){

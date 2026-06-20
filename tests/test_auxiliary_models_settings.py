@@ -117,7 +117,14 @@ class TestAuxiliaryModelsJS:
         open_idx = PANELS_JS.find("function _openAuxAdvancedOptions")
         assert open_idx >= 0
         modal_body = PANELS_JS[open_idx:open_idx + 3600]
+        helper_idx = PANELS_JS.find("function _mainModelSupportsServiceTier")
+        assert helper_idx >= 0
+        helper_body = PANELS_JS[helper_idx:helper_idx + 1300]
         assert "_mainModelSupportsServiceTier" in PANELS_JS
+        assert "rawModel.includes('/')" in helper_body
+        assert "rawModel.slice(0,slash)!=='openai'" in helper_body
+        assert "bareModel.startsWith('gpt-')" in helper_body
+        assert "bareModel.startsWith('o4')" in helper_body
         assert "auxAdvancedServiceTier" in modal_body
         assert "isMain&&_mainModelSupportsServiceTier(cfg)" in modal_body
         assert "settings_main_advanced_service_tier" in modal_body
