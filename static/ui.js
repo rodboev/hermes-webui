@@ -3523,9 +3523,9 @@ function _recordNonMessageScrollIntent(e){
   const target=e&&e.target;
   if(!el||!target) return;
   if(!el.contains(target)) _lastNonMessageScrollIntentMs=performance.now();
-  else if(e.type==='touchmove'||(typeof e.deltaY==='number'&&e.deltaY<0)){
+  else if(e.type==='touchmove'||(typeof e.deltaY==='number'&&e.deltaY< -30)){
     _cancelBottomSettle();
-    if(typeof e.deltaY==='number'&&e.deltaY<0){
+    if(typeof e.deltaY==='number'&&e.deltaY< -30){
       _messageUserUnpinned=true;
       _nearBottomCount=0;
       _scrollPinned=false;
@@ -3711,8 +3711,10 @@ if(typeof window!=='undefined'){
       }else if(movedDown&&nearBottom){
         _nearBottomCount=_nearBottomCount+1;
         if(_nearBottomCount>=2){
-          _scrollPinned=true;
-          _messageUserUnpinned=false;
+          if(!_messageUserUnpinned){
+            _scrollPinned=true;
+            _messageUserUnpinned=false;
+          }
         }
       }else if(!_messageUserUnpinned){
         if(nearBottom){
