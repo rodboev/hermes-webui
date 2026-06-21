@@ -3713,14 +3713,13 @@ if(typeof window!=='undefined'){
         if(_nearBottomCount>=2){
           if(!_messageUserUnpinned){
             _scrollPinned=true;
-            _messageUserUnpinned=false;
           }
           _nearBottomCount=0;
         }
       }else if(!_messageUserUnpinned){
         if(nearBottom){
           _nearBottomCount=_nearBottomCount+1;
-          if(_nearBottomCount>=2) _scrollPinned=true;
+          if(_nearBottomCount>=2){_scrollPinned=true;_nearBottomCount=0;}
         }else{
           _nearBottomCount=0;
           _scrollPinned=false;
