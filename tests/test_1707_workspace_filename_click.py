@@ -249,14 +249,17 @@ const trackedClearTimeout = (id) => {
 // just like _renderTreeItem does before the tooltip assignment.
 const isLk = item.type === 'symlink';
 const isDirLike = item.type === 'dir' || (isLk && item.is_dir);
+const isFileLike = !isDirLike;
+const isEscapeLk = isLk && !!item.target_outside_workspace;
 const elideMiddle = (s) => s;
+const showConfirmDialog = () => {};
 
 const runner = new Function(
   'nameEl', 'el', 'item', 'S', 't', 'loadDir', 'document', 'showToast', 'api', 'window',
-  'setTimeout', 'clearTimeout', 'isLk', 'isDirLike', 'elideMiddle',
+  'setTimeout', 'clearTimeout', 'isLk', 'isDirLike', 'isFileLike', 'isEscapeLk', 'elideMiddle', 'showConfirmDialog',
   '(()=>{' + handlerBlock + '})();'
 );
-runner(nameEl, el, item, S, t, loadDir, document, showToast, api, {}, trackedSetTimeout, trackedClearTimeout, isLk, isDirLike, elideMiddle);
+runner(nameEl, el, item, S, t, loadDir, document, showToast, api, {}, trackedSetTimeout, trackedClearTimeout, isLk, isDirLike, isFileLike, isEscapeLk, elideMiddle, showConfirmDialog);
 
 const evt = { stopPropagation: () => {} };
 for (let i = 0; i < clickCount; i++) {
