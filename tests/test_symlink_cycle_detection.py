@@ -67,8 +67,10 @@ class TestSymlinkCycleDetection:
 
         sid, _ = make_session(cleanup_test_sessions, ws)
         listing = get(f"/api/list?session_id={sid}&path=.")
-        names = [e["name"] for e in listing["entries"]]
-        assert "ext" not in names
+        entries = listing["entries"]
+        ext_entry = next((e for e in entries if e["name"] == "ext"), None)
+        assert ext_entry is not None, "Escape symlink should be listed as display-only"
+        assert ext_entry.get("target_outside_workspace") is True
 
     def test_internal_symlink_listed_as_symlink(self, cleanup_test_sessions, tmp_path_factory):
         """Internal symlink dirs should appear with type='symlink', is_dir=True."""
@@ -149,10 +151,12 @@ class TestSymlinkCycleDetection:
         (ws / "ext").symlink_to(target)
 
         sid, _ = make_session(cleanup_test_sessions, ws)
-        # List root — should hide the external symlink and not recurse.
+        # List root — external symlink is now a display-only entry.
         listing = get(f"/api/list?session_id={sid}&path=.")
-        names = [e["name"] for e in listing["entries"]]
-        assert "ext" not in names
+        entries = listing["entries"]
+        ext_entry = next((e for e in entries if e["name"] == "ext"), None)
+        assert ext_entry is not None, "Escape symlink should be listed as display-only"
+        assert ext_entry.get("target_outside_workspace") is True
 
         # Traversing into ext/subdir crosses the workspace boundary and is blocked.
         try:
