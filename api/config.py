@@ -3369,6 +3369,9 @@ def _main_model_supports_service_tier(
     """Return True when the current main-model selection can use OpenAI service tier."""
     if not _is_openai_family_provider(provider):
         return False
+    resolved = str(provider or "").strip().lower()
+    if resolved == "openai-codex":
+        return False
     raw_model = str(model_id or "").strip().lower()
     if not raw_model:
         return True

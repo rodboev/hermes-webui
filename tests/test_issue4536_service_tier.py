@@ -74,6 +74,11 @@ class TestIssue4536ServiceTier:
         )
         assert codex_payload == {}
 
+        codex_empty_model_payload = config._main_model_request_overrides(
+            {"model": {"provider": "openai-codex", "service_tier": "priority"}},
+        )
+        assert codex_empty_model_payload == {}
+
         stale_openai_payload = config._main_model_request_overrides(
             {"model": {"provider": "openai", "default": "meta-llama/llama-3.1", "service_tier": "priority"}},
         )
