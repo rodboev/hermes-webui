@@ -839,6 +839,8 @@ def test_detached_worker_scope_scrubs_non_registry_agent_creds(monkeypatch, tmp_
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "process-default-aws-secret")
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "process-default-azure-secret")
     monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "process-default-foundry-key")
+    monkeypatch.setenv("IDENTITY_ENDPOINT", "http://169.254.169.254/msi")
+    monkeypatch.setenv("MSI_ENDPOINT", "http://169.254.169.254/msi")
 
     with profiles.profile_scope_for_detached_worker("work", "test-worker"):
         assert os.environ.get("CUSTOM_API_KEY") is None
@@ -846,6 +848,8 @@ def test_detached_worker_scope_scrubs_non_registry_agent_creds(monkeypatch, tmp_
         assert os.environ.get("AWS_SECRET_ACCESS_KEY") is None
         assert os.environ.get("AZURE_CLIENT_SECRET") is None
         assert os.environ.get("AZURE_FOUNDRY_API_KEY") is None
+        assert os.environ.get("IDENTITY_ENDPOINT") is None
+        assert os.environ.get("MSI_ENDPOINT") is None
         assert config._thread_local_env_value("CUSTOM_API_KEY") == ""
 
     assert os.environ.get("CUSTOM_API_KEY") == "process-default-custom-key"
@@ -853,6 +857,8 @@ def test_detached_worker_scope_scrubs_non_registry_agent_creds(monkeypatch, tmp_
     assert os.environ.get("AWS_SECRET_ACCESS_KEY") == "process-default-aws-secret"
     assert os.environ.get("AZURE_CLIENT_SECRET") == "process-default-azure-secret"
     assert os.environ.get("AZURE_FOUNDRY_API_KEY") == "process-default-foundry-key"
+    assert os.environ.get("IDENTITY_ENDPOINT") == "http://169.254.169.254/msi"
+    assert os.environ.get("MSI_ENDPOINT") == "http://169.254.169.254/msi"
 
 
 def test_expand_env_vars_does_not_leak_process_env_under_block_scope(monkeypatch):

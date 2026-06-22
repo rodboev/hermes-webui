@@ -910,6 +910,14 @@ _NON_REGISTRY_AGENT_CREDENTIAL_ENV_NAMES: tuple[str, ...] = (
     "AZURE_CLIENT_SECRET",
     "AZURE_TENANT_ID",
     "AZURE_FEDERATED_TOKEN_FILE",
+    # Azure managed-identity (App Service MSI / IMDS) credential-source vars —
+    # agent/azure_identity_adapter.py treats these as ManagedIdentityCredential
+    # sources, so an empty named profile must not inherit the host's managed
+    # identity. (NOT AZURE_FOUNDRY_BASE_URL — that's config, kept.)
+    "IDENTITY_ENDPOINT",
+    "IDENTITY_HEADER",
+    "MSI_ENDPOINT",
+    "MSI_SECRET",
     "AWS_BEARER_TOKEN_BEDROCK",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
