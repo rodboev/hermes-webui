@@ -322,6 +322,58 @@ const parent = {{
     assert result["sourceUsesQuery"] is True
 
 
+def test_profile_switch_resets_cross_profile_tasks_toggle():
+    profile_switch_panel_load = _extract_function(PANELS_JS, "_profileSwitchPanelLoad").replace(
+        "function _profileSwitchPanelLoad",
+        "async function _profileSwitchPanelLoad",
+        1,
+    )
+    script = f"""
+const results = {{}};
+let _showAllCronProfiles = true;
+let _cronOtherProfileCount = 9;
+let _currentPanel = 'chat';
+let skillLoads = 0;
+let memoryLoads = 0;
+let taskLoads = 0;
+let kanbanLoads = 0;
+let profileLoads = 0;
+let workspaceLoads = 0;
+async function loadSkills() {{ skillLoads += 1; }}
+async function loadMemory() {{ memoryLoads += 1; }}
+async function loadCrons() {{ taskLoads += 1; }}
+async function loadKanban() {{ kanbanLoads += 1; }}
+async function loadProfilesPanel() {{ profileLoads += 1; }}
+async function loadWorkspacesPanel() {{ workspaceLoads += 1; }}
+{profile_switch_panel_load}
+(async () => {{
+  await _profileSwitchPanelLoad();
+  results.chatPanelToggle = _showAllCronProfiles;
+  results.chatPanelCount = _cronOtherProfileCount;
+  results.chatPanelTaskLoads = taskLoads;
+  _showAllCronProfiles = true;
+  _cronOtherProfileCount = 4;
+  _currentPanel = 'tasks';
+  await _profileSwitchPanelLoad();
+  results.tasksPanelToggle = _showAllCronProfiles;
+  results.tasksPanelCount = _cronOtherProfileCount;
+  results.tasksPanelTaskLoads = taskLoads;
+  process.stdout.write(JSON.stringify(results));
+}})().catch((err) => {{
+  console.error(err);
+  process.exit(1);
+}});
+"""
+    result = _run_node(script)
+
+    assert result["chatPanelToggle"] is False
+    assert result["chatPanelCount"] == 0
+    assert result["chatPanelTaskLoads"] == 0
+    assert result["tasksPanelToggle"] is False
+    assert result["tasksPanelCount"] == 0
+    assert result["tasksPanelTaskLoads"] == 1
+
+
 def test_panels_js_uses_composite_cron_row_identity():
     assert "function _cronJobKey(job)" in PANELS_JS
     assert "_currentCronDetailKey" in PANELS_JS
