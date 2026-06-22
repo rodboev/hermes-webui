@@ -474,6 +474,7 @@ function _clearCronUnreadForJob() {{ unreadClears += 1; }}
 function _stopCronWatch() {{ stopCalls += 1; }}
 function _renderCronDetail(job) {{ rendered = job; }}
 function _checkCronWatchOnDetail() {{ watchCalls += 1; }}
+function _closeMobileSidebarAfterPanelSelection() {{}}
 const dot = {{ removed: false, remove() {{ this.removed = true; }} }};
 const activeEl = {{
   classList: {{ add() {{}}, remove() {{}} }},
