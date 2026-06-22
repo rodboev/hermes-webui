@@ -1290,6 +1290,74 @@ def _ensure_agent_cron_import_path() -> None:
                     sys.modules.pop(name, None)
 
 
+def _cron_jobs_cross_profile(active_profile: str) -> tuple[list[dict], list[dict]]:
+    """Return active-profile rows plus foreign rows for the Tasks panel.
+
+    Row ownership is intentionally distinct from a cron job's persisted
+    ``profile`` field. The persisted field controls where the job executes;
+    ``owner_profile`` tells the UI which profile home the row came from.
+    """
+    from cron.jobs import list_jobs
+    from api.profiles import (
+        cron_profile_context_for_home,
+        get_hermes_home_for_profile,
+        list_profiles_api,
+    )
+
+    def _home_key(path: Path) -> str:
+        try:
+            return str(Path(path).expanduser().resolve(strict=False))
+        except Exception:
+            return str(Path(path).expanduser())
+
+    names: list[str] = []
+    seen_names: set[str] = set()
+
+    def _add_name(raw_name) -> None:
+        name = str(raw_name or "").strip()
+        if not name:
+            return
+        folded = name.casefold()
+        if folded in seen_names:
+            return
+        seen_names.add(folded)
+        names.append(name)
+
+    _add_name(active_profile)
+    _add_name("default")
+    for row in list_profiles_api():
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        if row.get("visible") is False and not _profiles_match(name, active_profile):
+            continue
+        _add_name(name)
+
+    active_jobs: list[dict] = []
+    other_jobs: list[dict] = []
+    seen_homes: set[str] = set()
+    for owner_profile in names:
+        home = Path(get_hermes_home_for_profile(owner_profile))
+        home_key = _home_key(home)
+        if home_key in seen_homes:
+            continue
+        seen_homes.add(home_key)
+        with cron_profile_context_for_home(home):
+            jobs = _cron_jobs_for_api(list_jobs(include_disabled=True))
+        is_active = _profiles_match(owner_profile, active_profile)
+        for job in jobs:
+            row = dict(job)
+            row["owner_profile"] = owner_profile
+            row["read_only"] = not is_active
+            if is_active:
+                active_jobs.append(row)
+            else:
+                other_jobs.append(row)
+    return active_jobs, other_jobs
+
+
 def _available_cron_profile_names() -> set[str]:
     from api.profiles import list_profiles_api
 
@@ -10250,9 +10318,9 @@ def handle_get(handler, parsed) -> bool:
             return bad(handler, str(e), 404)
 
     # ── Cron API (GET) ──
-    # All cron handlers touch cron.jobs which resolves HERMES_HOME from
-    # os.environ (process-global) at call time. Wrap in cron_profile_context
-    # so the TLS-active profile's jobs.json is read, not the process default.
+    # Cron reads are active-profile-scoped by default. The list route now
+    # aggregates per visible profile home so the UI can surface hidden-row
+    # counts and, when opted in, read-only foreign rows.
     if parsed.path == "/api/crons":
         # #4768: in split-container / minimal Docker deployments the WebUI image may
         # not ship the agent's `cron` package on its import path. Degrade gracefully
@@ -10261,16 +10329,22 @@ def handle_get(handler, parsed) -> bool:
         # ModuleNotFoundError whose missing module is an internal dependency of an
         # existing cron/jobs.py is a real bug and must still surface.
         _ensure_agent_cron_import_path()
+        active_profile = _get_active_profile_name() or "default"
         try:
-            from cron.jobs import list_jobs
+            active_jobs, other_jobs = _cron_jobs_cross_profile(active_profile)
         except ModuleNotFoundError as exc:
             if exc.name in ("cron", "cron.jobs"):
                 return j(handler, {"jobs": [], "cron_unavailable": True})
             raise
-        from api.profiles import cron_profile_context
-
-        with cron_profile_context():
-            return j(handler, {"jobs": _cron_jobs_for_api(list_jobs(include_disabled=True))})
+        all_profiles = _all_profiles_enabled(parsed)
+        jobs = active_jobs + other_jobs if all_profiles else active_jobs
+        hidden_other_count = 0 if all_profiles else len(other_jobs)
+        return j(handler, {
+            "jobs": jobs,
+            "all_profiles": all_profiles,
+            "active_profile": active_profile,
+            "other_profile_count": hidden_other_count,
+        })
 
     if parsed.path == "/api/crons/output":
         from api.profiles import cron_profile_context
