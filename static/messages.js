@@ -57,6 +57,7 @@ function _isDocumentVisibleAndFocused() {
 }
 
 let _desktopBackgroundedForNotifications=false;
+const _STREAM_NOTIFICATION_BACKGROUND={};
 // Desktop shells can background a visible document; keep that signal notification-only.
 if(typeof window!=='undefined'){
   window.__hermesSetBackgrounded=(value)=>{
@@ -1538,7 +1539,6 @@ async function send(){
 }
 
 const LIVE_STREAMS={};
-const _STREAM_NOTIFICATION_BACKGROUND={};
 
 // #4416: track whether the tab was hidden at ANY point during a live stream, so
 // the response-complete notification fires for a backgrounded tab even when

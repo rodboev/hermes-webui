@@ -35,10 +35,8 @@ def _extract_function(source: str, name: str) -> str:
 def _notification_contract_source() -> str:
     start = MESSAGES_SRC.index("let _desktopBackgroundedForNotifications=false;")
     end = MESSAGES_SRC.index("function _isSessionCurrentPane", start)
-    tracker_start = MESSAGES_SRC.index("const _STREAM_NOTIFICATION_BACKGROUND={};")
-    tracker_end = MESSAGES_SRC.index("\n", tracker_start)
     send = _extract_function(MESSAGES_SRC, "sendBrowserNotification")
-    return MESSAGES_SRC[start:end] + "\n" + MESSAGES_SRC[tracker_start:tracker_end] + "\n" + send
+    return MESSAGES_SRC[start:end] + "\n" + send
 
 
 def _background_history_contract_source() -> str:
