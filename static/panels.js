@@ -9233,6 +9233,7 @@ function _applySavedSettingsUi(saved, body, opts){
   _settingsHermesDefaultModelOnOpen=body.default_model||_settingsHermesDefaultModelOnOpen||'';
   // Sync window._defaultModel so newSession() uses the just-saved default without a reload (#908).
   if(body.default_model) window._defaultModel=body.default_model;
+  if(Object.prototype.hasOwnProperty.call(body,'default_model_provider')) window._activeProvider=body.default_model_provider||null;
   if(typeof clearMessageRenderCache==='function') clearMessageRenderCache();
   renderMessages();
   if(typeof syncTopbar==='function') syncTopbar();
@@ -9707,6 +9708,9 @@ async function _applyAuxModels(){
 
 async function saveSettings(andClose){
   const model=($('settingsModel')||{}).value;
+  const modelState=(typeof _captureModelDropdownSelection==='function'&&$('settingsModel'))
+    ? _captureModelDropdownSelection($('settingsModel'))
+    : {model:String(model||''),model_provider:null};
   const modelChanged=(model||'')!==(_settingsHermesDefaultModelOnOpen||'');
   const sendKey=($('settingsSendKey')||{}).value;
   const showTokenUsage=!!($('settingsShowTokenUsage')||{}).checked;
@@ -9782,6 +9786,7 @@ async function saveSettings(andClose){
         try{
           await api('/api/default-model',{method:'POST',body:JSON.stringify({model})});
           body.default_model=model;
+          body.default_model_provider=(modelState&&modelState.model===model)?(modelState.model_provider||null):null;
         }catch(_modelErr){
           if(typeof showToast==='function') showToast('Failed to update default model — settings saved');
         }
@@ -9811,6 +9816,7 @@ async function saveSettings(andClose){
       try{
         await api('/api/default-model',{method:'POST',body:JSON.stringify({model})});
         body.default_model=model;
+        body.default_model_provider=(modelState&&modelState.model===model)?(modelState.model_provider||null):null;
       }catch(_modelErr){
         if(typeof showToast==='function') showToast('Failed to update default model — settings saved');
       }

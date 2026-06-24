@@ -155,6 +155,16 @@ def test_new_session_keeps_provider_fallback_guards_after_model_precedence():
     assert "usingConfiguredDefault?window._activeProvider" in fn
 
 
+def test_save_settings_syncs_default_model_provider_with_saved_model():
+    panels_js = Path("static/panels.js").read_text(encoding="utf-8")
+    save_block = _extract_function(panels_js, "async function saveSettings")
+    apply_saved_block = _extract_function(panels_js, "function _applySavedSettingsUi")
+
+    assert "_captureModelDropdownSelection($('settingsModel'))" in save_block
+    assert "body.default_model_provider=(modelState&&modelState.model===model)?(modelState.model_provider||null):null;" in save_block
+    assert "if(Object.prototype.hasOwnProperty.call(body,'default_model_provider')) window._activeProvider=body.default_model_provider||null;" in apply_saved_block
+
+
 def test_changelog_mentions_new_chat_default_model_provider_sync():
     unreleased = CHANGELOG.split("## [v0.51.103]", 1)[0]
     assert "New conversations now resync" in unreleased
