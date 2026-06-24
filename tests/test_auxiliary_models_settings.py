@@ -491,6 +491,24 @@ class TestAuxiliaryModelsBackend:
         text = config_path.read_text(encoding="utf-8")
         assert "provider: anthropic" in text
 
+    def test_set_hermes_default_model_provider_override_replaces_stale_custom_base_url(self, monkeypatch, tmp_path):
+        from api import config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("model:\n  provider: custom\n  default: gpt-5.5\n  base_url: http://old.local/v1\n", encoding="utf-8")
+        monkeypatch.setattr(config, "_get_config_path", lambda: config_path)
+        monkeypatch.setattr(config, "reload_config", lambda: None)
+        monkeypatch.setattr(config, "invalidate_models_cache", lambda: None)
+        monkeypatch.setattr(config, "resolve_model_provider", lambda model: (model, "custom", "http://old.local/v1"))
+
+        result = config.set_hermes_default_model("gpt-5.5", provider="openai")
+
+        assert result["ok"] is True
+        saved = config_path.read_text(encoding="utf-8")
+        assert "provider: openai" in saved
+        assert "base_url: https://api.openai.com/v1" in saved
+        assert "http://old.local/v1" not in saved
+
     def test_set_auxiliary_model_persists_advanced_options(self, monkeypatch, tmp_path):
         """Gear-modal payload should persist supported per-slot options."""
         from api import config

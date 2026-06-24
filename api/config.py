@@ -3587,6 +3587,7 @@ def set_hermes_default_model(model_id: str, provider: str | None = None, advance
         # matcher — see `static/panels.js` (#895).
         persisted_model = str(resolved_model or selected_model).strip()
         persisted_provider = str(requested_provider or resolved_provider or previous_provider or "").strip()
+        provider_override_won = bool(requested_provider and requested_provider != str(resolved_provider or "").strip())
         # Never persist the bogus ``local`` value — see #1384. The auto-detect
         # block in ``_build_available_models_uncached`` was rewriting unknown
         # loopback hosts to ``provider: "local"``, which is not registered and
@@ -3599,7 +3600,7 @@ def set_hermes_default_model(model_id: str, provider: str | None = None, advance
         if persisted_provider:
             model_cfg["provider"] = persisted_provider
 
-        if resolved_base_url:
+        if resolved_base_url and not provider_override_won:
             model_cfg["base_url"] = str(resolved_base_url).strip().rstrip("/")
         elif persisted_provider != previous_provider:
             if persisted_provider == "openai":
