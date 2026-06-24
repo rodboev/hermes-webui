@@ -2,8 +2,6 @@
 
 Uses the node-driver (static source extraction) pattern — no browser required.
 """
-import json
-import re
 from pathlib import Path
 
 
