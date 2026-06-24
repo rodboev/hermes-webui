@@ -6,8 +6,14 @@ flag is set. The node-driver extraction pattern runs all logic in Node.js withou
 a browser.
 """
 import os
+import shutil
 import subprocess
 import tempfile
+
+import pytest
+
+NODE = shutil.which("node")
+pytestmark = pytest.mark.skipif(NODE is None, reason="node not on PATH")
 
 UI_JS = os.path.join(os.path.dirname(__file__), '..', 'static', 'ui.js')
 
@@ -72,7 +78,7 @@ class FakeDataTransfer {
     tf.close()
     try:
         result = subprocess.run(
-            ['node', tf.name],
+            [NODE, tf.name],
             capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
