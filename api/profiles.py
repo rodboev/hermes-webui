@@ -1689,11 +1689,13 @@ def _get_profile_skills_stats(profile_dir: Path) -> tuple[int, int]:
             _SKILLS_STATS_CACHE[profile_dir] = (enabled, compat, cached_mtime_ns, now + _SKILLS_STATS_CACHE_TTL)
             return enabled, compat
 
-    # Cache miss or mtime changed — full recompute
-    res = _compute_profile_skills_stats(profile_dir)
+    # Cache miss or mtime changed — snapshot mtime BEFORE compute so any
+    # concurrent SKILL.md write during the compute window causes a mismatch
+    # on the next TTL probe instead of silently serving stale data (TOCTOU).
     skills_dir = profile_dir / "skills"
     config_path = profile_dir / "config.yaml"
     new_mtime_ns = _skill_tree_max_mtime_ns(skills_dir, config_path)
+    res = _compute_profile_skills_stats(profile_dir)
     _SKILLS_STATS_CACHE[profile_dir] = (res[0], res[1], new_mtime_ns, now + _SKILLS_STATS_CACHE_TTL)
     return res
 
