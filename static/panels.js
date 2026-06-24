@@ -7377,7 +7377,7 @@ async function _autosavePreferencesSettings(payload){
     const pwDirty=!!(pwField&&pwField.value);
     const modelSel=$('settingsModel');
     const modelState=(typeof _captureModelDropdownSelection==='function'&&modelSel)
-      ? _captureModelDropdownSelection(modelSel)
+      ? (_captureModelDropdownSelection(modelSel)||{model:String((modelSel&&modelSel.value)||''),model_provider:null})
       : {model:String((modelSel&&modelSel.value)||''),model_provider:null};
     const modelDirty=!!(
       modelSel&&(
@@ -9720,7 +9720,7 @@ async function _applyAuxModels(){
 async function saveSettings(andClose){
   const model=($('settingsModel')||{}).value;
   const modelState=(typeof _captureModelDropdownSelection==='function'&&$('settingsModel'))
-    ? _captureModelDropdownSelection($('settingsModel'))
+    ? (_captureModelDropdownSelection($('settingsModel'))||{model:String(model||''),model_provider:null})
     : {model:String(model||''),model_provider:null};
   const modelChanged=(model||'')!==(_settingsHermesDefaultModelOnOpen||'')||((modelState.model_provider||null)!==(_settingsHermesDefaultModelProviderOnOpen||null));
   const sendKey=($('settingsSendKey')||{}).value;
