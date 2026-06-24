@@ -50,6 +50,7 @@ _FETCH_NETWORK_FAILURE_SIGNATURES = (
     'network is unreachable',
     'no route to host',
     'connection timed out',
+    'timed out after',
     'connection reset by peer',
     'remote end hung up unexpectedly',
     'tls connection was non-properly terminated',

@@ -155,6 +155,29 @@ def test_apply_fetch_failure_keeps_connectivity_guidance_for_network_errors(tmp_
         assert result == {'ok': False, 'message': expected_message}
 
 
+def test_apply_fetch_failure_keeps_connectivity_guidance_for_timeout_shape(tmp_path):
+    """The _run_git timeout string should stay on the network-guidance branch."""
+    (tmp_path / '.git').mkdir()
+
+    def fake_git(args, cwd, timeout=10):
+        if args == ['fetch', 'origin', '--quiet', '--tags', '--force']:
+            return 'git fetch origin --quiet --tags --force timed out after 15s', False
+        raise AssertionError(f'unexpected git args: {args!r}')
+
+    cases = [
+        (updates.apply_force_update, 'Could not reach the remote repository. Check your connection.'),
+        (updates.apply_update, 'Could not reach the remote repository. Check your internet connection and try again.'),
+    ]
+
+    for apply_fn, expected_message in cases:
+        with patch.object(updates, '_run_git', side_effect=fake_git), \
+             patch.object(updates, 'REPO_ROOT', tmp_path), \
+             patch.object(updates, '_restart_blocker_snapshot', return_value={'restart_blocked': False, 'active_streams': 0, 'active_runs': 0}):
+            result = apply_fn('webui')
+
+        assert result == {'ok': False, 'message': expected_message}
+
+
 def test_apply_force_update_fetch_failure_redacts_credentials(tmp_path):
     """Apply-path fetch diagnostics must redact credential-bearing URLs."""
     (tmp_path / '.git').mkdir()
