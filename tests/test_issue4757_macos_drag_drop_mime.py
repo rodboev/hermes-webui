@@ -6,6 +6,7 @@ flag is set. The node-driver extraction pattern runs all logic in Node.js withou
 a browser.
 """
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,11 +24,12 @@ def _extract_drag_functions():
     src = open(UI_JS, encoding='utf-8').read()
 
     # Extract module-scoped let declarations
+    _let_re = re.compile(r'^let\s+(_wsActiveDragPath|_wsActiveDragType)\s*=\s*null\s*;$')
     lines = src.split('\n')
     let_lines = []
     for line in lines:
         s = line.strip()
-        if s in ('let _wsActiveDragPath=null;', 'let _wsActiveDragType=null;'):
+        if _let_re.match(s):
             let_lines.append(s)
 
     def extract_function(name):
