@@ -55,7 +55,7 @@ def test_unread_only_composes_with_source_filter_before_row_rendering():
     assert "const showCliOnly=_sessionSourceFilter==='cli';" in js
     assert "if(_sessionSourceFilter==='cli' && !window._showCliSessions && cliSessionCount===0 && !_sessionUnreadOnlyFilter){" in js
     assert "sessionsRaw: showCliOnly ? cliSessionsRaw : webuiSessionsRaw," in js
-    assert "const sessions=_renderSidebarRowsFromRawSessions(sessionsRaw);" in js
+    assert "const sessions=_renderSidebarRowsFromRawSessions(sessionsRaw, referenceRaw);" in js
     source_gate = js.index("const sessionsRaw=isCli ? cliSessionsRaw : webuiSessionsRaw;")
     unread_gate = js.index("if(_sessionUnreadOnlyFilter&&!hasUnread&&!keepActiveLineage) continue;")
     assert source_gate < unread_gate, (

@@ -5827,7 +5827,9 @@ function _partitionSidebarSessionRows(allMatched, activeSidForSidebar){
     _sessionSourceFilter='webui';
   }
   const showCliOnly=_sessionSourceFilter==='cli';
-  const serverArchivedCount=showCliOnly?_archivedCliCount:_archivedWebuiCount;
+  const serverArchivedCount=showCliOnly
+    ? (typeof _archivedCliCount === 'number' ? _archivedCliCount : cliArchivedCount)
+    : (typeof _archivedWebuiCount === 'number' ? _archivedWebuiCount : webuiArchivedCount);
   return {
     cliSessionCount,
     unreadCount: showCliOnly ? cliUnreadCount : webuiUnreadCount,
