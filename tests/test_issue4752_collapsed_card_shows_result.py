@@ -9,8 +9,14 @@ tools, so 'Found 3 matches' would show as 'path=src/' in the collapsed header.
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
+
+import pytest
+
+NODE = shutil.which("node")
+pytestmark = pytest.mark.skipif(NODE is None, reason="node not on PATH")
 
 UI_JS = os.path.join(os.path.dirname(__file__), '..', 'static', 'ui.js')
 
@@ -60,7 +66,7 @@ def _run_js(js_body, *args):
     tf.close()
     try:
         result = subprocess.run(
-            ['node', tf.name] + [json.dumps(a) for a in args],
+            [NODE, tf.name] + [json.dumps(a) for a in args],
             capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
@@ -185,3 +191,15 @@ class TestToolCardPreviewText:
         """Running tool with no preview returns 'Running'."""
         tc = {"done": False, "preview": "", "args": {}}
         assert _preview_text(tc) == "Running"
+
+    def test_snippet_fallback_on_cold_load(self):
+        """Cold-loaded tool with result in snippet (no preview) uses snippet."""
+        tc = {"done": True, "preview": "", "snippet": "Found 3 matches", "args": {"path": "src/"}}
+        assert _preview_text(tc) == "Found 3 matches"
+
+    def test_snippet_json_suppressed(self):
+        """Cold-loaded tool with JSON in snippet falls through to args."""
+        tc = {"done": True, "preview": "", "snippet": '{"key":"val"}', "args": {"path": "src/"}}
+        result = _preview_text(tc)
+        assert result != '{"key":"val"}'
+        assert "path" in result or "src" in result
