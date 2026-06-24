@@ -24,16 +24,6 @@ UI_JS = os.path.join(os.path.dirname(__file__), '..', 'static', 'ui.js')
 def _extract_js_block():
     """Extract the tool-card preview functions from ui.js by finding their definition range."""
     lines = open(UI_JS, encoding='utf-8').readlines()
-    src = "".join(lines)
-
-    # Find start of the earliest function we need
-    fn_names = [
-        "_toolArgPreviewValue",
-        "_toolArgPreviewKeyIsHidden",
-        "_formatToolArgPreview",
-        "_toolResultOneLiner",
-        "_toolCardPreviewText",
-    ]
 
     # Find start line of _toolArgPreviewValue (the earliest dependency)
     start_line = None
