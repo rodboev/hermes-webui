@@ -10910,7 +10910,7 @@ def handle_post(handler, parsed) -> bool:
                 return bad(handler, str(exc), status=400)
         if scope == "main":
             try:
-                main_provider = provider if provider != "auto" else None
+                main_provider = provider if str(provider or "").strip().lower() != "auto" else None
                 return j(handler, set_hermes_default_model(model, provider=main_provider, advanced=advanced))
             except ValueError as exc:
                 return bad(handler, str(exc), status=400)

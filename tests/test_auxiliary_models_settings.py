@@ -356,7 +356,7 @@ class TestAuxiliaryModelsBackend:
             "/api/model/set": {
                 "scope": "main",
                 "model": "gpt-5.5",
-                "provider": "auto",
+                "provider": "AUTO",
                 "advanced": {"base_url": "https://example.invalid/v1"},
             },
         }
