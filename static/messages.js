@@ -2551,6 +2551,15 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
       if(!byIdx.has(idx)) byIdx.set(idx,[]);
       byIdx.get(idx).push(row);
     };
+    // Pre-index S.toolCalls by assistant_msg_idx for O(m+n) lookup
+    const toolsByIdx=new Map();
+    if(S.toolCalls) for(const tc of S.toolCalls){
+      const ti=typeof tc.toolIdx==='number'? tc.toolIdx : parseInt(tc.assistant_msg_idx,10);
+      if(Number.isFinite(ti)){
+        if(!toolsByIdx.has(ti)) toolsByIdx.set(ti,[]);
+        toolsByIdx.get(ti).push(tc);
+      }
+    }
     let encounter=0;
     for(let idx=turnStart+1;idx<lastAsstIndex;idx+=1){
       const message=messages[idx];
@@ -2575,12 +2584,10 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
         if(tid) seenToolIds.add(tid);
       }
       // Merge S.toolCalls for this index, dedup by tool id
-      const toolCalls=Array.isArray(S.toolCalls)?S.toolCalls:[];
-      for(const tool of toolCalls){
+      for(const tool of (toolsByIdx.get(idx)||[])){
         if(!tool||typeof tool!=='object') continue;
         const toolIdx=Number(tool.assistant_msg_idx);
         if(!Number.isFinite(toolIdx)||toolIdx!==idx) continue;
-        if(toolIdx<=turnStart||toolIdx>=lastAsstIndex) continue;
         const row=_anchorSceneToolRowFromCall(tool,0,idx);
         const tid=row.tool_call_id||(row.tool&&row.tool.id);
         if(tid&&seenToolIds.has(tid)) continue;

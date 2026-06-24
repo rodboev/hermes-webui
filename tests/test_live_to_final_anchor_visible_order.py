@@ -709,8 +709,9 @@ def test_settled_anchor_scene_persists_the_full_assistant_turn_not_only_tail():
     assert "messages.slice(turnStart+1,lastAsstIndex+1)" in complete
     assert "message.reasoning||message._reasoning||message.reasoning_content||message.thinking" in reasoning_text
     assert "const reasoning=_anchorSceneMessageReasoningText(message);" in rows_by_message
-    assert "const toolCalls=Array.isArray(S.toolCalls)?S.toolCalls:[]" in rows_by_message
-    assert "toolIdx<=turnStart||toolIdx>=lastAsstIndex" in rows_by_message
+    assert "const toolsByIdx=new Map();" in rows_by_message
+    assert "if(S.toolCalls) for(const tc of S.toolCalls){" in rows_by_message
+    assert "for(const tool of (toolsByIdx.get(idx)||[]))" in rows_by_message
     assert "_anchorSceneToolRowFromCall(tool,0,idx)" in rows_by_message
 
 
