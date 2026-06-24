@@ -52,7 +52,6 @@ _FETCH_NETWORK_FAILURE_SIGNATURES = (
     'connection timed out',
     'timed out after',
     'connection reset by peer',
-    'remote end hung up unexpectedly',
     'tls connection was non-properly terminated',
     'ssl certificate problem',
 )

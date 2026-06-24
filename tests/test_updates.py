@@ -178,6 +178,29 @@ def test_apply_fetch_failure_keeps_connectivity_guidance_for_timeout_shape(tmp_p
         assert result == {'ok': False, 'message': expected_message}
 
 
+def test_apply_fetch_failure_keeps_remote_hangup_diagnostic(tmp_path):
+    """Remote hangups can be auth failures, so keep the raw git diagnostic."""
+    (tmp_path / '.git').mkdir()
+
+    def fake_git(args, cwd, timeout=10):
+        if args == ['fetch', 'origin', '--quiet', '--tags', '--force']:
+            return 'fatal: remote end hung up unexpectedly', False
+        raise AssertionError(f'unexpected git args: {args!r}')
+
+    cases = [
+        (updates.apply_force_update, 'fetch failed: fatal: remote end hung up unexpectedly'),
+        (updates.apply_update, 'fetch failed: fatal: remote end hung up unexpectedly'),
+    ]
+
+    for apply_fn, expected_message in cases:
+        with patch.object(updates, '_run_git', side_effect=fake_git), \
+             patch.object(updates, 'REPO_ROOT', tmp_path), \
+             patch.object(updates, '_restart_blocker_snapshot', return_value={'restart_blocked': False, 'active_streams': 0, 'active_runs': 0}):
+            result = apply_fn('webui')
+
+        assert result == {'ok': False, 'message': expected_message}
+
+
 def test_apply_force_update_fetch_failure_redacts_credentials(tmp_path):
     """Apply-path fetch diagnostics must redact credential-bearing URLs."""
     (tmp_path / '.git').mkdir()
