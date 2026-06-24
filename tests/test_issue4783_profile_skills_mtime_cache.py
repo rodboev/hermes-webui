@@ -370,14 +370,27 @@ class TestSymlinkedSkillProbeFollowsLinks:
         far_future = time.time() + 100_000
         _os.utime(buried_file, (far_future, far_future))
         _os.utime(buried, (far_future, far_future))
+        _os.utime(skill / "node_modules", (far_future, far_future))
+
+        # Pin the LEGITIMATE (non-pruned) tree to a known, modest mtime AFTER the
+        # buried tree exists, so the assertion doesn't depend on filesystem timing:
+        # the probe must reflect ONLY these pinned paths, never the far-future
+        # node_modules subtree (which is pruned before the stat loop).
+        known = time.time() - 10  # comfortably below far_future and below "now"
+        for p in (skills_dir, skill, skill_md, profile_dir / "config.yaml"):
+            try:
+                _os.utime(p, (known, known))
+            except OSError:
+                pass
 
         probe = mod._skill_tree_max_mtime_ns(skills_dir, profile_dir / "config.yaml")
         far_future_ns = int(far_future * 1_000_000_000)
 
-        # The far-future buried file/dir must NOT be reflected in the probe —
-        # node_modules is pruned, so the probe value stays well below far_future.
-        assert probe < far_future_ns, (
-            "probe must prune node_modules/ — a far-future mtime buried inside it "
+        # The far-future buried subtree must NOT appear in the probe — node_modules
+        # is pruned before the stat loop, so the probe reflects only the pinned
+        # legitimate tree (well below far_future).
+        assert probe < far_future_ns - 1_000_000_000, (
+            "probe must prune node_modules/ — a far-future mtime in the pruned subtree "
             f"must not appear in the probe value (probe={probe}, far_future_ns={far_future_ns})"
         )
 
