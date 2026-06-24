@@ -311,6 +311,76 @@ def test_crons_route_ignores_all_profiles_toggle_in_isolated_mode(monkeypatch):
     assert lookups == ["alpha"]
 
 
+def test_cron_jobs_cross_profile_skips_foreign_failures_but_reraises_active_failure(monkeypatch):
+    import api.profiles as profiles
+    import api.routes as routes
+
+    current_home = {"value": None}
+    jobs_by_home = {
+        "alpha-home": [{"id": "alpha-job", "name": "Alpha", "profile": None}],
+        "beta-home": [{"id": "beta-job", "name": "Beta", "profile": None}],
+        "gamma-home": [{"id": "gamma-job", "name": "Gamma", "profile": None}],
+    }
+    failing_homes = {"beta-home"}
+
+    cron_pkg = types.ModuleType("cron")
+    cron_pkg.__path__ = []
+    cron_jobs = types.ModuleType("cron.jobs")
+
+    def _list_jobs(include_disabled=True):
+        home = current_home["value"]
+        if home in failing_homes:
+            raise RuntimeError(f"boom-{home}")
+        return [dict(job) for job in jobs_by_home[home]]
+
+    cron_jobs.list_jobs = _list_jobs
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.jobs", cron_jobs)
+
+    class _Ctx:
+        def __init__(self, home):
+            self.home = str(home)
+            self.prev = None
+
+        def __enter__(self):
+            self.prev = current_home["value"]
+            current_home["value"] = self.home
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            current_home["value"] = self.prev
+            return False
+
+    monkeypatch.setattr(profiles, "list_profiles_api", lambda: [
+        {"name": "alpha", "visible": True},
+        {"name": "beta", "visible": True},
+        {"name": "gamma", "visible": True},
+    ])
+    monkeypatch.setattr(
+        profiles,
+        "get_hermes_home_for_profile",
+        lambda name: Path({
+            "alpha": "alpha-home",
+            "beta": "beta-home",
+            "gamma": "gamma-home",
+        }[name]),
+    )
+    monkeypatch.setattr(profiles, "cron_profile_context_for_home", _Ctx)
+
+    active_jobs, other_jobs = routes._cron_jobs_cross_profile("alpha")
+
+    assert [job["owner_profile"] for job in active_jobs] == ["alpha"]
+    assert [job["owner_profile"] for job in other_jobs] == ["gamma"]
+    assert active_jobs[0]["read_only"] is False
+    assert other_jobs[0]["read_only"] is True
+
+    failing_homes.clear()
+    failing_homes.add("alpha-home")
+
+    with pytest.raises(RuntimeError, match="boom-alpha-home"):
+        routes._cron_jobs_cross_profile("alpha")
+
+
 def test_panels_toggle_button_flips_state_and_refetches():
     append_toggle = _extract_function(PANELS_JS, "_appendCronProfileToggle")
     script = f"""
