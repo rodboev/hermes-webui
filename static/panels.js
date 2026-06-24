@@ -8247,7 +8247,10 @@ function _pluginActivationState(plugin){
   const activation=(plugin&&typeof plugin.activation==='string')
     ? plugin.activation
     : (plugin&&plugin.enabled===false ? 'disabled' : 'enabled');
-  if(activation==='exclusive'||activation==='provider') return 'provider';
+  if(activation==='exclusive'||activation==='provider'){
+    if(plugin&&plugin.is_active_provider===false) return 'disabled';
+    return 'provider';
+  }
   if(activation==='enabled') return 'enabled';
   return 'disabled';
 }
