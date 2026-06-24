@@ -7,7 +7,9 @@ Proof matrix:
   4. config.yaml mtime change is detected by the stat probe.
   5. .clear() forces immediate recompute.
   6. Return signature is unchanged: tuple[int, int].
+  7. Nested skill deletions change the stat probe even when file mtimes do not.
 """
+import shutil
 import sys
 import time
 import types
@@ -45,7 +47,7 @@ def _make_profiles_module():
 
     # skill_utils stubs
     su = stubs["agent.skill_utils"]
-    su.iter_skill_index_files = MagicMock(return_value=iter([]))
+    su.iter_skill_index_files = lambda skills_dir, filename: skills_dir.rglob(filename)
     su.parse_frontmatter = MagicMock(return_value=({}, ""))
     su.skill_matches_platform = MagicMock(return_value=True)
 
@@ -233,6 +235,36 @@ class TestClearForcesRecompute:
             mod._get_profile_skills_stats(profile_dir)
 
         mock_compute.assert_called_once()
+
+
+class TestNestedDeletionDetected:
+    """Proof matrix row 7: nested deletes invalidate the stat-only probe."""
+
+    def test_deleted_nested_skill_dir_triggers_recompute(self, profiles_mod):
+        mod, profile_dir = profiles_mod
+        category_dir = profile_dir / "skills" / "tools"
+        deleted_skill_dir = category_dir / "delete-me"
+        kept_skill_dir = category_dir / "keep-me"
+        deleted_skill_dir.mkdir(parents=True)
+        (deleted_skill_dir / "SKILL.md").write_text("# delete-me\n", encoding="utf-8")
+        time.sleep(0.02)
+        kept_skill_dir.mkdir(parents=True)
+        (kept_skill_dir / "SKILL.md").write_text("# keep-me\n", encoding="utf-8")
+
+        assert mod._get_profile_skills_stats(profile_dir) == (2, 2)
+
+        resolved = Path(profile_dir).resolve()
+        enabled, compat, cached_mtime_ns, _ = mod._SKILLS_STATS_CACHE[resolved]
+        mod._SKILLS_STATS_CACHE[resolved] = (enabled, compat, cached_mtime_ns, time.time() - 1.0)
+
+        time.sleep(0.02)
+        shutil.rmtree(deleted_skill_dir)
+
+        with patch.object(mod, "_compute_profile_skills_stats", wraps=mod._compute_profile_skills_stats) as mock_compute:
+            result = mod._get_profile_skills_stats(profile_dir)
+
+        mock_compute.assert_called_once()
+        assert result == (1, 1)
 
 
 class TestReturnSignature:

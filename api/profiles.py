@@ -1586,7 +1586,7 @@ _SKILLS_STATS_CACHE_TTL = 300.0  # seconds — long because .clear() handles pro
 
 
 def _skill_tree_max_mtime_ns(skills_dir: Path, config_path: Path) -> int:
-    """Return the max st_mtime_ns across SKILL.md files and config.yaml (stat-only, no reads)."""
+    """Return the max st_mtime_ns across config.yaml, skill dirs, and SKILL.md files."""
     max_ns = 0
     try:
         if config_path.exists():
@@ -1596,16 +1596,23 @@ def _skill_tree_max_mtime_ns(skills_dir: Path, config_path: Path) -> int:
     if not skills_dir.is_dir():
         return max_ns
     try:
-        max_ns = max(max_ns, skills_dir.stat().st_mtime_ns)
-    except OSError:
-        pass
-    try:
-        from agent.skill_utils import iter_skill_index_files
-        for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
+        # Directory mtimes catch nested out-of-band deletes that leave file mtimes unchanged.
+        for root, dirnames, filenames in os.walk(skills_dir):
+            root_path = Path(root)
             try:
-                max_ns = max(max_ns, skill_md.stat().st_mtime_ns)
+                max_ns = max(max_ns, root_path.stat().st_mtime_ns)
             except OSError:
                 pass
+            for dirname in dirnames:
+                try:
+                    max_ns = max(max_ns, (root_path / dirname).stat().st_mtime_ns)
+                except OSError:
+                    pass
+            if "SKILL.md" in filenames:
+                try:
+                    max_ns = max(max_ns, (root_path / "SKILL.md").stat().st_mtime_ns)
+                except OSError:
+                    pass
     except Exception:
         pass
     return max_ns
