@@ -60,6 +60,8 @@ def _run_failure_case(api_js: str) -> dict:
             _extract_fn(MESSAGES_JS, "_rememberApprovalPending"),
             _extract_fn(MESSAGES_JS, "_clearApprovalPendingForSession"),
             _extract_fn(MESSAGES_JS, "_renderPendingApprovalForActiveSession"),
+            _extract_fn(MESSAGES_JS, "_approvalResponseMatches"),
+            _extract_fn(MESSAGES_JS, "_setApprovalControlsDisabled"),
             _extract_fn(MESSAGES_JS, "showApprovalCard"),
             _extract_fn(MESSAGES_JS, "_restoreFailedApprovalResponse"),
             _extract_fn(MESSAGES_JS, "respondApproval", prefix="async function "),
@@ -82,6 +84,7 @@ let renderCalls = 0;
 let _approvalSessionId = 'sess-1';
 let _approvalCurrentId = 'appr-1';
 let _approvalPendingBySession = new Map();
+let _approvalResponding = null;
 let _approvalSignature = '';
 let _approvalVisibleSince = 0;
 let _approvalHideTimer = null;
@@ -155,11 +158,11 @@ const pending = {{
 }};
 _approvalPendingBySession.set('sess-1', {{ pending, pendingCount: 1 }});
 showApprovalCard(pending, 1);
+const realRenderPendingApprovalForActiveSession = _renderPendingApprovalForActiveSession;
 renderCalls = 0;
 _renderPendingApprovalForActiveSession = function() {{
   renderCalls += 1;
-  const entry = _approvalPendingBySession.get('sess-1');
-  if (entry) showApprovalCard(entry.pending, entry.pendingCount);
+  return realRenderPendingApprovalForActiveSession();
 }};
 respondApproval('once').then(() => {{
   output.sessionId = _approvalSessionId;
@@ -220,3 +223,138 @@ def test_rejected_ok_false_approval_keeps_card_and_reenables_buttons():
     assert out["cardVisible"] is True
     assert "Approval response not accepted for this session." == out["toast"]
     assert "Approval response not accepted for this session." == out["status"]
+
+
+def test_poll_rerender_keeps_inflight_buttons_disabled_and_blocks_duplicates():
+    helpers = "\n".join(
+        [
+            _extract_fn(MESSAGES_JS, "_approvalDismissKey"),
+            _extract_fn(MESSAGES_JS, "_getDismissedApprovals"),
+            _extract_fn(MESSAGES_JS, "_isApprovalDismissed"),
+            _extract_fn(MESSAGES_JS, "_unmarkApprovalDismissed"),
+            _extract_fn(MESSAGES_JS, "_promptActiveSessionId"),
+            _extract_fn(MESSAGES_JS, "_approvalPromptBelongsToActiveSession"),
+            _extract_fn(MESSAGES_JS, "_rememberApprovalPending"),
+            _extract_fn(MESSAGES_JS, "_clearApprovalPendingForSession"),
+            _extract_fn(MESSAGES_JS, "_renderPendingApprovalForActiveSession"),
+            _extract_fn(MESSAGES_JS, "_approvalResponseMatches"),
+            _extract_fn(MESSAGES_JS, "_setApprovalControlsDisabled"),
+            _extract_fn(MESSAGES_JS, "showApprovalCard"),
+            _extract_fn(MESSAGES_JS, "_restoreFailedApprovalResponse"),
+            _extract_fn(MESSAGES_JS, "respondApproval", prefix="async function "),
+        ]
+    )
+    script = f"""
+const output = {{}};
+const _store = {{}};
+const localStorage = {{
+  getItem: key => Object.prototype.hasOwnProperty.call(_store, key) ? _store[key] : null,
+  setItem: (key, value) => {{ _store[key] = String(value); }},
+}};
+const S = {{ session: {{ session_id: 'sess-1' }} }};
+const _DISMISSED_APPROVALS_KEY = 'hermes_dismissed_approvals';
+let _approvalSessionId = 'sess-1';
+let _approvalCurrentId = 'appr-1';
+let _approvalPendingBySession = new Map();
+let _approvalResponding = null;
+let _approvalSignature = '';
+let _approvalVisibleSince = 0;
+let _approvalHideTimer = null;
+const _clarifyPendingBySession = new Map();
+let resolveApi;
+let apiCalls = 0;
+const buttons = new Map();
+function makeButton(id) {{
+  return {{
+    id,
+    disabled: false,
+    classList: {{
+      values: new Set(),
+      add(value) {{ this.values.add(value); }},
+      remove(value) {{ this.values.delete(value); }},
+      contains(value) {{ return this.values.has(value); }},
+    }},
+  }};
+}}
+['approvalBtnOnce','approvalBtnSession','approvalBtnAlways','approvalBtnDeny'].forEach(id => buttons.set(id, makeButton(id)));
+const card = {{
+  classList: {{
+    values: new Set(['visible']),
+    add(value) {{ this.values.add(value); }},
+    remove(value) {{ this.values.delete(value); }},
+    contains(value) {{ return this.values.has(value); }},
+    toggle(value, force) {{
+      if (force === undefined) {{
+        if (this.values.has(value)) this.values.delete(value);
+        else this.values.add(value);
+      }} else if (force) this.values.add(value);
+      else this.values.delete(value);
+    }},
+  }},
+  querySelector() {{ return null; }},
+}};
+const approvalDesc = {{ textContent: '' }};
+const approvalCmd = {{ textContent: '' }};
+const approvalCounter = {{ textContent: '', style: {{ display: '' }} }};
+const msg = {{}};
+const document = {{ activeElement: null }};
+const elements = {{
+  approvalCard: card,
+  approvalDesc,
+  approvalCmd,
+  approvalCounter,
+  approvalBtnOnce: buttons.get('approvalBtnOnce'),
+  approvalBtnSession: buttons.get('approvalBtnSession'),
+  approvalBtnAlways: buttons.get('approvalBtnAlways'),
+  approvalBtnDeny: buttons.get('approvalBtnDeny'),
+  msg,
+}};
+function $(id) {{ return elements[id] || null; }}
+function syncTopbar() {{}}
+function hideApprovalCard() {{ card.classList.remove('visible'); }}
+function _clearApprovalHideTimer() {{}}
+function _syncApprovalCollapseButton() {{}}
+function _syncApprovalTranscriptSpace() {{}}
+function applyLocaleToDOM() {{}}
+function setTimeout(fn) {{ return 1; }}
+function showToast() {{}}
+function setStatus() {{}}
+function t(key) {{ return key; }}
+function api() {{
+  apiCalls += 1;
+  return new Promise(resolve => {{ resolveApi = resolve; }});
+}}
+{helpers}
+const pending = {{
+  approval_id: 'appr-1',
+  _session_id: 'sess-1',
+  command: 'rm -rf /tmp/test',
+  description: 'Dangerous command approval',
+  pattern_key: 'dangerous_command',
+  pattern_keys: ['dangerous_command'],
+}};
+_approvalPendingBySession.set('sess-1', {{ pending, pendingCount: 1 }});
+showApprovalCard(pending, 1);
+const first = respondApproval('once');
+_renderPendingApprovalForActiveSession();
+const second = respondApproval('once');
+output.apiCallsDuringFlight = apiCalls;
+output.onceDisabledDuringFlight = buttons.get('approvalBtnOnce').disabled;
+output.onceLoadingDuringFlight = buttons.get('approvalBtnOnce').classList.contains('loading');
+resolveApi({{ ok: false }});
+Promise.all([first, second]).then(() => {{
+  output.apiCallsFinal = apiCalls;
+  output.onceDisabledAfter = buttons.get('approvalBtnOnce').disabled;
+  output.onceLoadingAfter = buttons.get('approvalBtnOnce').classList.contains('loading');
+  output.cardVisibleAfter = card.classList.contains('visible');
+  process.stdout.write(JSON.stringify(output));
+}});
+"""
+    out = _run_node(script)
+    assert out["apiCallsDuringFlight"] == 1
+    assert out["onceDisabledDuringFlight"] is True
+    assert out["onceLoadingDuringFlight"] is True
+    assert out["apiCallsFinal"] == 1
+    assert out["onceDisabledAfter"] is False
+    assert out["onceLoadingAfter"] is False
+    assert out["cardVisibleAfter"] is True
