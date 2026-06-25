@@ -6469,6 +6469,9 @@ let _settingsIndexPromise = null;
 let _settingsSearchSeq = 0;
 let _extensionsStatusData = null;
 let _extensionsSidecarMonitorSeq = 0;
+let _extensionsGalleryData = null;
+let _extensionsGalleryLoaded = false;
+let _extensionsActiveTab = 'gallery';
 let _settingsSearchDismissListenerRegistered = false;
 let _settingsAppearanceAutosaveTimer = null;
 let _settingsAppearanceAutosaveRetryPayload = null;
@@ -8221,6 +8224,143 @@ async function loadExtensionsPanel(){
     if(copyBtn) copyBtn.disabled=true;
     target.innerHTML='<div class="extensions-error">Failed to load extension diagnostics: '+esc(e.message||String(e))+'</div>';
   }
+  if(_extensionsActiveTab==='gallery'&&!_extensionsGalleryLoaded) loadExtensionsGallery();
+}
+
+function switchExtensionsTab(tab){
+  _extensionsActiveTab=tab;
+  document.querySelectorAll('[data-extensions-tab]').forEach(btn=>{
+    btn.classList.toggle('extensions-tab-active',btn.dataset.extensionsTab===tab);
+  });
+  document.querySelectorAll('[data-extensions-pane]').forEach(pane=>{
+    pane.hidden=pane.dataset.extensionsPane!==tab;
+  });
+  if(tab==='gallery'&&!_extensionsGalleryLoaded) loadExtensionsGallery();
+}
+
+async function loadExtensionsGallery(){
+  _extensionsGalleryLoaded=true;
+  const galleryEl=$('extensionsGallery');
+  const installedEl=$('extensionsInstalled');
+  if(galleryEl) galleryEl.innerHTML='<div class="extensions-loading">Loading gallery…</div>';
+  if(installedEl) installedEl.innerHTML='<div class="extensions-loading">Loading installed extensions…</div>';
+  try{
+    const [regData,statusData]=await Promise.all([
+      api('/api/extensions/registry'),
+      api('/api/extensions/status'),
+    ]);
+    _extensionsGalleryData={regData,statusData};
+    _renderExtensionsGallery(regData.entries||[],statusData);
+  }catch(e){
+    _extensionsGalleryLoaded=false;
+    const msg=esc(e&&e.message?e.message:String(e));
+    if(galleryEl) galleryEl.innerHTML='<div class="extensions-error">Failed to load gallery: '+msg+'</div>';
+    if(installedEl) installedEl.innerHTML='<div class="extensions-error">Failed to load extension status.</div>';
+  }
+}
+
+function _renderExtensionsGallery(entries,statusData){
+  const galleryEl=$('extensionsGallery');
+  const installedEl=$('extensionsInstalled');
+  const installedIds=new Set();
+  if(statusData&&statusData.gallery_installed){
+    Object.keys(statusData.gallery_installed).forEach(id=>installedIds.add(id));
+  }
+  if(statusData&&Array.isArray(statusData.extensions)){
+    statusData.extensions.forEach(e=>{ if(e&&e.id) installedIds.add(e.id); });
+  }
+  if(!Array.isArray(entries)||entries.length===0){
+    if(galleryEl) galleryEl.innerHTML='<div class="extensions-empty">No extensions found in the registry.</div>';
+    if(installedEl) installedEl.innerHTML='<div class="extensions-empty">No extensions installed from the gallery.</div>';
+    return;
+  }
+  const galleryCards=[];
+  const installedCards=[];
+  for(const entry of entries){
+    const id=esc(String(entry.id||''));
+    const name=esc(String(entry.name||entry.id||''));
+    const author=esc(String(entry.author||''));
+    const version=esc(String(entry.version||''));
+    const desc=esc(String(entry.description||''));
+    const caps=Array.isArray(entry.capabilities)?entry.capabilities:[];
+    const perms=entry.permissions||null;
+    const isInstalled=installedIds.has(String(entry.id||''));
+    const restartRequired=!!(entry.lifecycle&&entry.lifecycle.restart_required);
+    const badgesHtml=caps.map(c=>`<span class="extension-gallery-badge">${esc(String(c))}</span>`).join('');
+    const permsHtml=perms?`<details class="extension-gallery-perms"><summary data-i18n="ext_gallery_permissions_show">Permissions</summary><pre>${esc(JSON.stringify(perms,null,2))}</pre></details>`:'';
+    const actionBtn=isInstalled
+      ?`<button class="extension-gallery-uninstall-btn" data-ext-uninstall-id="${id}" type="button" data-i18n="ext_gallery_uninstall">Uninstall</button>`
+      :`<button class="extension-gallery-install-btn" data-ext-install-id="${id}" type="button" data-i18n="ext_gallery_install">Install</button>`;
+    const installedBadge=isInstalled?'<span class="extension-gallery-installed-badge">Installed</span>':'';
+    const card=`<div class="extension-gallery-card">
+      <div class="extension-gallery-head">
+        <div class="extension-gallery-info">
+          <div class="extension-gallery-name">${name}${installedBadge}</div>
+          <div class="extension-gallery-meta">${author?'by '+author:''}${version?' · v'+version:''}</div>
+        </div>
+      </div>
+      <div class="extension-gallery-desc">${desc}</div>
+      ${badgesHtml?'<div class="extension-gallery-badge-row">'+badgesHtml+'</div>':''}
+      ${permsHtml}
+      <div class="extension-gallery-actions">${actionBtn}</div>
+    </div>`;
+    galleryCards.push(card);
+    if(isInstalled) installedCards.push(card);
+  }
+  if(galleryEl) galleryEl.innerHTML=galleryCards.length?galleryCards.join(''):'<div class="extensions-empty">No extensions found.</div>';
+  if(installedEl) installedEl.innerHTML=installedCards.length?installedCards.join(''):'<div class="extensions-empty">No extensions installed from the gallery.</div>';
+  _bindExtensionGalleryButtons(entries);
+}
+
+function _bindExtensionGalleryButtons(entries){
+  const entryMap=new Map();
+  if(Array.isArray(entries)) entries.forEach(e=>{if(e&&e.id)entryMap.set(String(e.id),e);});
+  document.querySelectorAll('[data-ext-install-id]').forEach(btn=>{
+    const entry=entryMap.get(btn.dataset.extInstallId);
+    if(entry) btn.addEventListener('click',()=>handleExtensionInstall(btn,entry));
+  });
+  document.querySelectorAll('[data-ext-uninstall-id]').forEach(btn=>{
+    btn.addEventListener('click',()=>handleExtensionUninstall(btn,btn.dataset.extUninstallId));
+  });
+}
+
+async function handleExtensionInstall(btn,entry){
+  if(!btn||btn.disabled) return;
+  const previousText=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='Installing…';
+  try{
+    const result=await api('/api/extensions/install',{method:'POST',body:JSON.stringify({
+      id:entry.id,
+      download_url:entry.download_url,
+      sha256:entry.sha256,
+    })});
+    const restart=!!(entry.lifecycle&&entry.lifecycle.restart_required);
+    showToast(restart?'Extension installed. Restart required to apply.':'Extension installed successfully.');
+    _extensionsGalleryLoaded=false;
+    await loadExtensionsGallery();
+  }catch(e){
+    btn.disabled=false;
+    btn.textContent=previousText;
+    showToast('Install failed: '+(e&&e.message?e.message:String(e)));
+  }
+}
+
+async function handleExtensionUninstall(btn,id){
+  if(!btn||btn.disabled) return;
+  const previousText=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='Uninstalling…';
+  try{
+    await api('/api/extensions/uninstall',{method:'POST',body:JSON.stringify({id})});
+    showToast('Extension uninstalled.');
+    _extensionsGalleryLoaded=false;
+    await loadExtensionsGallery();
+  }catch(e){
+    btn.disabled=false;
+    btn.textContent=previousText;
+    showToast('Uninstall failed: '+(e&&e.message?e.message:String(e)));
+  }
 }
 
 async function copyExtensionsDiagnostics(){
@@ -8238,7 +8378,6 @@ async function copyExtensionsDiagnostics(){
     fail();
   }
 }
-
 
 // ── Plugins panel (read-only plugin/hook visibility) ───────────────────────
 
