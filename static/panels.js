@@ -8332,7 +8332,7 @@ async function handleExtensionInstall(btn,entry){
   try{
     const result=await api('/api/extensions/install',{method:'POST',body:JSON.stringify({
       id:entry.id,
-      download_url:entry.download_url,
+      download_url:entry.download_url||entry.download,
       sha256:entry.sha256,
     })});
     const restart=!!(entry.lifecycle&&entry.lifecycle.restart_required);
