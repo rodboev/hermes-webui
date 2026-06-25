@@ -5578,16 +5578,38 @@ async function respondApproval(choice) {
     const b = $(id);
     if (b) { b.disabled = true; if (b.id === "approvalBtn" + choice.charAt(0).toUpperCase() + choice.slice(1)) b.classList.add("loading"); }
   });
-  _approvalSessionId = null;
-  _approvalCurrentId = null;
-  _clearApprovalPendingForSession(sid);
-  hideApprovalCard(true);
   try {
-    await api("/api/approval/respond", {
+    const result = await api("/api/approval/respond", {
       method: "POST",
       body: JSON.stringify({ session_id: sid, choice, approval_id: approvalId })
     });
-  } catch(e) { setStatus(t("approval_responding") + " " + e.message); }
+    if (result && result.ok) {
+      const pendingEntry = _approvalPendingBySession.get(sid);
+      const samePending = !!(pendingEntry && pendingEntry.pending && (pendingEntry.pending.approval_id || null) === (approvalId || null));
+      if (_approvalSessionId === sid && _approvalCurrentId === approvalId) {
+        _approvalSessionId = null;
+        _approvalCurrentId = null;
+        hideApprovalCard(true);
+      }
+      if (samePending) _clearApprovalPendingForSession(sid);
+      return;
+    }
+    const errMsg = (result && result.error) || "Approval response not accepted.";
+    ["approvalBtnOnce","approvalBtnSession","approvalBtnAlways","approvalBtnDeny"].forEach(id => {
+      const b = $(id); if (b) { b.disabled = false; b.classList.remove("loading"); }
+    });
+    if (_approvalPromptBelongsToActiveSession(sid)) _renderPendingApprovalForActiveSession();
+    if (typeof showToast === "function") showToast(errMsg, 5000);
+    if (typeof setStatus === "function") setStatus(errMsg);
+  } catch(e) {
+    const errMsg = (e && e.message) || (t("approval_responding") + " failed");
+    ["approvalBtnOnce","approvalBtnSession","approvalBtnAlways","approvalBtnDeny"].forEach(id => {
+      const b = $(id); if (b) { b.disabled = false; b.classList.remove("loading"); }
+    });
+    if (_approvalPromptBelongsToActiveSession(sid)) _renderPendingApprovalForActiveSession();
+    if (typeof showToast === "function") showToast(errMsg, 5000);
+    if (typeof setStatus === "function") setStatus(errMsg);
+  }
 }
 
 function startApprovalPolling(sid) {
