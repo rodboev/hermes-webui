@@ -7307,10 +7307,10 @@ function _preferencesPayloadFromUi(){
   if(showTpsCb) payload.show_tps=showTpsCb.checked;
   const fadeTextCb=$('settingsFadeTextEffect');
   if(fadeTextCb) payload.fade_text_effect=fadeTextCb.checked;
-  const interleavedBubblesCb=$('settingsInterleavedTranscriptBubbles');
-  if(interleavedBubblesCb) payload.interleaved_transcript_bubbles=interleavedBubblesCb.checked;
   const terminalAutoExpandCb=$('settingsTerminalAutoExpand');
   if(terminalAutoExpandCb) payload.terminal_auto_expand_on_output=terminalAutoExpandCb.checked;
+  const interleavedBubblesCb=$('settingsInterleavedTranscriptBubbles');
+  if(interleavedBubblesCb) payload.interleaved_transcript_bubbles=interleavedBubblesCb.checked;
   const workspaceTodosTabCb=$('settingsWorkspaceTodosTab');
   if(workspaceTodosTabCb) payload.workspace_todos_tab=workspaceTodosTabCb.checked;
   const apiRedactCb=$('settingsApiRedact');
@@ -7769,14 +7769,14 @@ async function loadSettingsPanel(){
         _schedulePreferencesAutosave();
       },{once:false});
     }
+    const terminalAutoExpandCb=$('settingsTerminalAutoExpand');
+    if(terminalAutoExpandCb){terminalAutoExpandCb.checked=!!settings.terminal_auto_expand_on_output;window._terminalAutoExpandOnOutput=terminalAutoExpandCb.checked;terminalAutoExpandCb.addEventListener('change',_schedulePreferencesAutosave,{once:false});}
     const interleavedBubblesCb=$('settingsInterleavedTranscriptBubbles');
     if(interleavedBubblesCb){
       interleavedBubblesCb.checked=!!settings.interleaved_transcript_bubbles;
       window._interleavedTranscriptBubbles=interleavedBubblesCb.checked;
       interleavedBubblesCb.addEventListener('change',_schedulePreferencesAutosave,{once:false});
     }
-    const terminalAutoExpandCb=$('settingsTerminalAutoExpand');
-    if(terminalAutoExpandCb){terminalAutoExpandCb.checked=!!settings.terminal_auto_expand_on_output;window._terminalAutoExpandOnOutput=terminalAutoExpandCb.checked;terminalAutoExpandCb.addEventListener('change',_schedulePreferencesAutosave,{once:false});}
     const workspaceTodosTabCb=$('settingsWorkspaceTodosTab');
     if(workspaceTodosTabCb){
       workspaceTodosTabCb.checked=!!settings.workspace_todos_tab;
