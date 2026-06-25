@@ -33,8 +33,8 @@ def test_render_uses_single_pass_partition_helper():
     assert "_partitionSidebarSessionRows(allMatched, activeSidForSidebar)" in render_body
     assert "_renderSidebarRowsFromRawSessions(sessionsRaw, referenceRaw)" in render_body
     assert "const sessions=_renderSidebarRowsFromRawSessions(sessionsRaw, referenceRaw);" in render_body
-    assert "{id:'webui',label:'WebUI',count:webuiSessionCount,locked:true}" in render_body
-    assert "{id:'cli',label:'CLI',count:cliSessionCount,locked:false}" in render_body
+    assert "let originOptions=_sidebarOriginOptions(originCounts, originLabels);" in render_body
+    assert "_ensureOriginFilterDefaults(originOptions)" in render_body
     assert "const count=filter==='cli'?renderedCliSessionCount:renderedWebuiSessionCount;" not in render_body
     assert "withMessages.filter(" not in render_body
 
@@ -44,10 +44,11 @@ def test_partition_helper_applies_message_source_project_and_archive_gates():
 
     assert "function _sidebarRowHasVisibleMessages(s, activeSidForSidebar)" in SESSIONS_JS
     assert "_sidebarRowHasVisibleMessages(s, activeSidForSidebar)" in block
-    assert "const isCli=_isCliSession(s);" in block
-    assert "const origin=isCli?'cli':'webui';" in block
-    assert "if(isCli) cliSessionCount++;" in block
-    assert "else webuiSessionCount++;" in block
+    assert "const origin=_sidebarOriginIdForSession(s);" in block
+    assert "if(origin==='cli') cliSessionCount++;" in block
+    assert "else if(origin==='webui') webuiSessionCount++;" in block
+    assert "originCounts.set(origin, Number(originCounts.get(origin) || 0) + 1);" in block
+    assert "originLabels.set(origin, _sidebarOriginLabelForId(origin, _getChannelLabel(s) || ''));" in block
     assert "if(!_activeOriginFilters.has(origin)) continue;" in block
     assert "if(!_showArchived&&s.archived) continue;" in block
     assert "archivedCount," in block
@@ -64,6 +65,8 @@ def test_partition_helper_keeps_single_pass_filtering_and_shared_render_path():
 
     assert "webuiSessionCount," in block
     assert "cliSessionCount," in block
+    assert "originCounts," in block
+    assert "originLabels," in block
     assert "webuiReferenceRaw," not in block
     assert "cliReferenceRaw," not in block
     assert "webuiSessionsRaw," not in block
