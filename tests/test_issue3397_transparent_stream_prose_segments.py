@@ -95,9 +95,32 @@ def test_compact_mode_keeps_ordered_parts_helper_off():
     assert _run_helper(message, transparent=False) is None
 
 
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_anchor_scene_messages_keep_dedicated_transparent_renderer():
+    message = {
+        "role": "assistant",
+        "_anchor_activity_scene": {"version": "activity_scene_v1"},
+        "content": [
+            {"type": "text", "text": "Before"},
+            {"type": "tool_use", "id": "toolu_1", "name": "grep", "input": {}},
+            {"type": "text", "text": "After"},
+        ],
+    }
+
+    assert _run_helper(message, transparent=True) is None
+
+
 def test_render_messages_wires_ordered_parts_into_transparent_stream_and_skips_duplicate_tool_rows():
     assert "let orderedTransparentParts=_transparentStreamOrderedParts(m);" in UI_JS
+    assert "if(message._anchor_activity_scene) return null;" in UI_JS
+    assert "const partDisplayText=_transparentOrderedDisplayText(part.text);" in UI_JS
+    assert "const partBodyHtml=_getCachedRender(partDisplayText,false);" in UI_JS
     assert "const transparentOrderedToolIds=new Set();" in UI_JS
     assert "const toolCall=_transparentOrderedToolCall(part, rawIdx, transparentOrderedToolCallsByTid, transparentToolResultsByTid);" in UI_JS
     assert "if(part.toolUseId) transparentOrderedToolIds.add(part.toolUseId);" in UI_JS
     assert "if(tid&&transparentOrderedToolIds.has(tid)) continue;" in UI_JS
+
+
+def test_ordered_tool_cards_refresh_from_settled_results_even_after_live_preview():
+    assert "if(resultsByTid&&resultsByTid[tid]){" in UI_JS
+    assert "(next.snippet===undefined||next.snippet===null||next.snippet==='')" not in UI_JS

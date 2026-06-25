@@ -11089,6 +11089,7 @@ let _assistantTurnAnchorSettledFinalAnswerWarned=false;
 function _transparentStreamOrderedParts(message){
   if(typeof isTransparentStream==='function'&&!isTransparentStream()) return null;
   if(!message||message.role!=='assistant'||message._live||!Array.isArray(message.content)) return null;
+  if(message._anchor_activity_scene) return null;
   const ordered=[];
   let hasText=false;
   let hasTool=false;
@@ -11114,6 +11115,13 @@ function _transparentStreamOrderedParts(message){
     }
   }
   return hasText&&hasTool?ordered:null;
+}
+function _transparentOrderedDisplayText(text){
+  return _stripWorkspaceDisplayPrefix(
+    _stripAttachedFilesMarkerForDisplay(
+      _stripLeadingAssistantThinkingMarkup(String(text||''))
+    )
+  );
 }
 function _collectToolResultSnippetsByTid(messages){
   const resultsByTid={};
@@ -11144,7 +11152,7 @@ function _transparentOrderedToolCall(part, rawIdx, toolCallsByTid, resultsByTid)
   const liveTool=tid&&toolCallsByTid&&toolCallsByTid.get(tid);
   if(liveTool){
     const next={...liveTool};
-    if((next.snippet===undefined||next.snippet===null||next.snippet==='')&&resultsByTid&&resultsByTid[tid]){
+    if(resultsByTid&&resultsByTid[tid]){
       const patchSnippet=_cliPatchSnippetFromArgs(next.name||part.name||'tool', next.args||part.input||{});
       next.snippet=_cliToolCardSnippet(resultsByTid[tid],patchSnippet);
       next.is_diff=_cliToolCardHasDiffSnippet(resultsByTid[tid],patchSnippet);
@@ -11707,7 +11715,11 @@ function renderMessages(options){
       const messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
       const lastTextPartIdx=(()=>{
         for(let i=orderedTransparentParts.length-1;i>=0;i--){
-          if(orderedTransparentParts[i]&&orderedTransparentParts[i].kind==='text') return i;
+          if(
+            orderedTransparentParts[i]&&
+            orderedTransparentParts[i].kind==='text'&&
+            String(_transparentOrderedDisplayText(orderedTransparentParts[i].text)).trim()
+          ) return i;
         }
         return -1;
       })();
@@ -11732,19 +11744,19 @@ function renderMessages(options){
           return;
         }
         const orderedSeg=document.createElement('div');
+        const partDisplayText=_transparentOrderedDisplayText(part.text);
+        if(!String(partDisplayText).trim()) return;
         orderedSeg.className='assistant-segment';
         orderedSeg.dataset.msgIdx=rawIdx;
         orderedSeg.dataset.sessionMsgIdx=sessionMsgIdx;
         orderedSeg.dataset.messageAnchorKey=messageAnchorKey;
-        orderedSeg.dataset.rawText=String(part.text||'').trim();
+        orderedSeg.dataset.rawText=String(partDisplayText||'').trim();
         if(m._activityBurstId!==undefined&&m._activityBurstId!==null) orderedSeg.setAttribute('data-activity-burst-id',String(m._activityBurstId));
         if(Number.isFinite(Number(m._liveSegmentSeq))) orderedSeg.setAttribute('data-live-segment-seq',String(Number(m._liveSegmentSeq)));
-        if(_ERR_MSG_RE.test(String(part.text||'').trim())) orderedSeg.dataset.error='1';
-        if(!firstSeg&&thinkingText&&window._showThinking!==false&&!((isCompactWorklogMode()||isTransparentStream())&&_assistantThinkingBelongsInWorklog(m, rawIdx, toolCallAssistantIdxs))){
-          orderedSeg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText));
-        }
+        if(_ERR_MSG_RE.test(String(partDisplayText||'').trim())) orderedSeg.dataset.error='1';
+        if(!firstSeg&&thinkingText&&window._showThinking!==false&&!((isCompactWorklogMode()||isTransparentStream())&&_assistantThinkingBelongsInWorklog(m, rawIdx, toolCallAssistantIdxs))) orderedSeg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText));
         const isLastTextPart=partIdx===lastTextPartIdx;
-        const partBodyHtml=_getCachedRender(part.text,false);
+        const partBodyHtml=_getCachedRender(partDisplayText,false);
         if(isLastTextPart&&statusHtml){
           orderedSeg.insertAdjacentHTML('beforeend', statusHtml);
         }
