@@ -1,0 +1,103 @@
+"""Regression tests for issue #3397 Transparent Stream settled prose segments."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+UI_JS_PATH = ROOT / "static" / "ui.js"
+UI_JS = UI_JS_PATH.read_text(encoding="utf-8")
+NODE = shutil.which("node")
+
+_DRIVER_SRC = r"""
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const transparent = process.argv[3] === '1';
+const message = JSON.parse(process.argv[4]);
+
+function extractFunc(name) {
+  const re = new RegExp('function\\s+' + name + '\\s*\\(');
+  const start = src.search(re);
+  if (start < 0) throw new Error(name + ' not found');
+  let i = src.indexOf('{', start);
+  let depth = 1; i++;
+  while (depth > 0 && i < src.length) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') depth--;
+    i++;
+  }
+  return src.slice(start, i);
+}
+
+function isTransparentStream() { return transparent; }
+eval(extractFunc('_transparentStreamOrderedParts'));
+process.stdout.write(JSON.stringify(_transparentStreamOrderedParts(message)));
+"""
+
+
+def _run_helper(message: dict, transparent: bool) -> object:
+    if NODE is None:
+        pytest.skip("node not on PATH")
+    with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
+        handle.write(_DRIVER_SRC)
+        script_path = Path(handle.name)
+    try:
+        result = subprocess.run(
+            [NODE, str(script_path), str(UI_JS_PATH), "1" if transparent else "0", json.dumps(message)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    finally:
+        script_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"node driver failed: {result.stderr}")
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_transparent_stream_ordered_parts_preserve_text_tool_text_sequence():
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Let me search first."},
+            {"type": "tool_use", "id": "toolu_1", "name": "grep", "input": {"pattern": "TODO"}},
+            {"type": "text", "text": "Found it, here's the fix."},
+        ],
+    }
+
+    ordered = _run_helper(message, transparent=True)
+
+    assert [part["kind"] for part in ordered] == ["text", "tool", "text"]
+    assert ordered[0]["text"] == "Let me search first."
+    assert ordered[1]["toolUseId"] == "toolu_1"
+    assert ordered[2]["text"] == "Found it, here's the fix."
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_compact_mode_keeps_ordered_parts_helper_off():
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Before"},
+            {"type": "tool_use", "id": "toolu_1", "name": "grep", "input": {}},
+            {"type": "text", "text": "After"},
+        ],
+    }
+
+    assert _run_helper(message, transparent=False) is None
+
+
+def test_render_messages_wires_ordered_parts_into_transparent_stream_and_skips_duplicate_tool_rows():
+    assert "let orderedTransparentParts=_transparentStreamOrderedParts(m);" in UI_JS
+    assert "const transparentOrderedToolIds=new Set();" in UI_JS
+    assert "const toolCall=_transparentOrderedToolCall(part, rawIdx, transparentOrderedToolCallsByTid, transparentToolResultsByTid);" in UI_JS
+    assert "if(part.toolUseId) transparentOrderedToolIds.add(part.toolUseId);" in UI_JS
+    assert "if(tid&&transparentOrderedToolIds.has(tid)) continue;" in UI_JS
