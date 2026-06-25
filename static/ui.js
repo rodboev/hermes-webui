@@ -11668,6 +11668,8 @@ function renderMessages(options){
         bubble.dataset.sessionMsgIdx=sessionMsgIdx;
         bubble.dataset.messageAnchorKey=messageAnchorKey;
         bubble.dataset.rawText=rawText;
+        if(m._activityBurstId!==undefined&&m._activityBurstId!==null) bubble.setAttribute('data-activity-burst-id',String(m._activityBurstId));
+        if(Number.isFinite(Number(m._liveSegmentSeq))) bubble.setAttribute('data-live-segment-seq',String(Number(m._liveSegmentSeq)));
         if(part.type==='comment'){
           const html=renderMd(part.content);
           bubble.insertAdjacentHTML('beforeend',`<div class="msg-body">${html}</div>`);
@@ -11689,6 +11691,8 @@ function renderMessages(options){
         lastBubble.dataset.sessionMsgIdx=sessionMsgIdx;
         lastBubble.dataset.messageAnchorKey=messageAnchorKey;
         lastBubble.dataset.rawText=rawText;
+        if(m._activityBurstId!==undefined&&m._activityBurstId!==null) lastBubble.setAttribute('data-activity-burst-id',String(m._activityBurstId));
+        if(Number.isFinite(Number(m._liveSegmentSeq))) lastBubble.setAttribute('data-live-segment-seq',String(Number(m._liveSegmentSeq)));
         blocks.appendChild(lastBubble);
       }
       assistantSegments.set(rawIdx, lastBubble);
