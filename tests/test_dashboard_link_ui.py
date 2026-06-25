@@ -118,10 +118,14 @@ _DASHBOARD_LINK_DRIVER = textwrap.dedent(
     const mobileBtn = makeButton('dashboardMobileBtn');
     const buttons = [railBtn, mobileBtn];
     const result = { calls: [], renderCalls: 0, statusCalls: 0, buttonStates: [] };
+    let delayedConfigResolve = null;
+    const delayedConfigValue = { enabled: 'never', url: 'http://stale.local:1234' };
 
     global._dashboardLastNonNeverMode = 'auto';
     global._dashboardStatusCache = null;
     global._dashboardStatusFetchedAt = 0;
+    global._dashboardSettingsLoadSeq = 0;
+    global._dashboardSettingsWriteSeq = 0;
     global.window = { location: { hostname: '127.0.0.1' } };
     global.document = {
       createElement: () => makeEl(),
@@ -149,6 +153,11 @@ _DASHBOARD_LINK_DRIVER = textwrap.dedent(
     global.api = (url, opts = {}) => {
       result.calls.push({ url: String(url), method: (opts.method || 'GET').toUpperCase(), body: opts.body || '', timeoutToast: !!(opts.timeoutToast) });
       if (String(url) === '/api/dashboard/config') {
+        if ((opts.method || 'GET').toUpperCase() === 'GET' && action === 'stale-load') {
+          return new Promise((resolve) => {
+            delayedConfigResolve = () => resolve(delayedConfigValue);
+          });
+        }
         const payload = opts.body ? JSON.parse(opts.body) : {};
         const enabled = payload.enabled || modeEl.value || 'auto';
         const configuredUrl = payload.url || urlEl.value || '';
@@ -205,6 +214,29 @@ _DASHBOARD_LINK_DRIVER = textwrap.dedent(
           renderCalls: result.renderCalls,
           lastRenderMode: result.lastRenderMode || '',
           calls: result.calls,
+          buttonStates: result.buttonStates,
+        }));
+        return;
+      }
+
+      if (action === 'stale-load') {
+        const loadPromise = loadDashboardSettings();
+        modeEl.value = 'always';
+        urlEl.value = 'http://fresh.local:4321';
+        await saveDashboardSettings();
+        if (!delayedConfigResolve) throw new Error('delayed config read was not started');
+        delayedConfigResolve();
+        await loadPromise;
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        recordButtons();
+        console.log(JSON.stringify({
+          mode: modeEl.value,
+          url: urlEl.value,
+          renderCalls: result.renderCalls,
+          lastRenderMode: result.lastRenderMode || '',
+          calls: result.calls,
+          statusCalls: result.statusCalls,
           buttonStates: result.buttonStates,
         }));
         return;
@@ -379,6 +411,29 @@ def test_dashboard_chip_save_keeps_buttons_refreshed():
     assert any(call["url"] == "/api/dashboard/config" and call["method"] == "POST" for call in out["calls"])
     assert any(call["url"] == "/api/dashboard/status" for call in out["calls"])
     assert out["statusCalls"] >= 1
+    assert all(
+        "dashboard-link-visible" in state["classes"]
+        and state["display"] != "none"
+        for state in out["buttonStates"]
+    )
+
+
+@requires_node
+def test_stale_dashboard_load_does_not_overwrite_newer_save():
+    out = _run_dashboard_link_driver("stale-load", mode="never", url="http://stale.local:1234")
+    assert out["mode"] == "always"
+    assert out["url"] == "http://fresh.local:4321"
+    assert out["renderCalls"] == 1
+    assert out["lastRenderMode"] == "always"
+    assert [
+        (call["url"], call["method"])
+        for call in out["calls"]
+    ] == [
+        ("/api/dashboard/config", "GET"),
+        ("/api/dashboard/config", "POST"),
+        ("/api/dashboard/status", "GET"),
+    ]
+    assert out["statusCalls"] == 1
     assert all(
         "dashboard-link-visible" in state["classes"]
         and state["display"] != "none"

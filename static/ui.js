@@ -1175,6 +1175,8 @@ const DASHBOARD_STATUS_TTL_MS=60000;
 let _dashboardStatusCache=null;
 let _dashboardStatusFetchedAt=0;
 let _dashboardLastNonNeverMode='auto'; // Server-scoped dashboard config keeps this restore target session-global on purpose.
+let _dashboardSettingsLoadSeq=0;
+let _dashboardSettingsWriteSeq=0;
 
 function _dashboardIsBrowserLoopback(){
   const host=(window.location.hostname||'').replace(/^\[|\]$/g,'').toLowerCase();
@@ -1249,8 +1251,11 @@ async function loadDashboardSettings(){
   const modeEl=$('settingsDashboardMode');
   const urlEl=$('settingsDashboardUrl');
   if(!modeEl&&!urlEl) return;
+  const loadSeq=++_dashboardSettingsLoadSeq;
+  const writeSeq=_dashboardSettingsWriteSeq;
   try{
     const cfg=await api('/api/dashboard/config');
+    if(loadSeq!==_dashboardSettingsLoadSeq||writeSeq!==_dashboardSettingsWriteSeq) return;
     const mode=_normalizeDashboardEnabledMode(cfg&&cfg.enabled);
     if(modeEl) modeEl.value=mode;
     _setDashboardModeForChip(mode);
@@ -1264,6 +1269,7 @@ async function saveDashboardSettings(opts){
   const urlEl=$('settingsDashboardUrl');
   const statusEl=$('settingsDashboardStatus');
   const payload={enabled:(modeEl&&modeEl.value)||'auto',url:(urlEl&&urlEl.value||'').trim()};
+  _dashboardSettingsWriteSeq+=1;
   try{
     const saved=await api('/api/dashboard/config',{method:'POST',body:JSON.stringify(payload)});
     const mode=_normalizeDashboardEnabledMode(saved&&saved.enabled);
