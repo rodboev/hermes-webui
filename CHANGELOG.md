@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.642] — 2026-06-25 — Release WW (a failed steer now shows why, with Retry / Dismiss)
+
+### Fixed
+
+- **When a mid-turn steer can't be delivered, the composer no longer dead-ends on a generic toast.** A `/steer` (or busy-mode auto-fallback) that failed previously surfaced one of two vague toasts and restored your draft, with no explanation and no way forward — in the auto-fallback case this could trap you in a bounce loop. Each of the distinct failure reasons (agent not running, no cached agent, stream ended, session not found, agent lacks steer, network/steer error) now maps to a specific message, shown in a small recovery bar above the composer with **Retry** and **Dismiss** actions. The bar's buttons are theme-aware (readable in both light and dark, including on mobile). Thanks @rodboev. (#4850, closes #4749)
+
 ## [v0.51.641] — 2026-06-25 — Release WV (disabled plugins read as disabled in dark mode, active ones sort first)
 
 ### Fixed
