@@ -6614,6 +6614,34 @@ function _orderedSidebarPanels(order){
   return out;
 }
 
+function _dashboardPanelMode(){
+  var modeEl=$('settingsDashboardMode');
+  var mode=modeEl&&modeEl.value;
+  return mode==='never'||mode==='always'||mode==='auto'?mode:'auto';
+}
+
+function _isDashboardChipOn(){
+  return _dashboardPanelMode()!=='never';
+}
+
+function _renderDashboardVisibilityChip(container){
+  if(!container)return null;
+  var chip=document.createElement('button');
+  chip.type='button';
+  chip.className='tab-visibility-chip';
+  chip.setAttribute('data-tab-panel','__hermes_dashboard__');
+  chip.setAttribute('role','switch');
+  var isOn=_isDashboardChipOn();
+  chip.setAttribute('aria-checked',isOn?'true':'false');
+  if(!isOn) chip.classList.add('chip-off');
+  chip.textContent=typeof t==='function'?t('tab_dashboard'):'Dashboard';
+  chip.onclick=function(){
+    if(Date.now()<_tabVisibilityDragSuppressUntil)return;
+    _toggleDashboardVisibilityChip();
+  };
+  return chip;
+}
+
 function _applyTabOrder(order){
   var ordered=_orderedSidebarPanels(order);
   ['.rail','.sidebar-nav'].forEach(function(selector){
@@ -6686,6 +6714,8 @@ function _renderTabVisibilityChips(){
     _wireTabChipDrag(chip,panel);
     container.appendChild(chip);
   });
+  var dashboardChip=_renderDashboardVisibilityChip(container);
+  if(dashboardChip) container.appendChild(dashboardChip);
 }
 
 function _wireTabChipDrag(chip,panel){
@@ -6738,6 +6768,17 @@ function _toggleTabVisibilityChip(panel){
   _applyTabVisibility(hidden);
   _renderTabVisibilityChips();
   _scheduleAppearanceAutosave();
+}
+
+function _toggleDashboardVisibilityChip(){
+  var modeEl=$('settingsDashboardMode');
+  if(!modeEl||typeof saveDashboardSettings!=='function') return;
+  var currentMode=_dashboardPanelMode();
+  var nextMode=currentMode==='never'
+    ? (typeof _getDashboardChipRestoreMode==='function' ? _getDashboardChipRestoreMode() : 'auto')
+    : 'never';
+  modeEl.value=nextMode;
+  saveDashboardSettings();
 }
 
 function _ensureComposerControlVisibilityState(settings){
