@@ -18,7 +18,7 @@ import hashlib
 import io
 import time
 import zipfile
-from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+from urllib.request import HTTPRedirectHandler, build_opener, urlopen
 
 from api.helpers import _security_headers, j
 
