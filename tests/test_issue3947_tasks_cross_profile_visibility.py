@@ -528,7 +528,9 @@ def test_panels_read_only_rows_hide_actions_and_skip_unread_side_effects():
     script = f"""
 const results = {{}};
 const buttons = Object.create(null);
+const header = {{ style: {{ display: 'initial' }} }};
 function $(id) {{
+  if (id === 'mainTasks') return {{ querySelector() {{ return header; }} }};
   if (!buttons[id]) buttons[id] = {{ style: {{ display: 'initial' }} }};
   return buttons[id];
 }}
