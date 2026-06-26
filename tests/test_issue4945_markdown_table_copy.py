@@ -351,3 +351,34 @@ console.log(JSON.stringify({ prevented: event.preventDefaultCalled, data: clipbo
     )
     assert out["prevented"] is False
     assert out["data"] == {}
+
+
+def test_table_copy_without_clipboard_data_leaves_native_copy_unmodified():
+    out = _run_js(
+        """
+const {table, body} = buildEnhancedTableFixture(true);
+
+const range = {
+  startContainer: body.cells[0].children[0],
+  endContainer: body.cells[1].children[0],
+  commonAncestorContainer: table,
+};
+
+window.getSelection = () => ({
+  isCollapsed: false,
+  rangeCount: 1,
+  getRangeAt: () => range,
+});
+
+const event = {
+  preventDefaultCalled: false,
+  preventDefault() {
+    this.preventDefaultCalled = true;
+  },
+};
+
+_handleMarkdownTableCopy(event);
+console.log(JSON.stringify({ prevented: event.preventDefaultCalled }));
+"""
+    )
+    assert out["prevented"] is False

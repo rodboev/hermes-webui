@@ -537,9 +537,9 @@ function _handleMarkdownTableCopy(event){
   if(!table||!table.matches||!table.matches('table[data-markdown-table-enhanced]')) return;
   const payload=_markdownTableCopyPayloadForTable(table);
   if(!payload) return;
-  if(typeof event.preventDefault==='function') event.preventDefault();
   const clipboardData=event.clipboardData||event.originalEvent&&event.originalEvent.clipboardData;
   if(!clipboardData||typeof clipboardData.setData!=='function') return;
+  if(typeof event.preventDefault==='function') event.preventDefault();
   clipboardData.setData('text/html', payload.html);
   clipboardData.setData('text/plain', payload.plain);
 }
