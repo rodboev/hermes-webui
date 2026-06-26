@@ -194,6 +194,19 @@ function handleWorkspaceClose(){
   closeWorkspacePanel();
 }
 
+async function _maybeBindFreshDefaultWorkspaceSession(){
+  if(S.session) return false;
+  if(_workspacePanelMode!=='browse') return false;
+  if(!S._profileDefaultWorkspace) return false;
+  try{
+    await newSession(false, {awaitWorkspaceLoad: true});
+    return true;
+  }catch(e){
+    console.warn('[hermes] failed to bind fresh default workspace session', e);
+    return false;
+  }
+}
+
 /**
  * Set a tooltip on a button, preferring the custom CSS tooltip (`data-tooltip`)
  * when the element opts in via the `has-tooltip` class. Falls back to the
@@ -2424,6 +2437,7 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
   const _freshPanelPref=localStorage.getItem('hermes-webui-workspace-panel-pref')==='open'
     || localStorage.getItem('hermes-webui-workspace-panel')==='open';
   if(_freshPanelPref&&!_isCompactWorkspaceViewport()) _workspacePanelMode='browse';
+  await _maybeBindFreshDefaultWorkspaceSession();
   syncWorkspacePanelState();
   $('emptyState').style.display='';
   await renderSessionList();
