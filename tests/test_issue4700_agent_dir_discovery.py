@@ -80,8 +80,10 @@ def test_discover_agent_dir_rejects_cron_only_directory_without_agent_markers(
     assert config._discover_agent_dir() is None
 
 
-def test_legacy_run_agent_layout_still_wins(monkeypatch, tmp_path):
-    """Legacy `run_agent.py` discovery is unchanged and still takes precedence."""
+def test_explicit_legacy_agent_dir_override_still_beats_pip_style_fallback(
+    monkeypatch, tmp_path
+):
+    """An explicit legacy override still wins over later pip-style fallback paths."""
     import api.config as config
 
     legacy = _make_legacy_agent_root(tmp_path / "legacy-agent")
@@ -89,7 +91,6 @@ def test_legacy_run_agent_layout_still_wins(monkeypatch, tmp_path):
     _isolate_discovery_inputs(config, monkeypatch, tmp_path)
     monkeypatch.setenv("HERMES_WEBUI_AGENT_DIR", str(legacy))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-home"))
-    (tmp_path / "hermes-home" / "hermes-agent").mkdir(parents=True, exist_ok=True)
     _make_pip_style_agent_root(tmp_path / "hermes-home" / "hermes-agent")
 
     assert config._discover_agent_dir() == legacy
@@ -119,7 +120,6 @@ def test_routes_shadow_helper_can_recover_once_agent_dir_resolves(monkeypatch, t
     shadow_cron = shadow_site_packages / "cron"
     (shadow_cron / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
     (shadow_cron / "__init__.py").write_text("SHADOW = True", encoding="utf-8")
-    (agent_dir / "cron").mkdir(parents=True, exist_ok=True)
     (agent_dir / "cron" / "__init__.py").write_text("", encoding="utf-8")
     (agent_dir / "cron" / "jobs.py").write_text(
         "def list_jobs(*_args, **_kwargs):\n"
