@@ -19,6 +19,7 @@ MESSAGING_SOURCES = {
 
 CLI_MIN_UNTITLED_MESSAGE_COUNT = 6
 CLI_MIN_UNTITLED_USER_MESSAGE_COUNT = 2
+_CRON_PREAGGREGATE_CANDIDATE_ORDER_MIN_MESSAGES = 100000
 
 SOURCE_LABELS = {
     'api_server': 'API',
@@ -505,6 +506,8 @@ def read_importable_agent_session_rows(
         # self-heals an affected db in milliseconds. Best-effort: degrade
         # silently on a read-only db or any error so the listing never fails
         # because of the prime.
+        messages_index_ready = False
+        messages_rowid_upper_bound = None
         if messages_has_session_id and messages_has_timestamp:
             try:
                 cur.execute(
@@ -512,8 +515,15 @@ def read_importable_agent_session_rows(
                     "ON messages(session_id, timestamp)"
                 )
                 conn.commit()
+                messages_index_ready = True
             except sqlite3.Error:
                 pass  # read-only db / locked / older schema — degrade gracefully
+            try:
+                cur.execute("SELECT MAX(rowid) FROM messages")
+                row = cur.fetchone()
+                messages_rowid_upper_bound = int(row[0] or 0) if row else 0
+            except sqlite3.Error:
+                messages_rowid_upper_bound = None
 
         if use_messages_join:
             actual_count_expr = f"COUNT(m.{count_col})"
@@ -554,7 +564,13 @@ def read_importable_agent_session_rows(
                 params.extend(excluded)
 
         use_preaggregated_candidate_order = (
-            use_messages_join and messages_has_timestamp and included == ("cron",)
+            use_messages_join
+            and messages_has_timestamp
+            and included == ("cron",)
+            and (
+                not messages_index_ready
+                or (messages_rowid_upper_bound or 0) >= _CRON_PREAGGREGATE_CANDIDATE_ORDER_MIN_MESSAGES
+            )
         )
         if use_preaggregated_candidate_order:
             order_by_clause = "ORDER BY COALESCE(MAX(m.timestamp), s.started_at) DESC"

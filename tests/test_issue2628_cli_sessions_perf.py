@@ -201,6 +201,7 @@ def test_importable_agent_rows_push_sidebar_limit_into_sql(tmp_path):
     assert "JOIN candidates c ON c.id = s.id" in src
     assert "latest_messages AS" in src
     assert 'included == ("cron",)' in src
+    assert "_CRON_PREAGGREGATE_CANDIDATE_ORDER_MIN_MESSAGES" in src
     assert "MAX(mx.timestamp) FROM messages mx WHERE mx.session_id = s.id" in src
     assert "candidate_limit = max(result_limit * 8, result_limit)" in src
 
@@ -211,8 +212,8 @@ def test_importable_agent_rows_candidate_ordering_respects_progress_budget(tmp_p
     _make_state_db(
         db,
         sessions=120,
-        messages_per_session=120,
-        create_messages_index=False,
+        messages_per_session=900,
+        create_messages_index=True,
         source="cron",
         session_source="cron",
     )
