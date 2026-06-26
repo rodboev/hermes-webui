@@ -80,6 +80,11 @@ const required = [
   '_sanitizeMarkdownTableCellText',
   '_findEnhancedMarkdownTable',
   '_findMarkdownTableCell',
+  '_markdownTableNodeChildren',
+  '_markdownTableNodeBoundaryLength',
+  '_markdownTableBoundaryWithinCell',
+  '_markdownTableEdgeCell',
+  '_isFullEnhancedMarkdownTableSelection',
   '_findEnhancedMarkdownTableFromRange',
   '_markdownTableCopyPayloadForTable',
   '_handleMarkdownTableCopy',
@@ -186,6 +191,13 @@ class FakeElement {
 
   matches(selector) {
     if (!selector || this.nodeType !== 1) return false;
+    if (selector.includes(',')) {
+      return selector
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .some((part) => this.matches(part));
+    }
     if (selector.startsWith('.')) {
       return this.classList.contains(selector.slice(1));
     }
@@ -238,7 +250,9 @@ function makeRow(cells) {
   return row;
 }
 
-function buildEnhancedTableFixture(includeFilter) {
+function buildEnhancedTableFixture(includeFilter, options = {}) {
+  const headerTexts = options.headerTexts || ['Product', 'Price'];
+  const bodyTexts = options.bodyTexts || ['Widget', '12'];
   const root = makeElement('div');
   if (includeFilter) {
     const filter = makeElement('input', {className: 'markdown-table-filter'});
@@ -248,12 +262,12 @@ function buildEnhancedTableFixture(includeFilter) {
 
   const table = makeElement('table', {attrs: {'data-markdown-table-enhanced': '1'}});
   const header = makeRow([
-    makeCell('th', 'Product', true),
-    makeCell('th', 'Price', true),
+    makeCell('th', headerTexts[0], true),
+    makeCell('th', headerTexts[1], true),
   ]);
   const body = makeRow([
-    makeCell('td', 'Widget'),
-    makeCell('td', '12'),
+    makeCell('td', bodyTexts[0]),
+    makeCell('td', bodyTexts[1]),
   ]);
   table.rows = [header, body];
   root.appendChild(table);
@@ -294,28 +308,76 @@ def _run_js(driver_body: str):
 def test_copy_payload_restores_header_row_and_plain_cells():
     out = _run_js(
         """
-const {root, table} = buildEnhancedTableFixture(false);
+const {table} = buildEnhancedTableFixture(false, {
+  headerTexts: ['Product <Name>', 'Price & Tax'],
+  bodyTexts: ['Widget > Basic', '12 & change'],
+});
 const payload = _markdownTableCopyPayloadForTable(table);
 console.log(JSON.stringify(payload));
 """
     )
-    assert "<thead><tr><th>Product</th><th>Price</th></tr></thead>" in out["html"]
-    assert "<tbody><tr><td>Widget</td><td>12</td></tr></tbody>" in out["html"]
-    assert "<th>Product</th>" in out["html"]
-    assert "<th>Price</th>" in out["html"]
+    assert "<thead><tr><th>Product &lt;Name&gt;</th><th>Price &amp; Tax</th></tr></thead>" in out["html"]
+    assert "<tbody><tr><td>Widget &gt; Basic</td><td>12 &amp; change</td></tr></tbody>" in out["html"]
     assert "markdown-table-sort" not in out["html"]
-    assert out["plain"].startswith("Product\tPrice\n")
-    assert "\nWidget\t12" in out["plain"]
+    assert out["plain"].startswith("Product <Name>\tPrice & Tax\n")
+    assert "\nWidget > Basic\t12 & change" in out["plain"]
 
 
-def test_copy_payload_strips_sort_controls_and_filter_ui():
+def test_partial_multi_cell_selection_leaves_native_copy_unmodified():
     out = _run_js(
         """
 const {root, table, body} = buildEnhancedTableFixture(true);
 
 const range = {
   startContainer: body.cells[0].children[0],
+  startOffset: 0,
   endContainer: body.cells[1].children[0],
+  endOffset: body.cells[1].children[0].textContent.length,
+  commonAncestorContainer: table,
+};
+
+window.getSelection = () => ({
+  isCollapsed: false,
+  rangeCount: 1,
+  getRangeAt: () => range,
+});
+
+const clipboard = {
+  data: {},
+  setData(type, value) {
+    this.data[type] = value;
+  }
+};
+
+const event = {
+  preventDefaultCalled: false,
+  preventDefault() {
+    this.preventDefaultCalled = true;
+  },
+  clipboardData: clipboard,
+};
+
+_handleMarkdownTableCopy(event);
+console.log(JSON.stringify({ prevented: event.preventDefaultCalled, data: clipboard.data }));
+"""
+    )
+    assert out["prevented"] is False
+    assert out["data"] == {}
+
+
+def test_full_table_selection_exports_sanitized_table_payload():
+    out = _run_js(
+        """
+const {table, header, body} = buildEnhancedTableFixture(true, {
+  headerTexts: ['Product <Name>', 'Price & Tax'],
+  bodyTexts: ['Widget > Basic', '12 & change'],
+});
+
+const range = {
+  startContainer: header.cells[0].children[0].children[0],
+  startOffset: 0,
+  endContainer: body.cells[1].children[0],
+  endOffset: body.cells[1].children[0].textContent.length,
   commonAncestorContainer: table,
 };
 
@@ -347,10 +409,12 @@ console.log(JSON.stringify({ prevented: event.preventDefaultCalled, data: clipbo
     data = out["data"]
     assert out["prevented"] is True
     assert "<table>" in data["text/html"]
+    assert "<thead><tr><th>Product &lt;Name&gt;</th><th>Price &amp; Tax</th></tr></thead>" in data["text/html"]
+    assert "<tbody><tr><td>Widget &gt; Basic</td><td>12 &amp; change</td></tr></tbody>" in data["text/html"]
     assert "markdown-table-filter" not in data["text/html"]
     assert "markdown-table-sort" not in data["text/html"]
-    assert out["data"]["text/plain"].startswith("Product\tPrice")
-    assert "Widget" in out["data"]["text/plain"]
+    assert data["text/plain"].startswith("Product <Name>\tPrice & Tax")
+    assert "\nWidget > Basic\t12 & change" in data["text/plain"]
 
 
 def test_non_table_selection_leaves_native_copy_unmodified():
@@ -361,7 +425,9 @@ plain.appendChild(new FakeText('plain text'));
 
 const range = {
   startContainer: plain.children[0],
+  startOffset: 0,
   endContainer: plain.children[0],
+  endOffset: plain.children[0].textContent.length,
   commonAncestorContainer: plain,
 };
 
@@ -401,7 +467,9 @@ const {table, body} = buildEnhancedTableFixture(true);
 
 const range = {
   startContainer: body.cells[0].children[0],
+  startOffset: 0,
   endContainer: body.cells[1].children[0],
+  endOffset: body.cells[1].children[0].textContent.length,
   commonAncestorContainer: table,
 };
 
@@ -425,7 +493,7 @@ console.log(JSON.stringify({ prevented: event.preventDefaultCalled }));
     assert out["prevented"] is False
 
 
-def test_mixed_selection_that_crosses_table_still_sanitizes_table_copy():
+def test_mixed_selection_that_crosses_table_leaves_native_copy_unmodified():
     out = _run_js(
         """
 const {root, table, body} = buildEnhancedTableFixture(true);
@@ -440,7 +508,9 @@ root.appendChild(after);
 
 const range = {
   startContainer: before.children[0],
+  startOffset: 0,
   endContainer: after.children[0],
+  endOffset: after.children[0].textContent.length,
   commonAncestorContainer: root,
   intersectsNode(node) {
     return node === table;
@@ -472,9 +542,8 @@ _handleMarkdownTableCopy(event);
 console.log(JSON.stringify({ prevented: event.preventDefaultCalled, data: clipboard.data }));
 """
     )
-    assert out["prevented"] is True
-    assert "<th>Product</th>" in out["data"]["text/html"]
-    assert out["data"]["text/plain"].startswith("Product\tPrice")
+    assert out["prevented"] is False
+    assert out["data"] == {}
 
 
 def test_single_cell_subselection_leaves_native_copy_unmodified():
@@ -484,7 +553,9 @@ const {table, body} = buildEnhancedTableFixture(true);
 
 const range = {
   startContainer: body.cells[0].children[0],
+  startOffset: 0,
   endContainer: body.cells[0].children[0],
+  endOffset: body.cells[0].children[0].textContent.length,
   commonAncestorContainer: body.cells[0],
 };
 
