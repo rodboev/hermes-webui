@@ -523,7 +523,17 @@ function _findEnhancedMarkdownTableFromRange(range){
   const found=_findEnhancedMarkdownTable(range.startContainer)
     || _findEnhancedMarkdownTable(range.endContainer)
     || _findEnhancedMarkdownTable(range.commonAncestorContainer);
-  return found;
+  if(found) return found;
+  const container=range.commonAncestorContainer&&range.commonAncestorContainer.nodeType===3
+    ? range.commonAncestorContainer.parentElement
+    : range.commonAncestorContainer;
+  if(!container||!container.querySelectorAll||typeof range.intersectsNode!=='function') return null;
+  for(const table of container.querySelectorAll('table[data-markdown-table-enhanced]')){
+    try{
+      if(range.intersectsNode(table)) return table;
+    }catch(_){}
+  }
+  return null;
 }
 
 function _handleMarkdownTableCopy(event){

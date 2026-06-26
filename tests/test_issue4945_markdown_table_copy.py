@@ -382,3 +382,55 @@ console.log(JSON.stringify({ prevented: event.preventDefaultCalled }));
 """
     )
     assert out["prevented"] is False
+
+
+def test_mixed_selection_that_crosses_table_still_sanitizes_table_copy():
+    out = _run_js(
+        """
+const {root, table, body} = buildEnhancedTableFixture(true);
+const before = makeElement('p');
+before.appendChild(new FakeText('before table'));
+const after = makeElement('p');
+after.appendChild(new FakeText('after table'));
+root.children.unshift(before);
+before.parentElement = root;
+before.parentNode = root;
+root.appendChild(after);
+
+const range = {
+  startContainer: before.children[0],
+  endContainer: after.children[0],
+  commonAncestorContainer: root,
+  intersectsNode(node) {
+    return node === table;
+  },
+};
+
+window.getSelection = () => ({
+  isCollapsed: false,
+  rangeCount: 1,
+  getRangeAt: () => range,
+});
+
+const clipboard = {
+  data: {},
+  setData(type, value) {
+    this.data[type] = value;
+  }
+};
+
+const event = {
+  preventDefaultCalled: false,
+  preventDefault() {
+    this.preventDefaultCalled = true;
+  },
+  clipboardData: clipboard,
+};
+
+_handleMarkdownTableCopy(event);
+console.log(JSON.stringify({ prevented: event.preventDefaultCalled, data: clipboard.data }));
+"""
+    )
+    assert out["prevented"] is True
+    assert "<th>Product</th>" in out["data"]["text/html"]
+    assert out["data"]["text/plain"].startswith("Product\tPrice")
