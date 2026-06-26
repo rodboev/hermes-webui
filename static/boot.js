@@ -2261,7 +2261,30 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
     api(_checkUrl,{method:_testUpdates?'GET':'POST',body:_testUpdates?undefined:JSON.stringify({force:false})}).then(d=>{if(!_testUpdates)sessionStorage.setItem('hermes-update-checked','1');if((d.webui&&d.webui.behind>0)||(d.agent&&d.agent.behind>0))_showUpdateBanner(d);}).catch(()=>{});
   }
   async function _resolveActiveProfileBootstrapState({
-    loadActiveProfile = () => api('/api/profile/active'),
+    loadActiveProfile = async () => {
+      const rel = 'api/profile/active';
+      const url = new URL(rel, document.baseURI || location.href);
+      const res = await fetch(url.href, {
+        credentials: 'include',
+        headers: {'Content-Type': 'application/json'},
+      });
+      if (res.status === 401) return undefined;
+      if (!res.ok) {
+        const text = await res.text();
+        let message = text;
+        try {
+          const j = JSON.parse(text);
+          message = j.error || j.message || text;
+        } catch (_) {}
+        const err = new Error(message);
+        err.status = res.status;
+        err.statusText = res.statusText;
+        err.body = text;
+        throw err;
+      }
+      const ct = res.headers.get('content-type') || '';
+      return ct.includes('application/json') ? await res.json() : await res.text();
+    },
     getNextUrl = () => window.location.pathname + window.location.search,
     redirectToLogin = (nextUrl) => {
       window.location.href = 'login?next=' + encodeURIComponent(nextUrl);

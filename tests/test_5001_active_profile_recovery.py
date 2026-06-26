@@ -91,6 +91,30 @@ function makeAttempt(attempt) {
   };
 }
 
+function makeFetchResponse(attempt) {
+  const status = attempt.status === undefined ? 200 : attempt.status;
+  const payload = Object.prototype.hasOwnProperty.call(attempt, 'payload')
+    ? attempt.payload
+    : {name: 'default', is_default: true};
+  const textBody = Object.prototype.hasOwnProperty.call(attempt, 'text')
+    ? attempt.text
+    : JSON.stringify(payload);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: attempt.statusText || '',
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === 'content-type'
+          ? attempt.contentType || 'application/json'
+          : '';
+      },
+    },
+    json: async () => payload,
+    text: async () => textBody,
+  };
+}
+
 eval(extractFunction(bootSrc, '_resolveActiveProfileBootstrapState'));
 const bootActiveProfileBlock = extractBlock(
   bootSrc,
@@ -120,15 +144,52 @@ return (async () => {
   const storageHistory = [];
 
   for (const attempt of attempts) {
-    const state = await _resolveActiveProfileBootstrapState({
-      loadActiveProfile: makeAttempt(attempt),
-      markerStorage: storage,
-      markerKey,
-      getNextUrl: () => attempt.nextUrl || '/',
-      redirectToLogin: (nextUrl) => {
-        redirectUrls.push(`login?next=${encodeURIComponent(nextUrl)}`);
-      },
-    });
+    const nextUrl = attempt.nextUrl || '/';
+    const originalFetch = globalThis.fetch;
+    const originalWindow = globalThis.window;
+    const originalLocation = globalThis.location;
+    const originalDocument = globalThis.document;
+    let state;
+
+    try {
+      if (scenario.useDefaultLoader) {
+        const location = {
+          href: `http://example.test${nextUrl}`,
+          pathname: nextUrl,
+          search: '',
+        };
+        globalThis.fetch = async () => makeFetchResponse(attempt);
+        globalThis.location = location;
+        globalThis.document = {baseURI: 'http://example.test/'};
+        globalThis.window = {location};
+        state = await _resolveActiveProfileBootstrapState({
+          markerStorage: storage,
+          markerKey,
+          getNextUrl: () => nextUrl,
+          redirectToLogin: (value) => {
+            const href = `login?next=${encodeURIComponent(value)}`;
+            redirectUrls.push(href);
+            location.href = href;
+          },
+        });
+      } else {
+        state = await _resolveActiveProfileBootstrapState({
+          loadActiveProfile: makeAttempt(attempt),
+          markerStorage: storage,
+          markerKey,
+          getNextUrl: () => nextUrl,
+          redirectToLogin: (value) => {
+            redirectUrls.push(`login?next=${encodeURIComponent(value)}`);
+          },
+        });
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      globalThis.window = originalWindow;
+      globalThis.location = originalLocation;
+      globalThis.document = originalDocument;
+    }
+
     const bootState = {};
     let applyBotNameCalls = 0;
     const bootResult = await runBootActiveProfileBlock(
@@ -194,9 +255,10 @@ def test_active_profile_boot_recovery_is_one_shot_and_bounded(driver_path):
         driver_path,
         {
             "markerKey": "test-5001-active-profile-recovery",
+            "useDefaultLoader": True,
             "attempts": [
-                {"type": "undefined", "nextUrl": "/"},
-                {"type": "undefined", "nextUrl": "/"},
+                {"status": 401, "payload": {"error": "Authentication required"}, "nextUrl": "/"},
+                {"status": 401, "payload": {"error": "Authentication required"}, "nextUrl": "/"},
             ],
         },
     )
@@ -255,8 +317,9 @@ def test_active_profile_boot_non_401_errors_fallback_without_redirect(driver_pat
         driver_path,
         {
             "markerKey": "test-5001-active-profile-recovery-non-401",
+            "useDefaultLoader": True,
             "attempts": [
-                {"type": "error", "status": 500, "nextUrl": "/"},
+                {"status": 500, "payload": {"error": "server failure"}, "nextUrl": "/"},
             ],
         },
     )
@@ -278,8 +341,9 @@ def test_active_profile_boot_invalid_payload_falls_back_without_redirect(driver_
         driver_path,
         {
             "markerKey": "test-5001-active-profile-recovery-invalid-payload",
+            "useDefaultLoader": True,
             "attempts": [
-                {"type": "return", "value": {"is_default": False}, "nextUrl": "/"},
+                {"status": 200, "payload": {"is_default": False}, "nextUrl": "/"},
             ],
         },
     )
@@ -301,10 +365,10 @@ def test_active_profile_success_path_applies_boot_state_and_continues(driver_pat
         driver_path,
         {
             "markerKey": "test-5001-active-profile-recovery-success",
-            "simulateBootContinue": True,
+            "useDefaultLoader": True,
             "attempts": [
                 {
-                    "type": "success",
+                    "status": 200,
                     "payload": {"name": "team-profile", "is_default": False},
                 }
             ],
