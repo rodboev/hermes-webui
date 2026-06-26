@@ -115,6 +115,35 @@ function makeFetchResponse(attempt) {
   };
 }
 
+function makeApiAttempt(attempt) {
+  return async function (_path, opts = {}) {
+    if (!opts || opts.redirect401 !== false) {
+      throw new Error('expected redirect401:false for active-profile bootstrap');
+    }
+    const response = makeFetchResponse(attempt);
+    if (response.status === 401) {
+      return undefined;
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      let message = text;
+      try {
+        const parsed = JSON.parse(text);
+        message = parsed.error || parsed.message || text;
+      } catch (_) {}
+      const error = new Error(message);
+      error.status = response.status;
+      error.statusText = response.statusText;
+      error.body = text;
+      throw error;
+    }
+    const ct = response.headers.get('content-type') || '';
+    return ct.includes('application/json')
+      ? await response.json()
+      : await response.text();
+  };
+}
+
 eval(extractFunction(bootSrc, '_resolveActiveProfileBootstrapState'));
 const bootActiveProfileBlock = extractBlock(
   bootSrc,
@@ -145,7 +174,7 @@ return (async () => {
 
   for (const attempt of attempts) {
     const nextUrl = attempt.nextUrl || '/';
-    const originalFetch = globalThis.fetch;
+    const originalApi = globalThis.api;
     const originalWindow = globalThis.window;
     const originalLocation = globalThis.location;
     const originalDocument = globalThis.document;
@@ -153,15 +182,7 @@ return (async () => {
 
     try {
       if (scenario.useDefaultLoader) {
-        const location = {
-          href: `http://example.test${nextUrl}`,
-          pathname: nextUrl,
-          search: '',
-        };
-        globalThis.fetch = async () => makeFetchResponse(attempt);
-        globalThis.location = location;
-        globalThis.document = {baseURI: 'http://example.test/'};
-        globalThis.window = {location};
+        globalThis.api = makeApiAttempt(attempt);
         state = await _resolveActiveProfileBootstrapState({
           markerStorage: storage,
           markerKey,
@@ -169,7 +190,6 @@ return (async () => {
           redirectToLogin: (value) => {
             const href = `login?next=${encodeURIComponent(value)}`;
             redirectUrls.push(href);
-            location.href = href;
           },
         });
       } else {
@@ -184,7 +204,7 @@ return (async () => {
         });
       }
     } finally {
-      globalThis.fetch = originalFetch;
+      globalThis.api = originalApi;
       globalThis.window = originalWindow;
       globalThis.location = originalLocation;
       globalThis.document = originalDocument;
