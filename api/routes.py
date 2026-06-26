@@ -1637,12 +1637,6 @@ def _clear_live_models_cache() -> None:
 from api import route_session_list_cache as _route_session_list_cache
 
 _SESSIONS_CACHE = _route_session_list_cache._SESSIONS_CACHE
-_SESSIONS_CACHE_ALL_PROFILES_INVALIDATION_VERSION = (
-    _route_session_list_cache._SESSIONS_CACHE_ALL_PROFILES_INVALIDATION_VERSION
-)
-_SESSIONS_CACHE_GLOBAL_INVALIDATION_VERSION = (
-    _route_session_list_cache._SESSIONS_CACHE_GLOBAL_INVALIDATION_VERSION
-)
 _SESSIONS_CACHE_INFLIGHT = _route_session_list_cache._SESSIONS_CACHE_INFLIGHT
 _SESSIONS_CACHE_LOCK = _route_session_list_cache._SESSIONS_CACHE_LOCK
 _SESSIONS_CACHE_MAX_ENTRIES = _route_session_list_cache._SESSIONS_CACHE_MAX_ENTRIES
@@ -1673,6 +1667,18 @@ _session_list_cache_set = _route_session_list_cache._session_list_cache_set
 _session_list_cache_source_stamp = _route_session_list_cache._session_list_cache_source_stamp
 _session_list_cache_state_db_fingerprint = _route_session_list_cache._session_list_cache_state_db_fingerprint
 _session_list_cache_streaming_freeze_marker = _route_session_list_cache._session_list_cache_streaming_freeze_marker
+
+_ROUTE_SESSION_LIST_CACHE_DYNAMIC_EXPORTS = {
+    "_SESSIONS_CACHE_ALL_PROFILES_INVALIDATION_VERSION",
+    "_SESSIONS_CACHE_GLOBAL_INVALIDATION_VERSION",
+    "_session_list_cache_settings_write_version",
+}
+
+
+def __getattr__(name):
+    if name in _ROUTE_SESSION_LIST_CACHE_DYNAMIC_EXPORTS:
+        return getattr(_route_session_list_cache, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _build_session_list_cache_payload(

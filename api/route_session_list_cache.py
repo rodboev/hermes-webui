@@ -368,7 +368,9 @@ def _session_list_cache_settings_write_version() -> int:
     try:
         import api.routes as _routes
 
-        return int(getattr(_routes, "_session_list_cache_settings_write_version", lambda: 0)())
+        override = getattr(_routes, "_session_list_cache_settings_write_version", None)
+        if callable(override) and override is not _session_list_cache_settings_write_version:
+            return int(override())
     except Exception:
         pass
     try:
