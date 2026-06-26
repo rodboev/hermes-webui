@@ -246,6 +246,39 @@ def test_post_settings_bridges_max_tokens_without_polluting_settings_payload(mon
     assert payload["max_tokens_fallback"] is None
 
 
+def test_post_settings_keeps_current_max_tokens_on_unrelated_save(monkeypatch):
+    import api.auth as auth
+    from api.routes import handle_post
+
+    monkeypatch.setattr(auth, "is_auth_enabled", lambda: False)
+    monkeypatch.setattr(auth, "get_password_hash", lambda: None)
+    monkeypatch.setattr(auth, "parse_cookie", lambda handler: "")
+    monkeypatch.setattr(auth, "verify_session", lambda cookie: False)
+    monkeypatch.setattr("api.routes.save_settings", lambda body: {"language": body.get("language")})
+    monkeypatch.setattr(
+        "api.config.get_max_tokens_status",
+        lambda: {
+            "max_tokens": 100,
+            "max_tokens_effective": 100,
+            "max_tokens_fallback": None,
+        },
+    )
+    monkeypatch.setattr(
+        "api.config.set_max_tokens",
+        lambda value: (_ for _ in ()).throw(AssertionError(f"unexpected max_tokens write: {value!r}")),
+    )
+
+    handler = _FakeHandler(json.dumps({"language": "pl"}).encode("utf-8"))
+    handle_post(handler, urlparse("http://example.com/api/settings"))
+    payload = handler.json_body()
+
+    assert handler.status == 200
+    assert payload["language"] == "pl"
+    assert payload["max_tokens"] == 100
+    assert payload["max_tokens_effective"] == 100
+    assert payload["max_tokens_fallback"] is None
+
+
 def test_post_settings_does_not_write_max_tokens_before_auth_failures(monkeypatch):
     import api.auth as auth
     from api.routes import handle_post
