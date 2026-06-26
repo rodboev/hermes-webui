@@ -95,6 +95,19 @@ def test_legacy_run_agent_layout_still_wins(monkeypatch, tmp_path):
     assert config._discover_agent_dir() == legacy
 
 
+def test_discover_agent_dir_accepts_pip_style_parent_of_webui_repo(monkeypatch, tmp_path):
+    """Nested webui-inside-agent layouts should also accept pip-style parents."""
+    import api.config as config
+
+    pip_root = _make_pip_style_agent_root(tmp_path / "pip-style-parent")
+    _isolate_discovery_inputs(config, monkeypatch, tmp_path)
+    nested_webui_repo = pip_root / "webui-repo"
+    nested_webui_repo.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "REPO_ROOT", nested_webui_repo)
+
+    assert config._discover_agent_dir() == pip_root
+
+
 def test_routes_shadow_helper_can_recover_once_agent_dir_resolves(monkeypatch, tmp_path):
     """Once `_AGENT_DIR` resolves, `_ensure_agent_cron_import_path()` drops shadow
     modules and rewires imports to the agent cron package."""
