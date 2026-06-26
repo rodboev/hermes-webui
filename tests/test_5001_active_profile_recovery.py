@@ -37,6 +37,18 @@ function extractFunction(source, name) {
   return source.slice(start, end);
 }
 
+function extractBlock(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  if (start < 0) {
+    throw new Error(`missing block start: ${startMarker}`);
+  }
+  const end = source.indexOf(endMarker, start);
+  if (end < 0) {
+    throw new Error(`missing block end: ${endMarker}`);
+  }
+  return source.slice(start, end);
+}
+
 class FakeStorage {
   constructor(seed = {}) {
     this.store = { ...seed };
@@ -80,6 +92,23 @@ function makeAttempt(attempt) {
 }
 
 eval(extractFunction(bootSrc, '_resolveActiveProfileBootstrapState'));
+const bootActiveProfileBlock = extractBlock(
+  bootSrc,
+  'const activeProfileState = await _resolveActiveProfileBootstrapState();',
+  '\n  // Update profile chip label immediately'
+);
+const runBootActiveProfileBlock = new Function(
+  'resolveState',
+  'S',
+  'applyBotName',
+  `
+const _resolveActiveProfileBootstrapState = resolveState;
+return (async () => {
+  ${bootActiveProfileBlock}
+  return {continued: true};
+})();
+`
+);
 
 (async () => {
   const attempts = Array.isArray(scenario.attempts) ? scenario.attempts : [];
@@ -89,10 +118,6 @@ eval(extractFunction(bootSrc, '_resolveActiveProfileBootstrapState'));
   const redirectUrls = [];
   const results = [];
   const storageHistory = [];
-
-  let applyBotNameCalls = 0;
-  let bootProfile = null;
-  let bootIsDefault = null;
 
   for (const attempt of attempts) {
     const state = await _resolveActiveProfileBootstrapState({
@@ -104,16 +129,31 @@ eval(extractFunction(bootSrc, '_resolveActiveProfileBootstrapState'));
         redirectUrls.push(`login?next=${encodeURIComponent(nextUrl)}`);
       },
     });
-    const bootContinues = state.status !== 'recovery-redirect';
+    const bootState = {};
+    let applyBotNameCalls = 0;
+    const bootResult = await runBootActiveProfileBlock(
+      async () => state,
+      bootState,
+      () => {
+        applyBotNameCalls += 1;
+      }
+    );
 
-    results.push({...state, bootContinues});
+    results.push({
+      ...state,
+      bootContinues: !!(bootResult && bootResult.continued === true),
+      bootProfile: Object.prototype.hasOwnProperty.call(bootState, 'activeProfile')
+        ? bootState.activeProfile
+        : null,
+      bootIsDefault: Object.prototype.hasOwnProperty.call(
+        bootState,
+        'activeProfileIsDefault'
+      )
+        ? bootState.activeProfileIsDefault
+        : null,
+      applyBotNameCalls,
+    });
     storageHistory.push(storage.snapshot());
-
-    if (scenario.simulateBootContinue && bootContinues) {
-      bootProfile = state.profile;
-      bootIsDefault = state.isDefault;
-      applyBotNameCalls += 1;
-    }
   }
 
   console.log(
@@ -123,9 +163,6 @@ eval(extractFunction(bootSrc, '_resolveActiveProfileBootstrapState'));
       storageHistory,
       storageSnapshot: storage.snapshot(),
       loadCalls: attempts.length,
-      bootProfile,
-      bootIsDefault,
-      applyBotNameCalls,
     })
   );
 })();
@@ -166,10 +203,16 @@ def test_active_profile_boot_recovery_is_one_shot_and_bounded(driver_path):
 
     assert payload["attempts"][0]["status"] == "recovery-redirect"
     assert payload["attempts"][0]["bootContinues"] is False
+    assert payload["attempts"][0]["bootProfile"] is None
+    assert payload["attempts"][0]["bootIsDefault"] is None
+    assert payload["attempts"][0]["applyBotNameCalls"] == 0
     assert payload["attempts"][1]["status"] == "fallback"
     assert payload["attempts"][1]["bootContinues"] is True
     assert payload["attempts"][1]["profile"] == "default"
     assert payload["attempts"][1]["isDefault"] is True
+    assert payload["attempts"][1]["bootProfile"] == "default"
+    assert payload["attempts"][1]["bootIsDefault"] is True
+    assert payload["attempts"][1]["applyBotNameCalls"] == 1
     assert payload["loadCalls"] == 2
     assert payload["redirects"] == ["login?next=%2F"]
     assert payload["storageHistory"][0].get("test-5001-active-profile-recovery") == "1"
@@ -191,10 +234,16 @@ def test_active_profile_boot_recovery_handles_loader_thrown_401s(driver_path):
 
     assert payload["attempts"][0]["status"] == "recovery-redirect"
     assert payload["attempts"][0]["bootContinues"] is False
+    assert payload["attempts"][0]["bootProfile"] is None
+    assert payload["attempts"][0]["bootIsDefault"] is None
+    assert payload["attempts"][0]["applyBotNameCalls"] == 0
     assert payload["attempts"][1]["status"] == "fallback"
     assert payload["attempts"][1]["bootContinues"] is True
     assert payload["attempts"][1]["profile"] == "default"
     assert payload["attempts"][1]["isDefault"] is True
+    assert payload["attempts"][1]["bootProfile"] == "default"
+    assert payload["attempts"][1]["bootIsDefault"] is True
+    assert payload["attempts"][1]["applyBotNameCalls"] == 1
     assert payload["redirects"] == ["login?next=%2F"]
     assert payload["storageHistory"][0].get("test-5001-active-profile-recovery-throws") == "1"
     assert payload["storageHistory"][1].get("test-5001-active-profile-recovery-throws") is None
@@ -216,6 +265,9 @@ def test_active_profile_boot_non_401_errors_fallback_without_redirect(driver_pat
     assert payload["attempts"][0]["bootContinues"] is True
     assert payload["attempts"][0]["profile"] == "default"
     assert payload["attempts"][0]["isDefault"] is True
+    assert payload["attempts"][0]["bootProfile"] == "default"
+    assert payload["attempts"][0]["bootIsDefault"] is True
+    assert payload["attempts"][0]["applyBotNameCalls"] == 1
     assert payload["redirects"] == []
     assert payload["storageHistory"][0].get("test-5001-active-profile-recovery-non-401") is None
     assert payload["storageSnapshot"] == {}
@@ -236,6 +288,9 @@ def test_active_profile_boot_invalid_payload_falls_back_without_redirect(driver_
     assert payload["attempts"][0]["bootContinues"] is True
     assert payload["attempts"][0]["profile"] == "default"
     assert payload["attempts"][0]["isDefault"] is True
+    assert payload["attempts"][0]["bootProfile"] == "default"
+    assert payload["attempts"][0]["bootIsDefault"] is True
+    assert payload["attempts"][0]["applyBotNameCalls"] == 1
     assert payload["redirects"] == []
     assert payload["storageHistory"][0].get("test-5001-active-profile-recovery-invalid-payload") is None
     assert payload["storageSnapshot"] == {}
@@ -260,9 +315,9 @@ def test_active_profile_success_path_applies_boot_state_and_continues(driver_pat
     assert payload["attempts"][0]["bootContinues"] is True
     assert payload["attempts"][0]["profile"] == "team-profile"
     assert payload["attempts"][0]["isDefault"] is False
-    assert payload["bootProfile"] == "team-profile"
-    assert payload["bootIsDefault"] is False
-    assert payload["applyBotNameCalls"] == 1
+    assert payload["attempts"][0]["bootProfile"] == "team-profile"
+    assert payload["attempts"][0]["bootIsDefault"] is False
+    assert payload["attempts"][0]["applyBotNameCalls"] == 1
     assert payload["redirects"] == []
     assert payload["storageHistory"][0].get("test-5001-active-profile-recovery-success") is None
     assert payload["storageSnapshot"] == {}
