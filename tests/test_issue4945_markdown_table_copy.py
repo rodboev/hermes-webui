@@ -463,10 +463,10 @@ console.log(JSON.stringify({ prevented: event.preventDefaultCalled, data: clipbo
 def test_table_copy_without_clipboard_data_leaves_native_copy_unmodified():
     out = _run_js(
         """
-const {table, body} = buildEnhancedTableFixture(true);
+const {table, header, body} = buildEnhancedTableFixture(true);
 
 const range = {
-  startContainer: body.cells[0].children[0],
+  startContainer: header.cells[0].children[0].children[0],
   startOffset: 0,
   endContainer: body.cells[1].children[0],
   endOffset: body.cells[1].children[0].textContent.length,
