@@ -154,3 +154,20 @@ def test_no_saved_session_branch_restores_panel_pref_before_bind_attempt():
     bind_idx = segment.find(bind_call)
     assert bind_idx >= 0, "no-saved-session path must attempt to bind after pref restore"
     assert pref_idx < bind_idx, "panel preference restoration must happen before bind attempt"
+
+
+def test_ephemeral_blank_session_branch_restores_panel_pref_before_bind_attempt():
+    src = BOOT_JS.read_text(encoding="utf-8")
+    marker = "if(S.session && (S.session.message_count||0) === 0 && !_restoredInFlight && !_restoredHasDraft){"
+    marker_idx = src.find(marker)
+    assert marker_idx >= 0, "ephemeral blank-session path not found"
+    return_idx = src.find("return;", marker_idx)
+    assert return_idx > marker_idx, "ephemeral blank-session path must still return early"
+    segment = src[marker_idx:return_idx]
+    eph_pref = "if(_ephPanelPref&&!_isCompactWorkspaceViewport()) _workspacePanelMode='browse';"
+    pref_idx = segment.find(eph_pref)
+    assert pref_idx >= 0, "ephemeral blank-session path must restore panel preference"
+    bind_call = "await _maybeBindFreshDefaultWorkspaceSession();"
+    bind_idx = segment.find(bind_call)
+    assert bind_idx >= 0, "ephemeral blank-session path must attempt to bind before returning"
+    assert pref_idx < bind_idx, "ephemeral panel preference restoration must happen before bind attempt"

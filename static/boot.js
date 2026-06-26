@@ -2412,6 +2412,7 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
         const _ephPanelPref=localStorage.getItem('hermes-webui-workspace-panel-pref')==='open'
           || localStorage.getItem('hermes-webui-workspace-panel')==='open';
         if(_ephPanelPref&&!_isCompactWorkspaceViewport()) _workspacePanelMode='browse';
+        await _maybeBindFreshDefaultWorkspaceSession();
         syncTopbar();syncWorkspacePanelState();
         $('emptyState').style.display='';
         await renderSessionList();if(typeof startGatewaySSE==='function')startGatewaySSE();
