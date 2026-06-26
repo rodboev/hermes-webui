@@ -7467,15 +7467,17 @@ async function _autosavePreferencesSettings(payload){
         ((modelState.model_provider||null)!==(_settingsHermesDefaultModelProviderOnOpen||null))
       )
     );
-    const maxTokensField=$('settingsMaxTokens');
-    const maxTokensDirty=!!(
-      maxTokensField&&
-      String(maxTokensField.value||'')!==String(maxTokensField.dataset.initialValue||'')
-    );
-    if(!pwDirty&&!modelDirty&&!maxTokensDirty){
-      _settingsDirty=false;
-      const bar=$('settingsUnsavedBar');
-      if(bar) bar.style.display='none';
+    if(!pwDirty&&!modelDirty){
+      const maxTokensField=$('settingsMaxTokens');
+      const maxTokensDirty=!!(
+        maxTokensField&&
+        String(maxTokensField.value||'')!==String(maxTokensField.dataset.initialValue||'')
+      );
+      if(!maxTokensDirty){
+        _settingsDirty=false;
+        const bar=$('settingsUnsavedBar');
+        if(bar) bar.style.display='none';
+      }
     }
   }catch(e){
     console.warn('[settings] preferences autosave failed', e);

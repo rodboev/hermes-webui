@@ -386,7 +386,9 @@ def test_settings_panel_wires_max_tokens_for_dirty_state_and_manual_save():
     autosave_block = _function_block(panels_js, "_autosavePreferencesSettings")
     assert "const maxTokensField=$('settingsMaxTokens');" in autosave_block
     assert "String(maxTokensField.value||'')!==String(maxTokensField.dataset.initialValue||'')" in autosave_block.replace(" ", "")
-    assert "if(!pwDirty&&!modelDirty&&!maxTokensDirty)" in autosave_block.replace(" ", "")
+    compact_autosave = autosave_block.replace(" ", "")
+    assert "if(!pwDirty&&!modelDirty)" in compact_autosave
+    assert "if(!maxTokensDirty)" in compact_autosave
 
     prefs_block = _function_block(panels_js, "_preferencesPayloadFromUi")
     assert "settingsMaxTokens" not in prefs_block
