@@ -31,10 +31,11 @@ def _make_pip_style_agent_root(root: Path) -> Path:
     return root
 
 
-def _make_cron_only_root(root: Path) -> Path:
-    """Create a cron-only lookalike that must stay rejected."""
+def _make_plugins_lookalike_root(root: Path) -> Path:
+    """Create a cron/jobs.py + plugins/ lookalike that must stay rejected."""
     cron_jobs = root / "cron" / "jobs.py"
-    cron_jobs.parent.mkdir(parents=True)
+    (root / "plugins").mkdir(parents=True, exist_ok=True)
+    cron_jobs.parent.mkdir(parents=True, exist_ok=True)
     cron_jobs.write_text("", encoding="utf-8")
     return root
 
@@ -70,14 +71,27 @@ def test_discover_agent_dir_accepts_pip_style_root_without_run_agent(monkeypatch
 def test_discover_agent_dir_rejects_cron_only_directory_without_agent_markers(
     monkeypatch, tmp_path
 ):
-    """A cron-only directory without a core marker must remain rejected."""
+    """A pip-style lookalike without an agent-specific marker must stay rejected."""
     import api.config as config
 
-    cron_only = _make_cron_only_root(tmp_path / "cron-only")
+    cron_only = _make_plugins_lookalike_root(tmp_path / "cron-only")
     _isolate_discovery_inputs(config, monkeypatch, tmp_path)
     monkeypatch.setenv("HERMES_WEBUI_AGENT_DIR", str(cron_only))
 
     assert config._discover_agent_dir() is None
+
+
+def test_discover_agent_dir_prefers_later_run_agent_root_over_earlier_pip_lookalike(
+    monkeypatch, tmp_path
+):
+    """A real source checkout must beat an earlier pip-style lookalike candidate."""
+    import api.config as config
+
+    _make_plugins_lookalike_root(tmp_path / "hermes-home" / "hermes-agent")
+    later_legacy = _make_legacy_agent_root(tmp_path / "hermes-agent")
+    _isolate_discovery_inputs(config, monkeypatch, tmp_path)
+
+    assert config._discover_agent_dir() == later_legacy
 
 
 def test_explicit_legacy_agent_dir_override_still_beats_pip_style_fallback(
