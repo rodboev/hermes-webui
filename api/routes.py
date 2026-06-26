@@ -11913,9 +11913,6 @@ def handle_post(handler, parsed) -> bool:
         max_tokens_provided = "max_tokens" in body
         max_tokens_status = None
         max_tokens_value = body.pop("max_tokens", None) if max_tokens_provided else None
-        if max_tokens_provided:
-            from api.config import set_max_tokens
-            max_tokens_status = set_max_tokens(max_tokens_value)
 
         # First password creation decides who owns a previously passwordless
         # WebUI. While auth is disabled, the generic /api/settings route is also
@@ -11966,6 +11963,10 @@ def handle_post(handler, parsed) -> bool:
             body["auth_disabled_acknowledged"] = bool(ack)
         elif is_auth_enabled() or requested_password:
             body["auth_disabled_acknowledged"] = False
+
+        if max_tokens_provided:
+            from api.config import set_max_tokens
+            max_tokens_status = set_max_tokens(max_tokens_value)
 
         saved = save_settings(body)
         saved.pop("password_hash", None)  # never expose hash to client

@@ -118,6 +118,30 @@ def test_set_max_tokens_writes_root_override_and_clears_back_to_agent_fallback()
     assert data["metadata"]["keep"] is True
 
 
+def test_set_max_tokens_invalid_non_empty_input_is_a_true_no_op(monkeypatch):
+    import api.config as config
+
+    _write_config(
+        "agent:\n"
+        "  max_tokens: 512\n"
+        "  name: fallback\n"
+    )
+
+    monkeypatch.setattr(
+        config,
+        "_save_yaml_config_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected config save")),
+    )
+    monkeypatch.setattr(
+        config,
+        "reload_config",
+        lambda: (_ for _ in ()).throw(AssertionError("unexpected reload")),
+    )
+
+    assert config.set_max_tokens("abc") == 512
+    assert _read_config()["agent"]["max_tokens"] == 512
+
+
 def test_get_settings_exposes_max_tokens_from_the_active_profile(monkeypatch):
     import api.config as config
     from api.routes import handle_get
@@ -163,6 +187,44 @@ def test_post_settings_bridges_max_tokens_without_polluting_settings_payload(mon
     assert captured["body"] == {"send_key": "enter"}
     assert payload["send_key"] == "enter"
     assert payload["max_tokens"] == 777
+
+
+def test_post_settings_does_not_write_max_tokens_before_auth_failures(monkeypatch):
+    import api.auth as auth
+    from api.routes import handle_post
+
+    saw_set_max_tokens = {"called": False}
+
+    monkeypatch.setattr(auth, "is_auth_enabled", lambda: True)
+    monkeypatch.setattr(auth, "get_password_hash", lambda: "hash")
+    monkeypatch.setattr(auth, "parse_cookie", lambda handler: "")
+    monkeypatch.setattr(auth, "verify_session", lambda cookie: False)
+    monkeypatch.setattr(auth, "verify_password", lambda current_password: False)
+    monkeypatch.setattr(
+        "api.config.set_max_tokens",
+        lambda value: saw_set_max_tokens.__setitem__("called", True),
+    )
+    monkeypatch.setattr(
+        "api.routes.save_settings",
+        lambda body: (_ for _ in ()).throw(AssertionError("save_settings should not run")),
+    )
+
+    handler = _FakeHandler(
+        json.dumps(
+            {
+                "send_key": "enter",
+                "max_tokens": 123,
+                "_clear_password": True,
+                "_current_password": "wrong",
+            }
+        ).encode("utf-8")
+    )
+    handle_post(handler, urlparse("http://example.com/api/settings"))
+    payload = handler.json_body()
+
+    assert handler.status == 403
+    assert payload["error"] == "Current password is incorrect."
+    assert saw_set_max_tokens["called"] is False
 
 
 def test_settings_panel_wires_max_tokens_for_dirty_state_and_manual_save():

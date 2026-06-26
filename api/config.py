@@ -3534,6 +3534,8 @@ def set_max_tokens(max_tokens) -> int | None:
             parsed_max_tokens = None
         if not isinstance(parsed_max_tokens, int) or parsed_max_tokens <= 0 or isinstance(max_tokens, bool):
             parsed_max_tokens = None
+        if parsed_max_tokens is None:
+            return get_max_tokens_status()
 
     config_path = _get_config_path()
     with _cfg_lock:
