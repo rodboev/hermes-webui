@@ -49,7 +49,6 @@ _CLI_SESSIONS_CACHE_INFLIGHT: "dict[tuple, threading.Event]" = {}
 _CLI_SESSIONS_CACHE_INVALIDATION_VERSION = 0
 _CLI_SESSIONS_CACHE = {}
 # Event waits that keep stale rows visible while a rebuild is in flight.
-_CLI_SESSIONS_CACHE_WAIT_SECONDS = 0.25
 _CLI_SESSIONS_CACHE_STALE_WAIT_SECONDS = 0.10
 
 # Per-file parse cache for Claude Code JSONL transcripts (#4718/#4662 phase 4).
@@ -4109,7 +4108,6 @@ def clear_cli_sessions_cache() -> None:
         global _CLI_SESSIONS_CACHE_INVALIDATION_VERSION
         _CLI_SESSIONS_CACHE_INVALIDATION_VERSION += 1
         _CLI_SESSIONS_CACHE.clear()
-        _CLI_SESSIONS_CACHE_INFLIGHT.clear()
     # The sidecar-metadata projection cache is stat-keyed (self-invalidating on
     # any file change), but clear it alongside the CLI cache so an explicit
     # reset — a mutating sidebar action or test isolation — starts fully cold.
@@ -4143,6 +4141,61 @@ def _cli_sessions_cache_done(cache_key: tuple, event: threading.Event | None) ->
             _CLI_SESSIONS_CACHE_INFLIGHT.pop(cache_key, None)
     if event is not None:
         event.set()
+
+
+def _reload_cli_sessions_after_inflight(
+    *,
+    cache_key: tuple,
+    ttl: float,
+    stale_sessions,
+    stale_stamp,
+    load_sessions,
+    all_profiles: bool,
+    db_path: str,
+) -> list:
+    event, is_owner = _cli_sessions_cache_claim_rebuild(cache_key)
+    if not is_owner:
+        try:
+            event.wait()
+        except Exception:
+            pass
+        with _CLI_SESSIONS_CACHE_LOCK:
+            cached_entry = _CLI_SESSIONS_CACHE.get(cache_key)
+            if cached_entry is not None:
+                if len(cached_entry) == 3:
+                    cached_expires_at, cached_stamp, cached_sessions = cached_entry
+                else:
+                    cached_expires_at, cached_sessions = cached_entry
+                    cached_stamp = _CLI_SESSIONS_CACHE_INVALIDATION_VERSION
+                if (
+                    cached_stamp == _CLI_SESSIONS_CACHE_INVALIDATION_VERSION
+                    and cached_expires_at > time.monotonic()
+                ):
+                    return _copy_cli_sessions(cached_sessions)
+        if stale_sessions is not None and stale_stamp == _cli_sessions_cache_invalidation_stamp():
+            return stale_sessions
+        return []
+    try:
+        try:
+            sessions = load_sessions()
+        except Exception as _cli_err:
+            logger.warning(
+                "get_cli_sessions() failed â€” check state.db schema or path (%s): %s",
+                "all profiles" if all_profiles else db_path, _cli_err,
+            )
+            if stale_sessions is not None and stale_stamp == _cli_sessions_cache_invalidation_stamp():
+                return stale_sessions
+            return []
+        if _cli_sessions_cache_invalidation_stamp() == fallback_invalidation_stamp:
+            with _CLI_SESSIONS_CACHE_LOCK:
+                _CLI_SESSIONS_CACHE[cache_key] = (
+                    time.monotonic() + ttl,
+                    _CLI_SESSIONS_CACHE_INVALIDATION_VERSION,
+                    _copy_cli_sessions(sessions),
+                )
+        return _copy_cli_sessions(sessions)
+    finally:
+        _cli_sessions_cache_done(cache_key, event)
 
 
 def _cli_sessions_cache_ttl_seconds() -> float:
@@ -4772,12 +4825,11 @@ def get_cli_sessions(source_filter=None, *, all_profiles: bool = False) -> list:
             finally:
                 _cli_sessions_cache_done(cache_key, event)
         try:
-            timeout = (
+            event.wait(
                 _CLI_SESSIONS_CACHE_STALE_WAIT_SECONDS
                 if stale_sessions is not None
-                else _CLI_SESSIONS_CACHE_WAIT_SECONDS
+                else None
             )
-            event.wait(timeout)
         except Exception:
             pass
         with _CLI_SESSIONS_CACHE_LOCK:
@@ -4795,6 +4847,15 @@ def get_cli_sessions(source_filter=None, *, all_profiles: bool = False) -> list:
                     return _copy_cli_sessions(cached_sessions)
         if stale_sessions is not None and stale_stamp == _cli_sessions_cache_invalidation_stamp():
             return stale_sessions
+        return _reload_cli_sessions_after_inflight(
+            cache_key=cache_key,
+            ttl=ttl,
+            stale_sessions=stale_sessions,
+            stale_stamp=stale_stamp,
+            load_sessions=_load_sessions,
+            all_profiles=all_profiles,
+            db_path=db_path,
+        )
         fallback_invalidation_stamp = _cli_sessions_cache_invalidation_stamp()
         try:
             sessions = _load_sessions()
