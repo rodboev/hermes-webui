@@ -47,6 +47,7 @@ async function api(path,opts={}){
           // and for subpath mounts like /hermes/, where /login escapes to the site root.
           if(res.status===401){
             if(redirect401) window.location.href='login?next='+encodeURIComponent(window.location.pathname+window.location.search);
+            // Callers can opt out of navigation and handle the unauthenticated state themselves.
             return;
           }
           const text=await res.text();
