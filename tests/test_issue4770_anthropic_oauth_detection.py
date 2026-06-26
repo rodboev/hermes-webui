@@ -1,6 +1,7 @@
 """Regression tests for #4770 - Anthropic OAuth env vars in fallback detection."""
 
 import builtins
+import sys
 
 import api.config as config
 
@@ -8,6 +9,8 @@ import api.config as config
 def _force_env_fallback(monkeypatch):
     """Force get_available_models() into the env-based fallback branch."""
     real_import = builtins.__import__
+    monkeypatch.delitem(sys.modules, "hermes_cli.auth", raising=False)
+    monkeypatch.delitem(sys.modules, "hermes_cli", raising=False)
 
     def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name in ("hermes_cli.models", "hermes_cli.auth"):
