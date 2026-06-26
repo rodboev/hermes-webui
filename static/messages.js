@@ -539,6 +539,64 @@ function _findMarkdownTableCell(node){
   return null;
 }
 
+function _markdownTableNodeChildren(node){
+  if(!node) return [];
+  if(node.childNodes&&typeof node.childNodes.length==='number') return Array.from(node.childNodes);
+  if(node.children&&typeof node.children.length==='number') return Array.from(node.children);
+  return [];
+}
+
+function _markdownTableNodeBoundaryLength(node){
+  if(!node) return 0;
+  if(node.nodeType===3) return String(node.textContent||'').length;
+  return _markdownTableNodeChildren(node).length;
+}
+
+function _markdownTableBoundaryWithinCell(container, offset, cell, edge){
+  if(!container||!cell||typeof offset!=='number') return false;
+  const atStart=edge==='start';
+  let current=container;
+  let currentOffset=offset;
+  while(current){
+    const boundaryLength=_markdownTableNodeBoundaryLength(current);
+    if(atStart){
+      if(currentOffset!==0) return false;
+    }else if(currentOffset!==boundaryLength){
+      return false;
+    }
+    if(current===cell) return true;
+    const parent=current.parentElement||current.parentNode;
+    if(!parent) return false;
+    const siblings=_markdownTableNodeChildren(parent);
+    const index=siblings.indexOf(current);
+    if(index===-1) return false;
+    currentOffset=atStart?index:index+1;
+    current=parent;
+  }
+  return false;
+}
+
+function _markdownTableEdgeCell(table, edge){
+  const rows=Array.from(table&&table.rows||[]);
+  if(!rows.length) return null;
+  const row=edge==='start'?rows[0]:rows[rows.length-1];
+  const cells=Array.from(row&&row.cells||[]);
+  if(!cells.length) return null;
+  return edge==='start'?cells[0]:cells[cells.length-1];
+}
+
+function _isFullEnhancedMarkdownTableSelection(range, table){
+  if(!range||!table) return false;
+  const firstCell=_markdownTableEdgeCell(table,'start');
+  const lastCell=_markdownTableEdgeCell(table,'end');
+  if(!firstCell||!lastCell) return false;
+  const startCell=_findMarkdownTableCell(range.startContainer);
+  const endCell=_findMarkdownTableCell(range.endContainer);
+  if(startCell!==firstCell||endCell!==lastCell) return false;
+  return _markdownTableBoundaryWithinCell(range.startContainer, range.startOffset, firstCell, 'start')
+    && _markdownTableBoundaryWithinCell(range.endContainer, range.endOffset, lastCell, 'end');
+}
+
 function _findEnhancedMarkdownTableFromRange(range){
   if(!range) return null;
   const found=_findEnhancedMarkdownTable(range.startContainer)
@@ -569,6 +627,7 @@ function _handleMarkdownTableCopy(event){
   if(startCell&&endCell&&startCell===endCell) return;
   const table=_findEnhancedMarkdownTableFromRange(range);
   if(!table||!table.matches||!table.matches('table[data-markdown-table-enhanced]')) return;
+  if(!_isFullEnhancedMarkdownTableSelection(range, table)) return;
   const payload=_markdownTableCopyPayloadForTable(table);
   if(!payload) return;
   const clipboardData=event.clipboardData||event.originalEvent&&event.originalEvent.clipboardData;
