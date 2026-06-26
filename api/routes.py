@@ -11971,10 +11971,9 @@ def handle_post(handler, parsed) -> bool:
 
         from api.config import get_max_tokens_status, set_max_tokens
 
+        saved = save_settings(body)
         if max_tokens_provided:
             max_tokens_status = set_max_tokens(max_tokens_value)
-
-        saved = save_settings(body)
         saved.pop("password_hash", None)  # never expose hash to client
         saved.update(max_tokens_status if max_tokens_provided else get_max_tokens_status())
 

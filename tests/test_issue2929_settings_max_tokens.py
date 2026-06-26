@@ -363,6 +363,32 @@ def test_post_settings_does_not_write_max_tokens_before_auth_failures(monkeypatc
     assert saw_set_max_tokens["called"] is False
 
 
+def test_post_settings_does_not_write_max_tokens_when_save_settings_fails(monkeypatch):
+    import api.auth as auth
+    from api.routes import handle_post
+
+    saw_set_max_tokens = {"called": False}
+
+    monkeypatch.setattr(auth, "is_auth_enabled", lambda: False)
+    monkeypatch.setattr(auth, "get_password_hash", lambda: None)
+    monkeypatch.setattr(auth, "parse_cookie", lambda handler: "")
+    monkeypatch.setattr(auth, "verify_session", lambda cookie: False)
+    monkeypatch.setattr(
+        "api.routes.save_settings",
+        lambda body: (_ for _ in ()).throw(RuntimeError("save_settings failed")),
+    )
+    monkeypatch.setattr(
+        "api.config.set_max_tokens",
+        lambda value: saw_set_max_tokens.__setitem__("called", True),
+    )
+
+    handler = _FakeHandler(json.dumps({"send_key": "enter", "max_tokens": 123}).encode("utf-8"))
+    with pytest.raises(RuntimeError, match="save_settings failed"):
+        handle_post(handler, urlparse("http://example.com/api/settings"))
+
+    assert saw_set_max_tokens["called"] is False
+
+
 def test_settings_panel_wires_max_tokens_for_dirty_state_and_manual_save():
     import pathlib
 
@@ -398,7 +424,8 @@ def test_settings_panel_wires_max_tokens_for_dirty_state_and_manual_save():
     assert "settingsMaxTokens" in save_block
     assert "body.max_tokens" in save_block
     assert "initialMaxTokens" in save_block
-    assert "maxTokensRaw===''||maxTokensRaw!==initialMaxTokens" in save_block.replace(" ", "")
+    assert "constinitialMaxTokens=String(maxTokensField.dataset.initialValue||'').trim();" in save_block.replace(" ", "")
+    assert "if(maxTokensRaw!==initialMaxTokens)" in save_block.replace(" ", "")
     assert "body.max_tokens=maxTokensRaw===''?null:maxTokensRaw" in save_block.replace(" ", "")
 
     assert 'id="settingsMaxTokens"' in index_html

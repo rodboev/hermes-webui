@@ -10159,8 +10159,8 @@ async function saveSettings(andClose){
   const maxTokensField=$('settingsMaxTokens');
   if(maxTokensField){
     const maxTokensRaw=String(maxTokensField.value||'').trim();
-    const initialMaxTokens=String(maxTokensField.dataset.initialValue||'');
-    if(maxTokensRaw===''||maxTokensRaw!==initialMaxTokens){
+    const initialMaxTokens=String(maxTokensField.dataset.initialValue||'').trim();
+    if(maxTokensRaw!==initialMaxTokens){
       body.max_tokens=maxTokensRaw===''?null:maxTokensRaw;
     }
   }
