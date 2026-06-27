@@ -888,9 +888,14 @@ const submitValue = (($('onboardingModelInput') || {}).value || ($('onboardingMo
 
 customInput.value = '   ';
 customInput.dispatch('input');
+const afterWhitespaceClear = {
+  model: ONBOARDING.form.model,
+  selectedIndex: selectEl.selectedIndex,
+  selectValue: selectEl.value,
+};
 const whitespaceSubmitValue = (($('onboardingModelInput') || {}).value || ($('onboardingModelSelect') || {}).value || ONBOARDING.form.model || '').trim();
 
-console.log(JSON.stringify({ initial, hiddenStates, afterCustom, afterSelect, submitValue, whitespaceSubmitValue, whitespaceCustomValue: customInput.value }));
+console.log(JSON.stringify({ initial, hiddenStates, afterCustom, afterSelect, submitValue, afterWhitespaceClear, whitespaceSubmitValue, whitespaceCustomValue: customInput.value }));
 """
 
     with tempfile.NamedTemporaryFile("w", suffix=".cjs", encoding="utf-8", dir=REPO, delete=False) as handle:
@@ -933,5 +938,10 @@ console.log(JSON.stringify({ initial, hiddenStates, afterCustom, afterSelect, su
         "selectValue": "openrouter/beta",
     }
     assert out["submitValue"] == "vendor/final-model"
+    assert out["afterWhitespaceClear"] == {
+        "model": "openrouter/beta",
+        "selectedIndex": 2,
+        "selectValue": "openrouter/beta",
+    }
     assert out["whitespaceSubmitValue"] == "openrouter/beta"
     assert out["whitespaceCustomValue"] == ""

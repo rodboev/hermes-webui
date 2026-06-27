@@ -370,8 +370,6 @@ function _renderOnboardingBody(){
         onModelChange:(value)=>{ ONBOARDING.form.model=(value||'').trim(); },
       });
     }
-    const modelSel=$('onboardingModelSelect');
-    if(modelSel && ONBOARDING.form.model) modelSel.value=ONBOARDING.form.model;
     return;
   }
 

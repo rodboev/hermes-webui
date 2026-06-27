@@ -2538,8 +2538,10 @@ function _mountSearchableModelSelect(opts={}){
     customInput.value='';
     if(lastListedValue){
       selectEl.value=lastListedValue;
+      onModelChange(lastListedValue);
+      return;
     }
-    applyCustomSelection();
+    onModelChange('');
   });
   customInput.addEventListener('keydown', (event)=>{
     if(event.key!=='Enter') return;
