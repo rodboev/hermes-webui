@@ -6855,6 +6855,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
     # If another thread has already started the cold path, we will wait for
     # its result rather than running the cold path concurrently.
     should_wait = _cache_build_in_progress
+    force_refresh_started_at = time.monotonic() if force_refresh else None
 
     # Check config mtime OUTSIDE the lock so this cheap check doesn't serialize
     # concurrent requests.  Must come before any config reads in the cold path.
@@ -6899,9 +6900,11 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
 
         # Serve from memory cache if fresh
         now = time.monotonic()
-        if not force_refresh:
-            cached = _get_fresh_memory_models_cache(now)
-            if cached is not None:
+        cached = _get_fresh_memory_models_cache(now)
+        if cached is not None:
+            if not force_refresh:
+                return cached
+            if force_refresh_started_at is not None and _available_models_cache_ts >= force_refresh_started_at:
                 return cached
 
         # Cold path: disk cache hit — use it (fast, no lock contention)
