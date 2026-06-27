@@ -394,6 +394,11 @@ def test_mirrored_run_id_survives_active_stream_loss():
         )
         assert captured["body"] == {"choice": "once", "approval_id": approval_id}
         handler.send_response.assert_called_with(200)
+        assert entry.event.is_set(), "mirrored gateway approval was not resolved"
+        assert entry.result == "once"
+        with ta._lock:
+            assert sid not in ta._pending, "mirrored pending card was not cleared"
+            assert sid not in ta._gateway_queues, "parked gateway entry was not drained"
         assert handler.wfile.getvalue()
         assert json.loads(handler.wfile.getvalue().decode("utf-8")) == {
             "ok": True,

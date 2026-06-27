@@ -18584,6 +18584,10 @@ def _handle_approval_respond(handler, body):
                 HttpRunnerClient(base_url=_base, api_key=_key).respond_approval(_run_id, approval_id, choice)
             except (RunnerClientError, ValueError) as exc:
                 return j(handler, {"ok": False, "choice": choice, "relayed": True, "error": str(exc)}, status=502)
+            # The outbound relay only resumes the remote run; the local mirror
+            # still needs the same cleanup path so the parked entry, mirrored
+            # card, and agent signal all settle here too.
+            _resolve_approval_legacy(sid, approval_id, choice)
             return j(handler, {"ok": True, "choice": choice, "relayed": True})
         # Only a still-mirrored gateway approval with a missing run should 409;
         # stale or empty gateway clicks fall through to local resolution.
