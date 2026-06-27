@@ -6897,7 +6897,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 # rebuild instead of giving up after 60s and duplicating it.
                 wait_timeout = None
             _cache_build_cv.wait_for(
-                lambda: not _cache_build_in_progress and _available_models_cache is not None,
+                lambda: not _cache_build_in_progress,
                 timeout=wait_timeout
             )
             cached = _get_fresh_memory_models_cache(time.monotonic())
