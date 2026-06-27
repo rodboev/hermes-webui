@@ -288,6 +288,54 @@ def test_force_refresh_sync_followers_retry_after_failed_active_rebuild(tmp_path
     assert cfg._cache_build_in_progress is False
 
 
+def test_force_refresh_bounded_followers_wait_only_remaining_budget(tmp_path, monkeypatch):
+    import api.config as cfg
+    import threading
+
+    _reset_models_memory_cache(monkeypatch)
+    stale_catalog = _catalog("stale-model")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    cache_path = tmp_path / "models_cache.profile.json"
+    cache_path.write_text("{}", encoding="utf-8")
+    old = time.time() - 600.0
+    os.utime(cache_path, (old, old))
+    fingerprint = {"profile": "demo"}
+    timeout_waits = []
+    original_wait_for = threading.Condition.wait_for
+
+    monkeypatch.setattr(cfg, "_LIVE_REBUILD_BUDGET_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(cfg, "_get_config_path", lambda: config_path)
+    monkeypatch.setattr(cfg, "_cfg_path", config_path, raising=False)
+    monkeypatch.setattr(cfg, "_cfg_mtime", config_path.stat().st_mtime, raising=False)
+    monkeypatch.setattr(cfg, "_get_models_cache_path", lambda: cache_path)
+    monkeypatch.setattr(cfg, "_load_models_cache_from_disk", lambda: None)
+    monkeypatch.setattr(cfg, "_load_stale_models_cache_from_disk", lambda: stale_catalog)
+    monkeypatch.setattr(cfg, "_models_cache_source_fingerprint", lambda: fingerprint)
+    monkeypatch.setattr(cfg, "_save_models_cache_to_disk", lambda _cache: None)
+
+    def _wait_for(self, predicate, timeout=None):
+        if self is not cfg._cache_build_cv:
+            return original_wait_for(self, predicate, timeout)
+        timeout_waits.append(timeout)
+        time.sleep(min(timeout or 0.0, 0.01))
+        return False
+
+    monkeypatch.setattr(cfg, "_cache_build_in_progress", True, raising=False)
+    monkeypatch.setattr(threading.Condition, "wait_for", _wait_for)
+
+    started_at = time.monotonic()
+    result = cfg.get_available_models(force_refresh=True)
+    elapsed = time.monotonic() - started_at
+
+    assert result == stale_catalog
+    assert len(timeout_waits) == 1
+    assert timeout_waits[0] is not None
+    assert 0.0 <= timeout_waits[0] <= 0.05
+    assert 60.0 not in timeout_waits
+    assert elapsed < 0.1
+
+
 def test_session_visit_overlapping_stale_calls_do_not_duplicate_over_budget_rebuild(tmp_path, monkeypatch):
     import api.config as cfg
     import threading

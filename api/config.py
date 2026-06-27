@@ -6891,18 +6891,38 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         # of re-entering the cold path (avoids duplicate 10s zai load_pool calls).
         if should_wait:
             wait_timeout = 60.0
-            if force_refresh and _LIVE_REBUILD_BUDGET_SECONDS <= 0:
-                # The legacy synchronous path is explicitly unbounded. A forced
-                # refresh follower should keep coalescing behind that live
-                # rebuild instead of giving up after 60s and duplicating it.
-                wait_timeout = None
+            if force_refresh and force_refresh_started_at is not None:
+                if _LIVE_REBUILD_BUDGET_SECONDS <= 0:
+                    # The legacy synchronous path is explicitly unbounded. A
+                    # forced refresh follower should keep coalescing behind
+                    # that live rebuild instead of giving up after 60s and
+                    # duplicating it.
+                    wait_timeout = None
+                else:
+                    wait_timeout = max(
+                        0.0,
+                        _LIVE_REBUILD_BUDGET_SECONDS - (time.monotonic() - force_refresh_started_at),
+                    )
             _cache_build_cv.wait_for(
                 lambda: not _cache_build_in_progress,
                 timeout=wait_timeout
             )
             cached = _get_fresh_memory_models_cache(time.monotonic())
-            if cached is not None:
+            if (
+                cached is not None
+                and (
+                    not force_refresh
+                    or (
+                        force_refresh_started_at is not None
+                        and _available_models_live_rebuild_ts >= force_refresh_started_at
+                    )
+                )
+            ):
                 return cached
+            if force_refresh and _LIVE_REBUILD_BUDGET_SECONDS > 0 and _cache_build_in_progress:
+                if stale_disk_groups is not None:
+                    return copy.deepcopy(stale_disk_groups)
+                return copy.deepcopy(_static_models_catalog_without_live_probes())
 
         # Reload config if changed
         if _cfg_changed:
