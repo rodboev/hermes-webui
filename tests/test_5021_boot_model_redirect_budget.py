@@ -43,6 +43,14 @@ function extractFunction(source, name) {
   return source.slice(start, end);
 }
 
+function extractSingleLineFunction(source, marker) {
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing function marker: ${marker}`);
+  const end = source.indexOf("\n", start);
+  if (end < 0) throw new Error(`missing newline after function marker: ${marker}`);
+  return source.slice(start, end);
+}
+
 class FakeStorage {
   constructor(seed = {}) {
     this.store = { ...seed };
@@ -216,6 +224,15 @@ const resolveBlock = extractBlock(
   '  async function _resolveActiveProfileBootstrapState({',
   '  // Fetch active profile'
 );
+const bootRedirectCallbackBlock = extractBlock(
+  bootSrc,
+  '  const _redirectBootModelDropdownIfUnauth=(res)=>{',
+  '  const _hydrateModelDropdown=({'
+);
+const redirectIfUnauthLine = extractSingleLineFunction(
+  uiSrc,
+  'function _redirectIfUnauth(res){'
+);
 const uiBlock = extractFunction(uiSrc, 'populateModelDropdown');
 
 eval(bootBlock.replace(
@@ -223,18 +240,15 @@ eval(bootBlock.replace(
   '  globalThis._bootActiveProfileUnauthRedirectBudget=(()=>{'
 ));
 eval(resolveBlock);
+eval(bootRedirectCallbackBlock.replace(
+  '  const _redirectBootModelDropdownIfUnauth=(res)=>{',
+  '  globalThis._redirectBootModelDropdownIfUnauth=(res)=>{'
+));
+eval(redirectIfUnauthLine.replace(
+  'function _redirectIfUnauth(res){',
+  'globalThis._redirectIfUnauth=function _redirectIfUnauth(res){'
+));
 eval(uiBlock);
-
-function _redirectBootModelDropdownIfUnauth(res) {
-  if (!res || res.status !== 401) return false;
-  if (globalThis._bootActiveProfileUnauthRedirectBudget.isConsumed()) return true;
-  if (globalThis._bootActiveProfileUnauthRedirectBudget.spendOnRedirect(globalThis.sessionStorage)) {
-    globalThis._bootActiveProfileUnauthRedirectBudget.redirectToLogin(
-      globalThis.window.location.pathname + globalThis.window.location.search
-    );
-  }
-  return true;
-}
 
 async function runBootAttempt(attempt, redirects, storage, fetchQueue, jsonCalls) {
   const select = buildSelect();
@@ -442,5 +456,6 @@ def test_post_boot_model_refresh_keeps_normal_401_redirect(driver_path):
         },
     )
 
+    assert payload["redirects"] == ["login?next=%2Fsession%2Fabc%3Fworkspace%3Dtest"]
     assert payload["jsonCalls"] == 0
     assert "window._ensureModelDropdownReady=_startModelDropdown;" in BOOT_JS.read_text(encoding="utf-8")
