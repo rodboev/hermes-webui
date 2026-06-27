@@ -329,12 +329,14 @@ def test_load_session_schedules_async_session_visit_model_refresh_after_metadata
 
     assign_idx = body.index("S.session=data.session")
     promise_idx = body.index("const modelRefreshPromise=Promise.resolve().then(")
+    boot_guard_idx = body.index("if(!S._bootReady&&typeof window!=='undefined'&&typeof window._startBootModelDropdown==='function'){")
+    boot_refresh_idx = body.index("return window._startBootModelDropdown();")
     ready_idx = body.index("window._modelDropdownReady=modelRefreshPromise")
     refresh_idx = body.index("populateModelDropdown({freshness:'session_visit'})")
     stale_guard_idx = body.index("_loadingSessionId!==modelRefreshSid")
 
-    assert assign_idx < promise_idx < refresh_idx < ready_idx
-    assert promise_idx < stale_guard_idx < refresh_idx
+    assert assign_idx < promise_idx < boot_guard_idx < boot_refresh_idx < refresh_idx < ready_idx
+    assert promise_idx < stale_guard_idx < boot_guard_idx
 
 
 def test_boot_model_dropdown_reuses_inflight_session_visit_refresh():
@@ -342,6 +344,6 @@ def test_boot_model_dropdown_reuses_inflight_session_visit_refresh():
 
     ready_idx = body.index("const ready=window._modelDropdownReady;")
     reuse_idx = body.index("if(ready&&typeof ready.then==='function') return ready;")
-    hydrate_idx = body.index("const next=_hydrateBootModelDropdown();")
+    hydrate_idx = body.index("const next=_hydrateModelDropdown({redirectIfUnauth:_redirectBootModelDropdownIfUnauth});")
 
     assert ready_idx < reuse_idx < hydrate_idx

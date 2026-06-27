@@ -2417,6 +2417,7 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
     return next;
   };
   window._modelDropdownReady=null;
+  window._startBootModelDropdown=_startBootModelDropdown;
   window._ensureModelDropdownReady=_startModelDropdown;
   setTimeout(()=>{
     try{Promise.resolve(_startBootModelDropdown()).catch(()=>{});}catch(_){}

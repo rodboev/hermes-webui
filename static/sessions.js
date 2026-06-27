@@ -1296,6 +1296,9 @@ async function loadSession(sid){
     const modelRefreshSid=sid;
     const modelRefreshPromise=Promise.resolve().then(()=>{
       if(_loadingSessionId!==modelRefreshSid) return;
+      if(!S._bootReady&&typeof window!=='undefined'&&typeof window._startBootModelDropdown==='function'){
+        return window._startBootModelDropdown();
+      }
       return populateModelDropdown({freshness:'session_visit'});
     }).catch(()=>{});
     if(typeof window!=='undefined') window._modelDropdownReady=modelRefreshPromise;
