@@ -106,13 +106,17 @@ def test_no_subprocess_in_moa_code_paths():
 
 
 def test_moa_config_is_per_turn_not_persisted():
-    """moa_config passes through run_conversation as a one-shot kwarg;
-    the session model/provider are never overridden, so turn N+1 uses
-    the session's normal model automatically."""
+    """moa_config stays per-turn, but the server re-resolves it instead of
+    trusting a client-echoed dict."""
     streaming_path = Path(__file__).resolve().parent.parent / "api" / "streaming.py"
     source = streaming_path.read_text(encoding="utf-8")
     assert re.search(r"run_conversation\([\s\S]*?moa_config=moa_config", source), \
         "run_conversation must receive moa_config as a per-turn kwarg"
+    routes_path = Path(__file__).resolve().parent.parent / "api" / "routes.py"
+    routes_source = routes_path.read_text(encoding="utf-8")
+    assert re.search(r"if body\.get\(\"moa_config\"\):[\s\S]*?moa_config = resolve_moa_config\(\)", routes_source), \
+        "chat-start must re-resolve MoA config server-side instead of trusting the browser payload"
     js_path = Path(__file__).resolve().parent.parent / "static" / "messages.js"
     js_source = js_path.read_text(encoding="utf-8")
+    assert "moa_config:_pendingMoaConfig?true:undefined" in js_source
     assert "_pendingMoaConfig=null" in js_source

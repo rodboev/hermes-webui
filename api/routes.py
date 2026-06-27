@@ -17016,7 +17016,14 @@ def _handle_chat_start(handler, body, diag=None):
         )
         _pp_provider, _pp_default = _read_profile_model_config(s, requested_provider)
         explicit_model_pick = bool(body.get("explicit_model_pick"))
-        moa_config = body.get("moa_config") or None
+        moa_config = None
+        if body.get("moa_config"):
+            from api.commands import resolve_moa_config
+
+            try:
+                moa_config = resolve_moa_config()
+            except RuntimeError as e:
+                return bad(handler, str(e), 503)
         diag.stage("resolve_model_provider") if diag else None
         model, model_provider, normalized_model = _resolve_compatible_session_model_state(
             requested_model,

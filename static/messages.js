@@ -1403,10 +1403,10 @@ async function send(){
           renderMessages();$('msg').value='';autoResize();hideCmdDropdown();return;
         }
         try{
-          const _moaCfg=await api('/api/commands/moa/resolve');
+          await api('/api/commands/moa/resolve');
           _slashDisplayTextOverride=text;
           text=_moaArgs;
-          _pendingMoaConfig=_moaCfg;
+          _pendingMoaConfig=true;
         }catch(_e){
           S.messages.push({role:'user',content:text,_ts:Date.now()/1000});
           S.messages.push({role:'assistant',content:'MoA unavailable: '+(_e&&_e.message||_e),_ts:Date.now()/1000});
@@ -1599,7 +1599,7 @@ async function send(){
       profile:S.activeProfile||S.session.profile||'default',
       explicit_model_pick:_explicitPick||undefined,
       attachments:uploaded.length?uploaded:undefined,
-      moa_config:_pendingMoaConfig||undefined
+      moa_config:_pendingMoaConfig?true:undefined
     })});
     _pendingMoaConfig=null;
     postStartData = startData;

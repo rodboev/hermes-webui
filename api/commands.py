@@ -388,8 +388,8 @@ def _run_credits_command() -> str:
 def resolve_moa_config() -> dict:
     try:
         from hermes_cli.moa_config import moa_usage, normalize_moa_config
-    except ImportError:
-        raise RuntimeError("MoA runtime unavailable (hermes-agent not installed or too old)")
+    except ImportError as exc:
+        raise RuntimeError("MoA runtime unavailable (hermes-agent not installed or too old)") from exc
     try:
         from hermes_cli.config import load_config
         cfg = load_config()
