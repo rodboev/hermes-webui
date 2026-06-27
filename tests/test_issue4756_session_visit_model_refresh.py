@@ -33,6 +33,7 @@ def _reset_models_memory_cache(monkeypatch):
 
     monkeypatch.setattr(cfg, "_available_models_cache", None, raising=False)
     monkeypatch.setattr(cfg, "_available_models_cache_ts", 0.0, raising=False)
+    monkeypatch.setattr(cfg, "_available_models_live_rebuild_ts", 0.0, raising=False)
     monkeypatch.setattr(cfg, "_available_models_cache_source_fingerprint", None, raising=False)
     monkeypatch.setattr(cfg, "_cache_build_in_progress", False, raising=False)
 
@@ -235,6 +236,74 @@ def test_session_visit_overlapping_stale_calls_do_not_duplicate_over_budget_rebu
     time.sleep(0.1)
     assert cfg._available_models_cache == rebuilt_catalog
     assert cfg._cache_build_in_progress is False
+
+
+def test_session_visit_force_refresh_ignores_plain_disk_publish_started_after_refresh(tmp_path, monkeypatch):
+    import api.config as cfg
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    _reset_models_memory_cache(monkeypatch)
+    stale_catalog = _catalog("stale-model")
+    rebuilt_catalog = _catalog("rebuilt-model")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    cache_path = tmp_path / "models_cache.profile.json"
+    cache_path.write_text("{}", encoding="utf-8")
+    old = time.time() - 600.0
+    os.utime(cache_path, (old, old))
+    fingerprint = {"profile": "demo"}
+    stale_load_counts = {}
+    stale_load_lock = threading.Lock()
+    force_refresh_waiting = threading.Event()
+    plain_publish_done = threading.Event()
+    rebuild_count = 0
+    rebuild_lock = threading.Lock()
+
+    monkeypatch.setattr(cfg, "_SESSION_VISIT_MODELS_FRESHNESS_SECONDS", 300.0, raising=False)
+    monkeypatch.setattr(cfg, "_LIVE_REBUILD_BUDGET_SECONDS", 0.0, raising=False)
+    monkeypatch.setattr(cfg, "_get_config_path", lambda: config_path)
+    monkeypatch.setattr(cfg, "_cfg_path", config_path, raising=False)
+    monkeypatch.setattr(cfg, "_cfg_mtime", config_path.stat().st_mtime, raising=False)
+    monkeypatch.setattr(cfg, "_get_models_cache_path", lambda: cache_path)
+    monkeypatch.setattr(cfg, "_load_models_cache_from_disk", lambda: stale_catalog)
+    monkeypatch.setattr(cfg, "_models_cache_source_fingerprint", lambda: fingerprint)
+    monkeypatch.setattr(cfg, "_save_models_cache_to_disk", lambda _cache: None)
+
+    def _load_stale_models_cache_from_disk():
+        ident = threading.get_ident()
+        with stale_load_lock:
+            count = stale_load_counts.get(ident, 0) + 1
+            stale_load_counts[ident] = count
+        if count == 2:
+            force_refresh_waiting.set()
+            assert plain_publish_done.wait(timeout=5)
+        return stale_catalog
+
+    def _invoke_models_rebuild(_builder):
+        nonlocal rebuild_count
+        with rebuild_lock:
+            rebuild_count += 1
+        return rebuilt_catalog
+
+    def _plain_disk_hit():
+        result = cfg.get_available_models()
+        plain_publish_done.set()
+        return result
+
+    monkeypatch.setattr(cfg, "_load_stale_models_cache_from_disk", _load_stale_models_cache_from_disk)
+    monkeypatch.setattr(cfg, "_invoke_models_rebuild", _invoke_models_rebuild)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        refresh_future = executor.submit(cfg.get_available_models_for_session_visit)
+        assert force_refresh_waiting.wait(timeout=5)
+        plain_result = executor.submit(_plain_disk_hit).result(timeout=10)
+        refresh_result = refresh_future.result(timeout=10)
+
+    assert plain_result == stale_catalog
+    assert refresh_result == rebuilt_catalog
+    assert rebuild_count == 1
+    assert cfg._available_models_cache == rebuilt_catalog
 
 
 def test_session_visit_fresh_disk_hit_does_not_overwrite_newer_memory_cache(tmp_path, monkeypatch):
