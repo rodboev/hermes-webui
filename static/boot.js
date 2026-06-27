@@ -2355,6 +2355,7 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
   // after the saved session is visible.
   const _redirectBootModelDropdownIfUnauth=(res)=>{
     if(!res||res.status!==401) return false;
+    window._modelDropdownReady=null;
     if(_bootActiveProfileUnauthRedirectBudget.isConsumed()) return true;
     if(_bootActiveProfileUnauthRedirectBudget.spendOnRedirect(sessionStorage)){
       _bootActiveProfileUnauthRedirectBudget.redirectToLogin(window.location.pathname+window.location.search);

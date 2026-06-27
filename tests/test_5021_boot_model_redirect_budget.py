@@ -25,6 +25,7 @@ const fs = require('fs');
 const bootSrc = fs.readFileSync(process.argv[2], 'utf8');
 const uiSrc = fs.readFileSync(process.argv[3], 'utf8');
 const scenario = JSON.parse(process.argv[4] || '{}');
+globalThis.window = globalThis;
 
 function extractBlock(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -224,10 +225,10 @@ const resolveBlock = extractBlock(
   '  async function _resolveActiveProfileBootstrapState({',
   '  // Fetch active profile'
 );
-const bootRedirectCallbackBlock = extractBlock(
+const bootDropdownBlock = extractBlock(
   bootSrc,
   '  const _redirectBootModelDropdownIfUnauth=(res)=>{',
-  '  const _hydrateModelDropdown=({'
+  '  setTimeout(()=>{'
 );
 const redirectIfUnauthLine = extractSingleLineFunction(
   uiSrc,
@@ -240,10 +241,24 @@ eval(bootBlock.replace(
   '  globalThis._bootActiveProfileUnauthRedirectBudget=(()=>{'
 ));
 eval(resolveBlock);
-eval(bootRedirectCallbackBlock.replace(
+eval(bootDropdownBlock
+  .replace(
   '  const _redirectBootModelDropdownIfUnauth=(res)=>{',
   '  globalThis._redirectBootModelDropdownIfUnauth=(res)=>{'
-));
+  )
+  .replace(
+    '  const _hydrateModelDropdown=({redirectIfUnauth=null}={})=>populateModelDropdown({',
+    '  globalThis._hydrateModelDropdown=({redirectIfUnauth=null}={})=>populateModelDropdown({'
+  )
+  .replace(
+    '  const _startModelDropdown=()=>{',
+    '  globalThis._startModelDropdown=()=>{'
+  )
+  .replace(
+    '  const _startBootModelDropdown=()=>{',
+    '  globalThis._startBootModelDropdown=()=>{'
+  )
+);
 eval(redirectIfUnauthLine.replace(
   'function _redirectIfUnauth(res){',
   'globalThis._redirectIfUnauth=function _redirectIfUnauth(res){'
@@ -366,7 +381,8 @@ async function runBootAttempt(attempt, redirects, storage, fetchQueue, jsonCalls
       ok: false,
       json: async () => ({active_provider: 'openai', default_model: 'gpt-4o', configured_model_badges: {}, groups: []}),
     });
-    await populateModelDropdown({preferProfileDefaultOnFreshBoot: true});
+    await globalThis._startBootModelDropdown();
+    await globalThis._ensureModelDropdownReady();
   } else {
     throw new Error(`unknown scenario: ${scenario.kind}`);
   }
@@ -458,4 +474,5 @@ def test_post_boot_model_refresh_keeps_normal_401_redirect(driver_path):
 
     assert payload["redirects"] == ["login?next=%2Fsession%2Fabc%3Fworkspace%3Dtest"]
     assert payload["jsonCalls"] == 0
+    assert payload["storage"] == {}
     assert "window._ensureModelDropdownReady=_startModelDropdown;" in BOOT_JS.read_text(encoding="utf-8")
