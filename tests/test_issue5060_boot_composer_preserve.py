@@ -18,24 +18,140 @@ def _function_block(source: str, marker: str) -> str:
     start = source.index(marker)
     signature_end = source.index(") {", start)
     brace = source.index("{", signature_end)
-    depth = 1
-    idx = brace + 1
-    while depth:
-        char = source[idx]
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-        idx += 1
+    idx = _find_matching_brace(source, brace)
     return source[start:idx]
 
 
 def _draft_restore_block() -> str:
-    start_marker = "// Restore server-persisted composer draft (synced across clients + survives refresh)."
-    end_marker = "// Clear the in-flight session marker now that this load has completed (#1060)."
+    start_marker = "const _draft = S.session && S.session.composer_draft;"
+    end_marker = "if (_loadingSessionId === sid) _loadingSessionId = null;"
     start = SESSIONS_JS.index(start_marker)
     end = SESSIONS_JS.index(end_marker, start)
-    return SESSIONS_JS[start:end]
+    return SESSIONS_JS[start:end + len(end_marker)]
+
+
+def _find_matching_brace(source: str, brace: int) -> int:
+    depth = 1
+    idx = brace + 1
+    mode = "code"
+    template_expr_depth = 0
+    while depth:
+        char = source[idx]
+        nxt = source[idx + 1] if idx + 1 < len(source) else ""
+        if mode == "code":
+            if char == "/" and nxt == "/":
+                mode = "line_comment"
+                idx += 2
+                continue
+            if char == "/" and nxt == "*":
+                mode = "block_comment"
+                idx += 2
+                continue
+            if char == "'":
+                mode = "single"
+                idx += 1
+                continue
+            if char == '"':
+                mode = "double"
+                idx += 1
+                continue
+            if char == "`":
+                mode = "template"
+                idx += 1
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            idx += 1
+            continue
+        if mode == "line_comment":
+            idx += 1
+            if char == "\n":
+                mode = "code"
+            continue
+        if mode == "block_comment":
+            idx += 2 if char == "*" and nxt == "/" else 1
+            if char == "*" and nxt == "/":
+                mode = "code"
+            continue
+        if mode in {"single", "double"}:
+            if char == "\\":
+                idx += 2
+                continue
+            idx += 1
+            if (mode == "single" and char == "'") or (mode == "double" and char == '"'):
+                mode = "code"
+            continue
+        if mode == "template":
+            if char == "\\":
+                idx += 2
+                continue
+            if char == "`":
+                mode = "code"
+                idx += 1
+                continue
+            if char == "$" and nxt == "{":
+                mode = "template_expr"
+                template_expr_depth = 1
+                idx += 2
+                continue
+            idx += 1
+            continue
+        if mode == "template_expr":
+            if char == "/" and nxt == "/":
+                mode = "template_line_comment"
+                idx += 2
+                continue
+            if char == "/" and nxt == "*":
+                mode = "template_block_comment"
+                idx += 2
+                continue
+            if char == "'":
+                mode = "template_single"
+                idx += 1
+                continue
+            if char == '"':
+                mode = "template_double"
+                idx += 1
+                continue
+            if char == "`":
+                mode = "template_nested"
+                idx += 1
+                continue
+            if char == "{":
+                template_expr_depth += 1
+                idx += 1
+                continue
+            if char == "}":
+                template_expr_depth -= 1
+                idx += 1
+                if template_expr_depth == 0:
+                    mode = "template"
+                continue
+            idx += 1
+            continue
+        if mode == "template_line_comment":
+            idx += 1
+            if char == "\n":
+                mode = "template_expr"
+            continue
+        if mode == "template_block_comment":
+            idx += 2 if char == "*" and nxt == "/" else 1
+            if char == "*" and nxt == "/":
+                mode = "template_expr"
+            continue
+        if char == "\\":
+            idx += 2
+            continue
+        idx += 1
+        if mode == "template_single" and char == "'":
+            mode = "template_expr"
+        elif mode == "template_double" and char == '"':
+            mode = "template_expr"
+        elif mode == "template_nested" and char == "`":
+            mode = "template_expr"
+    return idx
 
 
 def _run_case(*, initial_text: str, draft: dict | None, opts: dict | None, current_sid, force_reload: bool) -> dict:
