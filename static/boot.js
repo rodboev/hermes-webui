@@ -2265,7 +2265,9 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
     let consumed=false;
     const readAttempted=(storage=sessionStorage)=>{
       try{
-        return storage&&storage.getItem?storage.getItem(markerKey)==='1':false;
+        const attempted=storage&&storage.getItem?storage.getItem(markerKey)==='1':false;
+        if(attempted) consumed=true;
+        return attempted;
       }catch(_){
         return false;
       }

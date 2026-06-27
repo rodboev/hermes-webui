@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BOOT_JS = ROOT / "static" / "boot.js"
 UI_JS = ROOT / "static" / "ui.js"
 NODE = shutil.which("node")
+BOOT_MARKER_KEY = "hermes-webui-active-profile-bootstrap-401"
 
 
 pytestmark = pytest.mark.skipif(
@@ -436,18 +437,31 @@ def test_boot_model_401_does_not_reopen_redirect_after_active_profile_fallback(d
 
 
 def test_boot_model_401_consumes_budget_when_profile_load_succeeds(driver_path):
-    payload = _run(
+    first = _run(
         driver_path,
         {
             "kind": "boot-model-only",
         },
     )
 
-    assert payload["redirects"] == ["login?next=%2Fsession%2Fabc%3Fworkspace%3Dtest"]
-    assert payload["results"][0]["state"]["status"] == "resolved"
-    assert payload["jsonCalls"] == 0
-    assert payload["activeProvider"] is None
-    assert payload["defaultModel"] is None
+    second = _run(
+        driver_path,
+        {
+            "kind": "boot-model-only",
+            "initialStorage": first["storage"],
+        },
+    )
+
+    assert first["redirects"] == ["login?next=%2Fsession%2Fabc%3Fworkspace%3Dtest"]
+    assert first["results"][0]["state"]["status"] == "resolved"
+    assert first["storage"] == {BOOT_MARKER_KEY: "1"}
+    assert first["jsonCalls"] == 0
+    assert first["activeProvider"] is None
+    assert first["defaultModel"] is None
+    assert second["redirects"] == []
+    assert second["results"][0]["state"]["status"] == "resolved"
+    assert second["storage"] == {}
+    assert second["jsonCalls"] == 0
 
 
 def test_boot_model_success_still_stores_active_provider(driver_path):
