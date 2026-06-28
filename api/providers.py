@@ -78,6 +78,7 @@ def _custom_provider_name_matches(provider_id: str, name: object) -> bool:
 
 _OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 _PROVIDER_QUOTA_TIMEOUT_SECONDS = 3.0
+_LLM_PROXY_QUOTA_STATS_MAX_RESPONSE_BYTES = 512 * 1024
 _ACCOUNT_USAGE_SUBPROCESS_TIMEOUT_SECONDS = 35.0
 _ACCOUNT_USAGE_CACHE_TTL_SECONDS = 45.0
 _ACCOUNT_USAGE_CACHE_MAX_ENTRIES = 64
@@ -2238,7 +2239,13 @@ def get_llm_proxy_quota_stats(
 
     try:
         with urllib.request.urlopen(request, timeout=_PROVIDER_QUOTA_TIMEOUT_SECONDS) as resp:
-            raw = resp.read()
+            raw = resp.read(_LLM_PROXY_QUOTA_STATS_MAX_RESPONSE_BYTES + 1)
+        if isinstance(raw, (bytes, bytearray)) and len(raw) > _LLM_PROXY_QUOTA_STATS_MAX_RESPONSE_BYTES:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_response",
+                "llm-proxy quota stats returned an invalid response.",
+                status=502,
+            )
         payload = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
         return 200, payload
     except urllib.error.HTTPError as exc:

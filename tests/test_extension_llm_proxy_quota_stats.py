@@ -23,8 +23,10 @@ class _FakeResponse:
     def __exit__(self, *exc):
         return False
 
-    def read(self):
-        return self._payload
+    def read(self, size: int = -1):
+        if size is None or size < 0:
+            return self._payload
+        return self._payload[:size]
 
 
 def _set_llm_proxy_config(monkeypatch, *, base_url: str | None, api_key: str | None):
@@ -205,6 +207,28 @@ def test_get_quota_stats_rejects_unrelated_single_custom_provider(monkeypatch):
         "message": "llm-proxy quota stats is not configured.",
     }
     assert called is False
+
+
+def test_get_quota_stats_rejects_oversized_upstream_response(monkeypatch):
+    _set_llm_proxy_config(
+        monkeypatch,
+        base_url="https://llm-proxy.example.test",
+        api_key="server-held-secret",
+    )
+
+    def fake_urlopen(req, timeout):
+        return _FakeResponse(b"x" * (providers._LLM_PROXY_QUOTA_STATS_MAX_RESPONSE_BYTES + 1))
+
+    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+
+    status, payload = providers.get_llm_proxy_quota_stats(query={"provider": ["anthropic"]})
+
+    assert status == 502
+    assert payload == {
+        "ok": False,
+        "error": "llm_proxy_quota_stats_invalid_response",
+        "message": "llm-proxy quota stats returned an invalid response.",
+    }
 
 
 def test_post_quota_stats_rejects_invalid_action_or_scope_without_network(monkeypatch):

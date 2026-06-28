@@ -10162,7 +10162,7 @@ def handle_get(handler, parsed) -> bool:
         return j(handler, get_extension_status())
 
     if parsed.path == "/api/extensions/proxies/llm-proxy/quota-stats":
-        query = parse_qs(parsed.query, keep_blank_values=True)
+        query = parse_qs(parsed.query)
         from api.profiles import profile_env_for_active_request_readonly
 
         with profile_env_for_active_request_readonly("/api/extensions/proxies/llm-proxy/quota-stats", logger_override=logger):
