@@ -30,3 +30,4 @@ def test_busy_input_label_changes_without_key_or_id_drift():
     assert 'id="settingsBusyInputMode"' in INDEX_HTML
     assert 'data-i18n="settings_label_busy_input_mode">While agent is running' in INDEX_HTML
     assert "settings_label_busy_input_mode: 'While agent is running'" in I18N_JS
+    assert I18N_JS.count("settings_label_busy_input_mode: 'While agent is running'") == 1
