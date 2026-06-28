@@ -1032,16 +1032,17 @@ async function openFile(path, opts={}){
   const bustCache=!!(opts&&opts.bustCache);
   const forceRichMarkdown=!!(opts&&opts.forceRichMarkdown);
   const cacheBust=bustCache?`&_=${Date.now()}`:'';
-  _previewServerEditable = null;
-  _previewSaveRoute = '/api/file/save';
-  _previewOfficeFormat = '';
-  _previewPreviewKind = '';
 
   // Binary/download-only formats: trigger browser download, don't preview
   if(DOWNLOAD_EXTS.has(ext)){
     downloadFile(path);
     return;
   }
+
+  _previewServerEditable = null;
+  _previewSaveRoute = '/api/file/save';
+  _previewOfficeFormat = '';
+  _previewPreviewKind = '';
 
   $('previewPathText').textContent=path;
   $('previewArea').classList.add('visible');

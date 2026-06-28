@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -13,6 +16,7 @@ import api.routes as routes
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_JS = (ROOT / "static" / "workspace.js").read_text(encoding="utf-8")
+NODE = shutil.which("node")
 
 
 def _simple_docx_bytes(*paragraphs: str) -> bytes:
@@ -31,6 +35,31 @@ def _simple_xlsx_bytes() -> bytes:
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _extract_workspace_block(start_marker: str, end_marker: str) -> str:
+    start = WORKSPACE_JS.find(start_marker)
+    assert start >= 0, f"{start_marker!r} not found in static/workspace.js"
+    end = WORKSPACE_JS.find(end_marker, start)
+    assert end >= 0, f"{end_marker!r} not found after {start_marker!r}"
+    return WORKSPACE_JS[start:end]
+
+
+def _extract_workspace_function(name: str) -> str:
+    marker = f"async function {name}("
+    start = WORKSPACE_JS.find(marker)
+    assert start >= 0, f"{name} not found in static/workspace.js"
+    depth = 0
+    body_start = WORKSPACE_JS.find("{", start)
+    for idx in range(body_start, len(WORKSPACE_JS)):
+        char = WORKSPACE_JS[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return WORKSPACE_JS[start:idx + 1]
+    raise AssertionError(f"could not find balanced function body for {name}")
 
 
 def _patch_file_ops(monkeypatch, workspace: Path):
@@ -119,6 +148,31 @@ def test_workspace_js_edit_button_uses_server_editable_flag():
     assert "This Office document is preview-only." in WORKSPACE_JS
     assert "_previewSaveRoute" in WORKSPACE_JS
     assert "_previewSaveRoute = data.preview_kind==='office' ? '/api/file/office-save' : '/api/file/save';" in WORKSPACE_JS
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_openfile_download_only_path_preserves_existing_office_save_route():
+    js = (
+        _extract_workspace_block("const DOWNLOAD_EXTS = new Set([", "function fileExt")
+        + "function fileExt(p){ const i=p.lastIndexOf('.'); return i>=0?p.slice(i).toLowerCase():''; }\n"
+        + _extract_workspace_function("openFile")
+        + "\nconst S = { session: { session_id: 'sid-1' } };\n"
+        + "let _previewServerEditable = true;\n"
+        + "let _previewSaveRoute = '/api/file/office-save';\n"
+        + "let _previewOfficeFormat = 'docx';\n"
+        + "let _previewPreviewKind = 'office';\n"
+        + "let downloaded = null;\n"
+        + "function downloadFile(path){ downloaded = path; }\n"
+        + "(async()=>{ await openFile('legacy.doc'); console.log(JSON.stringify({downloaded,_previewServerEditable,_previewSaveRoute,_previewOfficeFormat,_previewPreviewKind})); })();\n"
+    )
+    result = subprocess.run([NODE, "-e", js], check=True, capture_output=True, text=True, timeout=30)
+    state = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert state["downloaded"] == "legacy.doc"
+    assert state["_previewSaveRoute"] == "/api/file/office-save"
+    assert state["_previewServerEditable"] is True
+    assert state["_previewOfficeFormat"] == "docx"
+    assert state["_previewPreviewKind"] == "office"
 
 
 def test_pdf_preview_path_is_unchanged():
