@@ -1141,7 +1141,7 @@ async function openFile(path, opts={}){
         _previewServerEditable = typeof data.editable === 'boolean' ? data.editable : null;
         _previewPreviewKind = data.preview_kind || '';
         _previewOfficeFormat = data.office_format || '';
-        _previewSaveRoute = data.office_format==='docx' ? '/api/file/office-save' : '/api/file/save';
+        _previewSaveRoute = data.preview_kind==='office' ? '/api/file/office-save' : '/api/file/save';
       }
       renderCodePreviewContent(path, data.content);
   }catch(e){

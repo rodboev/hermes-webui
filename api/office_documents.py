@@ -10,7 +10,6 @@ from pptx import Presentation
 
 CLAIMED_OFFICE_EXTENSIONS = frozenset({".docx", ".xlsx", ".pptx"})
 CLAIMED_OFFICE_FORMATS = frozenset({"docx", "xlsx", "pptx"})
-EDITABLE_OFFICE_EXTENSIONS = frozenset({".docx"})
 OFFICE_PREVIEW_KIND = "office"
 OFFICE_RENDER_MODE = "code"
 
@@ -174,5 +173,4 @@ def save_office_document(path: str | Path, current_bytes: bytes, content: str) -
     saved_preview = preview_office_document(path, saved_bytes)
     if not saved_preview.get("editable"):
         raise ValueError(saved_preview.get("edit_blocked_reason") or "Saved DOCX is not editable")
-    saved_preview["content"] = str(content or "").replace("\r\n", "\n").replace("\r", "\n")
     return saved_preview, saved_bytes
