@@ -1,0 +1,68 @@
+import re
+from pathlib import Path
+
+
+def _boot_src() -> str:
+    return Path("static/boot.js").read_text(encoding="utf-8")
+
+
+def test_start_mic_capture_extracted():
+    src = _boot_src()
+    assert re.search(r"async function _startMicCapture\([^)]*\)\{", src)
+    assert "_activeCaptureMode='speech'" in src
+    assert "_activeCaptureMode=_rawAudioMode?'media-raw':'media-transcribe';" in src
+
+
+def test_toggle_mic_capture_exposed_on_window():
+    src = _boot_src()
+    assert "async function _toggleMicCapture()" in src
+    assert "window._toggleMicCapture=_toggleMicCapture;" in src
+
+
+def test_old_onclick_handler_removed():
+    src = _boot_src()
+    assert "btn.onclick=async()=>{" not in src
+
+
+def test_pointer_hold_wiring_present():
+    src = _boot_src()
+    assert "let _micHoldTimer=null;" in src
+    assert "let _micHoldActive=false;" in src
+    assert "let _micPointerDown=false;" in src
+    assert "const _micHoldThresholdMs=300;" in src
+    assert "btn.addEventListener('pointerdown'" in src
+    assert "btn.addEventListener('pointerup'" in src
+    assert (
+        "btn.addEventListener('pointerleave'" in src
+        or "btn.addEventListener('pointercancel'" in src
+    )
+    assert "_micHoldTimer=setTimeout(async()=>{" in src
+    assert "},_micHoldThresholdMs);" in src
+
+
+def test_hold_release_routes_to_stop_mic():
+    src = _boot_src()
+    assert re.search(
+        r"btn\.addEventListener\('pointerup',async e=>\{.*?_stopMic\(\);.*?\}\);",
+        src,
+        re.DOTALL,
+    )
+    assert re.search(
+        r"btn\.addEventListener\('pointer(cancel|leave)',\(\)=>\{.*?_stopMic\(\);.*?\}\);",
+        src,
+        re.DOTALL,
+    )
+
+
+def test_ctrl_shift_d_routes_through_toggle_helper():
+    src = _boot_src()
+    assert "(e.metaKey||e.ctrlKey)&&e.shiftKey&&!e.altKey&&(e.key==='d'||e.key==='D')" in src
+    assert "typeof window._toggleMicCapture==='function'" in src
+    assert "await window._toggleMicCapture();" in src
+
+
+def test_stop_mic_still_exposed_and_active_capture_mode_retained():
+    src = _boot_src()
+    assert "window._stopMic=_stopMic;" in src
+    assert "_activeCaptureMode" in src
+    assert "_stopMic();" in src
