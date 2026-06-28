@@ -1208,6 +1208,15 @@ def test_provider_quota_route_is_registered():
     assert "get_provider_quota(provider_id, refresh=refresh)" in routes
 
 
+def test_extension_quota_stats_route_is_registered_and_distinct():
+    """The extension bridge must stay fixed and separate from /api/provider/quota."""
+    routes = (ROOT / "api" / "routes.py").read_text(encoding="utf-8")
+    assert 'parsed.path == "/api/extensions/proxies/llm-proxy/quota-stats"' in routes
+    assert 'profile_env_for_active_request_readonly("/api/extensions/proxies/llm-proxy/quota-stats"' in routes
+    assert 'parsed.path == "/api/provider/quota"' in routes
+    assert "get_llm_proxy_quota_stats" in routes
+
+
 def test_provider_quota_card_is_rendered_in_providers_panel():
     """The Providers panel should show active provider quota/status before cards."""
     panels = (ROOT / "static" / "panels.js").read_text(encoding="utf-8")

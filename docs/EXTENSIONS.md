@@ -206,6 +206,18 @@ extension JavaScript talks to that sidecar directly from the browser; Hermes
 WebUI does not proxy those requests and does not create extension-owned backend
 routes.
 
+## Authenticated llm-proxy quota stats bridge
+
+There is one fixed backend exception for extensions that need server-held
+`llm-proxy` credentials to read quota data without exposing bearer auth to
+browser JavaScript.
+
+- `GET /api/extensions/proxies/llm-proxy/quota-stats` forwards only an optional `provider` query parameter.
+- `POST /api/extensions/proxies/llm-proxy/quota-stats` accepts validated `action` and `scope` fields plus optional `provider` and `credential` fields.
+- WebUI resolves the active profile's `llm-proxy` config and supplies the bearer token server-side.
+- The bridge forwards to the fixed upstream `/v1/quota-stats` path only.
+- Generic extension proxying, caller-chosen hosts, and caller-chosen paths stay out of scope.
+
 Loopback sidecar origins are already included in WebUI's enforced CSP
 `connect-src` directive:
 

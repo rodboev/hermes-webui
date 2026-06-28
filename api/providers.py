@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 try:  # POSIX-only; Windows-style environments fall back to process-local locking.
     import fcntl
@@ -80,6 +82,9 @@ _ACCOUNT_USAGE_CACHE_TTL_SECONDS = 45.0
 _ACCOUNT_USAGE_CACHE_MAX_ENTRIES = 64
 _ACCOUNT_USAGE_WORKER_IDLE_SECONDS = 5 * 60
 _ACCOUNT_USAGE_PROVIDERS = frozenset({"openai-codex", "anthropic"})
+_LLM_PROXY_PROVIDER_ID = "llm-proxy"
+_LLM_PROXY_QUOTA_STATS_PATH = "/v1/quota-stats"
+_LLM_PROXY_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 # Upper bound on simultaneous profile-isolated quota probe subprocesses.
 # Each probe runs a Python child for up to 35 s; capping concurrency prevents
@@ -2036,6 +2041,200 @@ def get_provider_quota(provider_id: str | None = None, *, refresh: bool = False)
         "quota": None,
         "message": f"Quota status is not available for {display_name}. {detail}",
     }
+
+
+def _llm_proxy_quota_stats_error(code: str, message: str, *, status: int) -> tuple[int, dict[str, Any]]:
+    return status, {"ok": False, "error": code, "message": message}
+
+
+def _llm_proxy_quota_stats_token(
+    value: Any,
+    field: str,
+    *,
+    required: bool = False,
+    max_len: int = 64,
+) -> tuple[str | None, str | None]:
+    if value is None:
+        return None, f"{field} is required." if required else None
+    text = str(value).strip()
+    if not text:
+        return None, f"{field} is required." if required else None
+    if len(text) > max_len or not _LLM_PROXY_TOKEN_RE.fullmatch(text):
+        return None, "Invalid llm-proxy quota-stats request."
+    return text, None
+
+
+def _llm_proxy_quota_stats_query_value(
+    query: dict[str, list[str]],
+    field: str,
+    *,
+    required: bool = False,
+    max_len: int = 64,
+) -> tuple[str | None, str | None]:
+    values = query.get(field)
+    if values is None:
+        return _llm_proxy_quota_stats_token(None, field, required=required, max_len=max_len)
+    if not isinstance(values, list) or len(values) != 1:
+        return None, "Invalid llm-proxy quota-stats request."
+    return _llm_proxy_quota_stats_token(values[0], field, required=required, max_len=max_len)
+
+
+def _llm_proxy_quota_stats_base_url() -> str | None:
+    cfg = get_config()
+    providers_cfg = cfg.get("providers") or {}
+    provider_cfg: dict[str, Any] = {}
+    if isinstance(providers_cfg, dict):
+        candidate = providers_cfg.get(_LLM_PROXY_PROVIDER_ID, {})
+        if isinstance(candidate, dict):
+            provider_cfg = candidate
+
+    base_url = str(provider_cfg.get("base_url") or "").strip()
+    if not base_url:
+        model_cfg = cfg.get("model", {})
+        if isinstance(model_cfg, dict):
+            model_provider = str(model_cfg.get("provider") or "").strip().lower()
+            if model_provider == _LLM_PROXY_PROVIDER_ID:
+                base_url = str(model_cfg.get("base_url") or "").strip()
+    if not base_url:
+        return None
+
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+
+
+def _llm_proxy_quota_stats_config() -> tuple[str | None, str | None]:
+    return _llm_proxy_quota_stats_base_url(), _get_provider_api_key(_LLM_PROXY_PROVIDER_ID)
+
+
+def get_llm_proxy_quota_stats(
+    *,
+    query: dict[str, list[str]] | None = None,
+    body: dict[str, Any] | None = None,
+) -> tuple[int, Any]:
+    """Fetch the fixed llm-proxy quota-stats bridge target."""
+    if body is None:
+        if query is None:
+            query = {}
+        if not isinstance(query, dict):
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                "Invalid llm-proxy quota-stats request.",
+                status=400,
+            )
+        if set(query) - {"provider"}:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                "Invalid llm-proxy quota-stats request.",
+                status=400,
+            )
+        provider, error = _llm_proxy_quota_stats_query_value(query, "provider", max_len=128)
+        if error:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                error,
+                status=400,
+            )
+        request_body = None
+    else:
+        if not isinstance(body, dict):
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                "Invalid llm-proxy quota-stats request.",
+                status=400,
+            )
+        if set(body) - {"action", "scope", "provider", "credential"}:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                "Invalid llm-proxy quota-stats request.",
+                status=400,
+            )
+        action, error = _llm_proxy_quota_stats_token(body.get("action"), "action", required=True, max_len=64)
+        if error:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                error,
+                status=400,
+            )
+        scope, error = _llm_proxy_quota_stats_token(body.get("scope"), "scope", required=True, max_len=64)
+        if error:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                error,
+                status=400,
+            )
+        provider, error = _llm_proxy_quota_stats_token(body.get("provider"), "provider", max_len=128)
+        if error:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                error,
+                status=400,
+            )
+        credential, error = _llm_proxy_quota_stats_token(body.get("credential"), "credential", max_len=128)
+        if error:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_invalid_request",
+                error,
+                status=400,
+            )
+        request_body = {"action": action, "scope": scope}
+        if provider is not None:
+            request_body["provider"] = provider
+        if credential is not None:
+            request_body["credential"] = credential
+
+    base_url, api_key = _llm_proxy_quota_stats_config()
+    if not base_url or not api_key:
+        return _llm_proxy_quota_stats_error(
+            "llm_proxy_quota_stats_unconfigured",
+            "llm-proxy quota stats is not configured.",
+            status=503,
+        )
+
+    target_url = f"{base_url}{_LLM_PROXY_QUOTA_STATS_PATH}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+    if body is None:
+        if provider is not None:
+            target_url = f"{target_url}?{urlencode({'provider': provider})}"
+        request = urllib.request.Request(target_url, headers=headers)
+    else:
+        headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(
+            target_url,
+            data=json.dumps(request_body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+    try:
+        with urllib.request.urlopen(request, timeout=_PROVIDER_QUOTA_TIMEOUT_SECONDS) as resp:
+            raw = resp.read()
+        payload = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+        return 200, payload
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_upstream_rejected",
+                "llm-proxy quota stats rejected the configured credentials.",
+                status=502,
+            )
+        return _llm_proxy_quota_stats_error(
+            "llm_proxy_quota_stats_unavailable",
+            "llm-proxy quota stats is temporarily unavailable.",
+            status=503,
+        )
+    except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
+        return _llm_proxy_quota_stats_error(
+            "llm_proxy_quota_stats_unavailable",
+            "llm-proxy quota stats is temporarily unavailable.",
+            status=503,
+        )
 
 
 def _provider_is_oauth(provider_id: str) -> bool:

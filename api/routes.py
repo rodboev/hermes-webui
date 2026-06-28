@@ -7479,7 +7479,7 @@ from api.run_journal import (
     stale_interrupted_event,
 )
 from api.todo_state import attach_todo_state
-from api.providers import get_providers, get_provider_quota, get_provider_cost_history, set_provider_key, remove_provider_key
+from api.providers import get_llm_proxy_quota_stats, get_providers, get_provider_quota, get_provider_cost_history, set_provider_key, remove_provider_key
 from api.onboarding import (
     apply_onboarding_setup,
     get_onboarding_status,
@@ -10161,6 +10161,14 @@ def handle_get(handler, parsed) -> bool:
 
         return j(handler, get_extension_status())
 
+    if parsed.path == "/api/extensions/proxies/llm-proxy/quota-stats":
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        from api.profiles import profile_env_for_active_request_readonly
+
+        with profile_env_for_active_request_readonly("/api/extensions/proxies/llm-proxy/quota-stats", logger_override=logger):
+            status, payload = get_llm_proxy_quota_stats(query=query)
+        return j(handler, payload, status=status)
+
     if parsed.path == "/api/extensions/registry":
         from api.extensions import get_extension_registry
 
@@ -11491,6 +11499,13 @@ def handle_post(handler, parsed) -> bool:
         except Exception:
             logger.exception("extension toggle failed")
             return bad(handler, "Failed to update extension state", status=500)
+
+    if parsed.path == "/api/extensions/proxies/llm-proxy/quota-stats":
+        from api.profiles import profile_env_for_active_request_readonly
+
+        with profile_env_for_active_request_readonly("/api/extensions/proxies/llm-proxy/quota-stats", logger_override=logger):
+            status, payload = get_llm_proxy_quota_stats(body=body)
+        return j(handler, payload, status=status)
 
     if parsed.path == "/api/extensions/install":
         from api.extensions import ExtensionInstallError, install_extension

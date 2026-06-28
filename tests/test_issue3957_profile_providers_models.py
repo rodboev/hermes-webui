@@ -383,6 +383,15 @@ def test_providers_and_models_routes_wrap_in_profile_env():
     assert "_get_models_cache_path" in config_src
 
 
+def test_extension_quota_route_uses_profile_env_wrapper():
+    """The fixed llm-proxy bridge also runs inside the active-profile wrapper."""
+    routes_src = Path(profiles.__file__).resolve().parent.joinpath("routes.py").read_text(
+        encoding="utf-8"
+    )
+    needle = 'profile_env_for_active_request_readonly("/api/extensions/proxies/llm-proxy/quota-stats"'
+    assert routes_src.count(needle) == 2
+
+
 def test_models_sync_rebuild_uses_legacy_mirrored_env(monkeypatch, tmp_path):
     """The budget<=0 sync rebuild still mirrors profile env into os.environ."""
     base = tmp_path / ".hermes"
