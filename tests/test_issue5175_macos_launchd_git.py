@@ -18,10 +18,7 @@ def test_run_git_uses_which_result_when_available(tmp_path):
 
 def test_run_git_falls_back_to_usr_bin_git_on_darwin(tmp_path):
     def fake_run(cmd, **kwargs):
-        if cmd[0] == 'git':
-            raise FileNotFoundError
-        if cmd[0] != '/usr/bin/git':
-            raise AssertionError(f'unexpected executable: {cmd[0]!r}')
+        assert cmd[0] == '/usr/bin/git'
         return MagicMock(returncode=0, stdout='v0.51.999\n', stderr='')
 
     with patch.object(updates.shutil, 'which', return_value=None), \
@@ -74,8 +71,7 @@ def test_run_git_returns_not_found_when_usr_bin_git_absent_on_darwin(tmp_path):
 
 def test_detect_webui_version_recovers_via_launchd_fallback(tmp_path):
     def fake_run(cmd, **kwargs):
-        if cmd[0] == 'git':
-            raise FileNotFoundError
+        assert cmd[0] == '/usr/bin/git'
         if cmd[1:] == ['describe', '--tags', '--always']:
             return MagicMock(returncode=0, stdout='v0.51.999\n', stderr='')
         if cmd[1:] == ['diff-index', '--quiet', 'HEAD', '--']:
@@ -96,8 +92,7 @@ def test_check_repo_does_not_report_git_not_found_via_launchd_fallback(tmp_path)
     (tmp_path / '.git').mkdir()
 
     def fake_run(cmd, **kwargs):
-        if cmd[0] == 'git':
-            raise FileNotFoundError
+        assert cmd[0] == '/usr/bin/git'
         git_args = cmd[1:]
         if git_args == ['fetch', 'origin', '--tags', '--force']:
             return MagicMock(returncode=0, stdout='', stderr='')
