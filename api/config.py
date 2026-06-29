@@ -444,8 +444,8 @@ def _apply_config_defaults(config_data: dict) -> None:
 def reload_config_if_stale() -> None:
     """Refresh config.yaml once for concurrent stale read paths."""
     with _cfg_lock:
+        config_path = _get_config_path()
         try:
-            config_path = _get_config_path()
             current_mtime = config_path.stat().st_mtime
         except OSError:
             current_mtime = 0.0
