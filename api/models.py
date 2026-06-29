@@ -5684,7 +5684,12 @@ def _load_cli_sessions_uncached(
     return cli_sessions
 
 
-def get_cli_sessions(source_filter=None, *, all_profiles: bool = False) -> list:
+def get_cli_sessions(
+    source_filter=None,
+    *,
+    all_profiles: bool = False,
+    include_claude_code: bool = True,
+) -> list:
     """Read CLI sessions from the agent's SQLite store and return them as
     dicts in a format the WebUI sidebar can render alongside local sessions.
 
@@ -5727,11 +5732,17 @@ def get_cli_sessions(source_filter=None, *, all_profiles: bool = False) -> list:
                         visible_session_limit=None,
                         cron_project_limit=None,
                         webhook_project_limit=None,
-                        include_claude_code=(idx == 0),
+                        include_claude_code=include_claude_code,
                     )
                 )
             return merged
-        return _load_cli_sessions_uncached(hermes_home, db_path, cli_profile, source_filter=source_filter)
+        return _load_cli_sessions_uncached(
+            hermes_home,
+            db_path,
+            cli_profile,
+            source_filter=source_filter,
+            include_claude_code=include_claude_code,
+        )
 
     if ttl > 0:
         stale_sessions = None
