@@ -863,7 +863,7 @@ class TestAgentUpdateRequiresGatewayRestart:
                 return '', False
             if args[0] == 'stash':
                 return '', True
-            if args[:2] == ['reset', '--hard', 'HEAD']:
+            if args[:3] == ['reset', '--hard', 'HEAD']:
                 return '', True
             if args[0] == 'pull':
                 return 'Updating', True
