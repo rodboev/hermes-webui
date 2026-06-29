@@ -4566,7 +4566,7 @@ def _read_body_bytes(handler) -> bytes:
             handler.close_connection = True
         except Exception:
             pass
-        raise ValueError(f"Invalid Content-Length: {raw_length!r}")
+        raise ValueError(f"Invalid Content-Length: {raw_length!r}") from None
     if length < 0:
         try:
             handler.close_connection = True
@@ -4863,7 +4863,7 @@ def _safe_content_length(handler, max_bytes: int) -> int:
             handler.close_connection = True
         except Exception:
             pass
-        raise ValueError(f"Invalid Content-Length: {raw_length!r}")
+        raise ValueError(f"Invalid Content-Length: {raw_length!r}") from None
     if length < 0:
         try:
             handler.close_connection = True
