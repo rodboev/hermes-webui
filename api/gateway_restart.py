@@ -100,7 +100,7 @@ def restart_active_profile_gateway(
             logger.error("Gateway service restart failed with code %s: %s", proc.returncode, stderr)
             return {
                 "status": "failed",
-                "message": f"Restart failed: {stderr or stdout or f'exit code {proc.returncode}'}",
+                "message": f"Restart failed: {stderr or stdout}",
                 "detail": stdout or stderr,
                 "returncode": proc.returncode,
             }
