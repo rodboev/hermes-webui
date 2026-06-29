@@ -4412,14 +4412,14 @@ def _is_browser_unsafe_request(handler) -> bool:
     return bool(handler.headers.get("Origin") or handler.headers.get("Referer"))
 
 
-def _check_same_origin_browser_request(handler) -> bool:
+def _check_same_origin_browser_request(handler, *, require_provenance: bool = False) -> bool:
     _clear_csrf_failure_reason(handler)
     origin = handler.headers.get("Origin", "")
     referer = handler.headers.get("Referer", "")
     host = handler.headers.get("Host", "")
     sec_fetch_site = handler.headers.get("Sec-Fetch-Site", "").strip().lower()
     if not (origin or referer or sec_fetch_site):
-        return True
+        return not require_provenance or _set_csrf_failure_reason(handler, "origin_mismatch")
     if sec_fetch_site == "cross-site":
         return _set_csrf_failure_reason(handler, "origin_mismatch")
     target = origin or referer
@@ -4672,7 +4672,9 @@ def _handle_extension_sidecar_proxy(
     matched = _match_extension_sidecar_proxy_path(parsed.path)
     if matched is None:
         return False
-    if method == "GET" and not _check_same_origin_browser_request(handler):
+    if method == "GET" and not _check_same_origin_browser_request(
+        handler, require_provenance=True
+    ):
         return j(handler, {"error": _csrf_rejection_error(handler)}, status=403)
     try:
         request_body = _read_body_bytes(handler) if read_request_body else None

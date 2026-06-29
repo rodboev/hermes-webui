@@ -422,6 +422,31 @@ def test_extension_sidecar_proxy_get_rejects_cross_site_browser_request(monkeypa
     }
 
 
+def test_extension_sidecar_proxy_get_requires_browser_provenance(monkeypatch):
+    from api import routes
+
+    monkeypatch.setattr(
+        "api.extensions.resolve_extension_sidecar_proxy_target",
+        lambda extension_id, proxy_path, query="": {
+            "extension_id": extension_id,
+            "origin": "http://127.0.0.1:17787",
+            "proxy_path": "/api/extensions/templates/sidecar/",
+            "upstream_url": "http://127.0.0.1:17787/v1/ping",
+        },
+    )
+
+    handler = FakeHandler()
+    result = routes.handle_get(
+        handler,
+        SimpleNamespace(path="/api/extensions/templates/sidecar/v1/ping", query=""),
+    )
+    assert result is None
+    assert handler.status == 403
+    assert json.loads(handler.body.decode("utf-8")) == {
+        "error": "Cross-origin mismatch - check reverse proxy headers"
+    }
+
+
 def test_extension_sidecar_proxy_get_allows_same_origin_browser_request_without_csrf_token(monkeypatch):
     from api import routes
 
@@ -498,6 +523,7 @@ def test_extension_sidecar_proxy_route_preserves_upstream_http_errors(monkeypatc
         ErrorHeaders({"Content-Type": "text/plain", "Set-Cookie": "drop=1"}),
         io.BytesIO(b"sidecar said no"),
     )
+
     class FakeOpener:
         def open(self, request, timeout=10):
             raise error
@@ -509,6 +535,11 @@ def test_extension_sidecar_proxy_route_preserves_upstream_http_errors(monkeypatc
     )
 
     handler = FakeHandler()
+    handler.headers = {
+        "Origin": "http://webui.local",
+        "Host": "webui.local",
+        "Sec-Fetch-Site": "same-origin",
+    }
     result = routes.handle_get(
         handler,
         SimpleNamespace(path="/api/extensions/templates/sidecar/v1/ping", query=""),
@@ -543,6 +574,11 @@ def test_extension_sidecar_proxy_route_returns_sanitized_502(monkeypatch):
     )
 
     handler = FakeHandler()
+    handler.headers = {
+        "Origin": "http://webui.local",
+        "Host": "webui.local",
+        "Sec-Fetch-Site": "same-origin",
+    }
     result = routes.handle_get(
         handler,
         SimpleNamespace(path="/api/extensions/templates/sidecar/v1/ping", query=""),
@@ -627,6 +663,11 @@ def test_extension_sidecar_proxy_route_uses_same_origin_redirect_opener(monkeypa
     )
 
     handler = FakeHandler()
+    handler.headers = {
+        "Origin": "http://webui.local",
+        "Host": "webui.local",
+        "Sec-Fetch-Site": "same-origin",
+    }
     result = routes.handle_get(
         handler,
         SimpleNamespace(path="/api/extensions/templates/sidecar/v1/ping", query=""),
