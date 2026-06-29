@@ -101,3 +101,27 @@ def test_update_apply_rejects_zero_target_success_path():
     assert zero_target_guard >= 0, (
         "applyUpdates must return before the success/restart flow when targets is empty"
     )
+
+
+def test_apply_updates_queues_agent_before_webui():
+    src = _ui_js()
+    apply_start = src.index("async function applyUpdates()")
+    next_fn = src.index("function _showUpdateError", apply_start)
+    body = src[apply_start:next_fn]
+
+    agent_idx = body.index("if(window._updateData?.agent?.behind>0) targets.push('agent');")
+    webui_idx = body.index("if(window._updateData?.webui?.behind>0) targets.push('webui');")
+    assert agent_idx < webui_idx, "agent target should be queued before webui"
+
+
+def test_apply_updates_wait_for_all_targets_before_reload():
+    src = _ui_js()
+    apply_start = src.index("async function applyUpdates()")
+    next_fn = src.index("function _showUpdateError", apply_start)
+    body = src[apply_start:next_fn]
+
+    loop_end = body.index("for(const target of targets)")
+    restart_wait = body.index("_waitForServerThenReload({baselineServerIdentity});")
+    assert loop_end < restart_wait, (
+        "_waitForServerThenReload should happen only after the update loop"
+    )
