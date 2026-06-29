@@ -383,6 +383,7 @@ class Handler(BaseHTTPRequestHandler):
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
         except _CLIENT_DISCONNECT_ERRORS:
+            # Expected disconnect path; do not convert it into a misleading server 500.
             return
         except Exception:
             self._safe_webui_print(f'[webui] ERROR {self.command} {self.path}\n' + traceback.format_exc())
@@ -410,6 +411,7 @@ class Handler(BaseHTTPRequestHandler):
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
         except _CLIENT_DISCONNECT_ERRORS:
+            # Expected disconnect path; do not convert it into a misleading server 500.
             return
         except Exception:
             self._safe_webui_print(f'[webui] ERROR {self.command} {self.path}\n' + traceback.format_exc())
