@@ -6,6 +6,7 @@ Behavior parity reference: gateway/run.py:_handle_*_command in
 the hermes-agent repo.
 """
 from __future__ import annotations
+import json
 import logging
 from typing import Any
 
@@ -84,37 +85,52 @@ def truncate_context_for_display_keep(
     if len(msgs) == 0:
         return []
 
-    def _row_matches(context_row: Any, msg_row: Any) -> bool:
-        """Match rows by stable id, then (role, content, timestamp), then
-        (role, content)."""
-        if not isinstance(context_row, dict) or not isinstance(msg_row, dict):
-            return False
-
-        context_id = context_row.get('id')
-        msg_id = msg_row.get('id')
-        if context_id is not None and msg_id is not None and context_id == msg_id:
-            return True
-
-        context_ts = context_row.get('timestamp')
-        msg_ts = msg_row.get('timestamp')
-        if context_ts is not None and msg_ts is not None:
-            if (
-                context_row.get('role') == msg_row.get('role')
-                and context_row.get('content') == msg_row.get('content')
-                and context_ts == msg_ts
-            ):
-                return True
-
+    def _row_signature(row: Any) -> tuple[str, ...] | None:
+        if not isinstance(row, dict):
+            return None
+        tool_calls = row.get('tool_calls')
+        tool_calls_sig = json.dumps(tool_calls, sort_keys=True, default=str) if tool_calls else ''
         return (
-            context_row.get('role') == msg_row.get('role')
-            and context_row.get('content') == msg_row.get('content')
+            str(row.get('role') or ''),
+            str(row.get('content') or ''),
+            str(row.get('tool_call_id') or ''),
+            str(row.get('tool_use_id') or ''),
+            str(row.get('tool_name') or row.get('name') or ''),
+            tool_calls_sig,
         )
 
     def _first_match_from(message: Any, start_idx: int) -> int | None:
+        msg_sig = _row_signature(message)
+        if msg_sig is None:
+            return None
+        msg_id = message.get('id')
+        msg_ts = message.get('timestamp')
+        weak_matches: list[int] = []
         for idx in range(start_idx, len(ctx)):
-            if _row_matches(ctx[idx], message):
-                return idx
-        return None
+            context_row = ctx[idx]
+            context_sig = _row_signature(context_row)
+            if context_sig is None:
+                continue
+
+            context_id = context_row.get('id')
+            if context_id is not None and msg_id is not None:
+                if context_id == msg_id:
+                    return idx
+                continue
+
+            if context_sig != msg_sig:
+                continue
+
+            context_ts = context_row.get('timestamp')
+            if context_ts is not None and msg_ts is not None:
+                if context_ts == msg_ts:
+                    return idx
+                continue
+
+            weak_matches.append(idx)
+            if len(weak_matches) > 1:
+                return None
+        return weak_matches[0] if len(weak_matches) == 1 else None
 
     matches = [None] * len(msgs)
     next_ctx_idx = 0

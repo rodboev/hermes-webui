@@ -120,3 +120,17 @@ def test_truncate_context_for_display_keep_prefers_compact_summary_fallback():
     ]
     out = truncate_context_for_display_keep(ctx, msgs, 2)
     assert out == ctx[:2]
+
+
+def test_truncate_context_for_display_keep_keeps_real_user_turn_when_duplicate_rows_lack_identity():
+    msgs = [
+        {"role": "user", "content": "u1"},
+        {"role": "assistant", "content": "a1"},
+    ]
+    ctx = [
+        {"role": "user", "content": "u1"},
+        {"role": "user", "content": "u1"},
+        {"role": "assistant", "content": "a1"},
+    ]
+    out = truncate_context_for_display_keep(ctx, msgs, 1)
+    assert [row["content"] for row in out] == ["u1", "u1"]
