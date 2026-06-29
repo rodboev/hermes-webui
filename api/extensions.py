@@ -312,17 +312,21 @@ def _load_extension_state(diagnostics: Optional[Dict[str, Any]] = None) -> Dict[
             break
     consents_raw = parsed.get("sidecar_proxy_consents", {})
     consents: Dict[str, str] = {}
+    consents_invalid = False
     if consents_raw is not None:
         if not isinstance(consents_raw, dict):
             invalid = True
+            consents_invalid = True
         else:
             for raw_ext_id, raw_origin in consents_raw.items():
                 if not _valid_extension_id(raw_ext_id):
                     invalid = True
+                    consents_invalid = True
                     continue
                 origin = _normalize_loopback_sidecar_origin(raw_origin)
                 if origin is None:
                     invalid = True
+                    consents_invalid = True
                     continue
                 ext_id = str(raw_ext_id).strip()
                 if ext_id in consents:
@@ -333,6 +337,8 @@ def _load_extension_state(diagnostics: Optional[Dict[str, Any]] = None) -> Dict[
                         diagnostics, "extension_state_truncated", _EXTENSION_STATE_WARNING_SOURCE
                     )
                     break
+    if consents_invalid:
+        consents = {}
     if invalid:
         _add_diagnostic_warning(
             diagnostics, "extension_state_invalid_entries", _EXTENSION_STATE_WARNING_SOURCE

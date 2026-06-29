@@ -4524,6 +4524,25 @@ _HOP_BY_HOP_HEADERS = {
 }
 
 
+def _connection_bound_header_names(headers) -> set[str]:
+    names = set(_HOP_BY_HOP_HEADERS)
+    if not headers or not hasattr(headers, "items"):
+        return names
+    connection_values = []
+    if hasattr(headers, "get_all"):
+        connection_values.extend(headers.get_all("Connection", []))
+    else:
+        for name, value in headers.items():
+            if str(name).lower() == "connection":
+                connection_values.append(value)
+    for value in connection_values:
+        for token in str(value).split(","):
+            normalized = token.strip().lower()
+            if normalized:
+                names.add(normalized)
+    return names
+
+
 def _match_extension_sidecar_proxy_path(path: str) -> tuple[str, str] | None:
     match = _EXTENSION_SIDECAR_PROXY_RE.match(path or "")
     if not match:
@@ -4561,10 +4580,11 @@ def _extension_sidecar_proxy_request_headers(handler) -> dict[str, str]:
     raw_headers = getattr(handler, "headers", None)
     if not raw_headers or not hasattr(raw_headers, "items"):
         return headers
+    blocked_headers = _connection_bound_header_names(raw_headers)
     for name, value in raw_headers.items():
         lower = str(name).lower()
         if (
-            lower in _HOP_BY_HOP_HEADERS
+            lower in blocked_headers
             or lower in {"authorization", "cookie", "content-length", "host", "origin", "referer"}
             or lower.startswith("x-csrf")
         ):
@@ -4576,10 +4596,11 @@ def _extension_sidecar_proxy_request_headers(handler) -> dict[str, str]:
 def _send_extension_sidecar_proxy_response(handler, status: int, body: bytes, headers) -> bool:
     handler.send_response(status)
     sent_content_type = False
+    blocked_headers = _connection_bound_header_names(headers)
     if headers and hasattr(headers, "items"):
         for name, value in headers.items():
             lower = str(name).lower()
-            if lower in _HOP_BY_HOP_HEADERS or lower in {"content-length", "set-cookie"}:
+            if lower in blocked_headers or lower in {"content-length", "set-cookie"}:
                 continue
             if lower == "content-type":
                 sent_content_type = True

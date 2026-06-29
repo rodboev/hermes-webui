@@ -257,6 +257,43 @@ def test_extension_sidecar_proxy_rejects_unavailable_surfaces(tmp_path, monkeypa
     assert unsupported.value.status == 409
 
 
+def test_extension_sidecar_proxy_malformed_consents_fail_closed(tmp_path, monkeypatch):
+    from api.extensions import ExtensionSidecarProxyError, resolve_extension_sidecar_proxy_target
+
+    state_dir, _root = _configure_manifest_extension(
+        monkeypatch,
+        tmp_path / "malformed_consents",
+        {
+            "extensions": [
+                {
+                    "id": "templates",
+                    "sidecar": {
+                        "type": "loopback",
+                        "origin": "http://127.0.0.1:17787",
+                    },
+                }
+            ]
+        },
+    )
+    (state_dir / "extension-overrides.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "disabled_extensions": [],
+                "sidecar_proxy_consents": {
+                    "templates": "http://127.0.0.1:17787",
+                    "../bad": "http://127.0.0.1:17788",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ExtensionSidecarProxyError) as exc:
+        resolve_extension_sidecar_proxy_target("templates", "v1/ping")
+    assert exc.value.status == 403
+
+
 def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(monkeypatch):
     from api import routes
 
@@ -268,8 +305,9 @@ def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(m
             self.headers = {
                 "Content-Type": "application/json",
                 "Set-Cookie": "sidecar=1",
-                "Connection": "close",
+                "Connection": "close, X-Upstream-Hop",
                 "X-Sidecar": "ok",
+                "X-Upstream-Hop": "strip-me",
             }
 
         def read(self):
@@ -321,7 +359,8 @@ def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(m
         "Referer": "http://webui.local/settings",
         "X-CSRF-Token": "secret",
         "X-Sidecar-Auth": "local-token",
-        "Connection": "keep-alive",
+        "Connection": "keep-alive, X-Client-Hop",
+        "X-Client-Hop": "strip-me",
     }
 
     result = routes.handle_post(
@@ -348,6 +387,7 @@ def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(m
     assert handler.header("X-Sidecar") == "ok"
     assert handler.header("Set-Cookie") is None
     assert handler.header("Connection") is None
+    assert handler.header("X-Upstream-Hop") is None
 
 
 def test_extension_sidecar_proxy_route_preserves_upstream_http_errors(monkeypatch):
