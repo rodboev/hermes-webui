@@ -5709,6 +5709,7 @@ def get_cli_sessions(
         cache_key = (
             'all_profiles',
             source_filter or '',
+            bool(include_claude_code),
             context_cache_key,
             _path_cache_key(_default_claude_code_projects_dir()),
             _path_stat_cache_key(_default_claude_code_projects_dir()),
@@ -5716,6 +5717,7 @@ def get_cli_sessions(
         )
     else:
         hermes_home, db_path, cli_profile, cache_key = _resolve_cli_sessions_context(source_filter)
+        cache_key = cache_key + (bool(include_claude_code),)
     ttl = _cli_sessions_cache_ttl_seconds()
     now = time.monotonic()
 
@@ -5732,7 +5734,7 @@ def get_cli_sessions(
                         visible_session_limit=None,
                         cron_project_limit=None,
                         webhook_project_limit=None,
-                        include_claude_code=include_claude_code,
+                        include_claude_code=include_claude_code and idx == 0,
                     )
                 )
             return merged
