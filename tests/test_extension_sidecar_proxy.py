@@ -310,6 +310,8 @@ def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(m
     handler = FakeHandler(raw_body)
     handler.headers = {
         "Accept": "application/json",
+        "If-None-Match": '"abc123"',
+        "Range": "bytes=0-64",
         "Content-Type": "application/json",
         "Content-Length": str(len(raw_body)),
         "Cookie": "webui=secret",
@@ -318,6 +320,7 @@ def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(m
         "Origin": "http://webui.local",
         "Referer": "http://webui.local/settings",
         "X-CSRF-Token": "secret",
+        "X-Sidecar-Auth": "local-token",
         "Connection": "keep-alive",
     }
 
@@ -333,6 +336,9 @@ def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(m
         "headers": {
             "accept": "application/json",
             "content-type": "application/json",
+            "if-none-match": '"abc123"',
+            "range": "bytes=0-64",
+            "x-sidecar-auth": "local-token",
         },
         "timeout": 10,
     }
@@ -442,6 +448,16 @@ def test_extension_sidecar_proxy_redirect_guard_preserves_origin_only():
         "http://127.0.0.1:17787/v1/ping",
         "http://127.0.0.1:17788/other-port",
     ) is None
+    assert routes._extension_sidecar_proxy_redirect_url(
+        "http://localhost",
+        "http://localhost/v1/ping",
+        "http://LOCALHOST:80/v1/next",
+    ) == "http://LOCALHOST:80/v1/next"
+    assert routes._extension_sidecar_proxy_redirect_url(
+        "https://localhost:443",
+        "https://localhost/v1/ping",
+        "https://localhost/v1/next",
+    ) == "https://localhost/v1/next"
 
 
 def test_extension_sidecar_proxy_route_uses_same_origin_redirect_opener(monkeypatch):

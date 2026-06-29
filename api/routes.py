@@ -4514,6 +4514,7 @@ _EXTENSION_SIDECAR_PROXY_RE = _re.compile(
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
+    "proxy-connection",
     "proxy-authenticate",
     "proxy-authorization",
     "te",
@@ -4521,7 +4522,6 @@ _HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
-_EXTENSION_SIDECAR_REQUEST_HEADERS = {"accept", "content-type"}
 
 
 def _match_extension_sidecar_proxy_path(path: str) -> tuple[str, str] | None:
@@ -4569,8 +4569,7 @@ def _extension_sidecar_proxy_request_headers(handler) -> dict[str, str]:
             or lower.startswith("x-csrf")
         ):
             continue
-        if lower in _EXTENSION_SIDECAR_REQUEST_HEADERS:
-            headers[str(name)] = str(value)
+        headers[str(name)] = str(value)
     return headers
 
 
@@ -4601,11 +4600,21 @@ def _extension_sidecar_proxy_redirect_url(
     redirect_url: str,
 ) -> str | None:
     resolved = urljoin(request_url, redirect_url or "")
+    allowed = urlsplit(allowed_origin or "")
     parts = urlsplit(resolved)
-    if not parts.scheme or not parts.netloc:
+    if not allowed.scheme or not allowed.netloc or not parts.scheme or not parts.netloc:
         return None
-    redirect_origin = f"{parts.scheme}://{parts.netloc}"
-    if redirect_origin != allowed_origin:
+    allowed_scheme = allowed.scheme.lower()
+    redirect_scheme = parts.scheme.lower()
+    if redirect_scheme != allowed_scheme:
+        return None
+    allowed_name, allowed_port = _normalize_host_port(allowed.netloc)
+    redirect_name, redirect_port = _normalize_host_port(parts.netloc)
+    if redirect_name != allowed_name or not _ports_match(
+        allowed_scheme,
+        redirect_port,
+        allowed_port,
+    ):
         return None
     return resolved
 
