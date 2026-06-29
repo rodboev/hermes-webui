@@ -2049,6 +2049,22 @@ def _llm_proxy_quota_stats_error(code: str, message: str, *, status: int) -> tup
     return status, {"ok": False, "error": code, "message": message}
 
 
+class _LlmProxyQuotaStatsNoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects so a credentialed bridge never forwards its bearer token."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
+def _llm_proxy_quota_stats_open(
+    request: urllib.request.Request,
+    *,
+    timeout: float,
+):
+    opener = urllib.request.build_opener(_LlmProxyQuotaStatsNoRedirectHandler)
+    return opener.open(request, timeout=timeout)
+
+
 def _llm_proxy_quota_stats_token(
     value: Any,
     field: str,
@@ -2133,6 +2149,27 @@ def _llm_proxy_quota_stats_config() -> tuple[str | None, str | None]:
         _normalize_llm_proxy_quota_stats_base_url(base_url),
         _get_provider_api_key(_LLM_PROXY_PROVIDER_ID),
     )
+
+
+def _llm_proxy_quota_stats_redact_text(value: str, api_key: str) -> str:
+    redacted = value.replace(f"Bearer {api_key}", "[REDACTED]")
+    return redacted.replace(api_key, "[REDACTED]")
+
+
+def _llm_proxy_quota_stats_redact_payload(value: Any, api_key: str) -> Any:
+    if isinstance(value, dict):
+        return {
+            _llm_proxy_quota_stats_redact_text(key, api_key) if isinstance(key, str) else key:
+            _llm_proxy_quota_stats_redact_payload(item, api_key)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_llm_proxy_quota_stats_redact_payload(item, api_key) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_llm_proxy_quota_stats_redact_payload(item, api_key) for item in value)
+    if isinstance(value, str):
+        return _llm_proxy_quota_stats_redact_text(value, api_key)
+    return value
 
 
 def get_llm_proxy_quota_stats(
@@ -2238,7 +2275,7 @@ def get_llm_proxy_quota_stats(
         )
 
     try:
-        with urllib.request.urlopen(request, timeout=_PROVIDER_QUOTA_TIMEOUT_SECONDS) as resp:
+        with _llm_proxy_quota_stats_open(request, timeout=_PROVIDER_QUOTA_TIMEOUT_SECONDS) as resp:
             raw = resp.read(_LLM_PROXY_QUOTA_STATS_MAX_RESPONSE_BYTES + 1)
         if isinstance(raw, (bytes, bytearray)) and len(raw) > _LLM_PROXY_QUOTA_STATS_MAX_RESPONSE_BYTES:
             return _llm_proxy_quota_stats_error(
@@ -2247,8 +2284,14 @@ def get_llm_proxy_quota_stats(
                 status=502,
             )
         payload = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
-        return 200, payload
+        return 200, _llm_proxy_quota_stats_redact_payload(payload, api_key)
     except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            return _llm_proxy_quota_stats_error(
+                "llm_proxy_quota_stats_unavailable",
+                "llm-proxy quota stats is temporarily unavailable.",
+                status=503,
+            )
         if exc.code in (401, 403):
             return _llm_proxy_quota_stats_error(
                 "llm_proxy_quota_stats_upstream_rejected",

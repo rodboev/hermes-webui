@@ -62,7 +62,7 @@ def test_get_quota_stats_forwards_provider_query_and_bearer_auth(monkeypatch):
     )
     seen = {}
 
-    def fake_urlopen(req, timeout):
+    def fake_open(req, *, timeout):
         seen["url"] = req.full_url
         seen["method"] = req.get_method()
         seen["authorization"] = req.headers.get("Authorization")
@@ -71,7 +71,7 @@ def test_get_quota_stats_forwards_provider_query_and_bearer_auth(monkeypatch):
         seen["timeout"] = timeout
         return _FakeResponse(json.dumps({"ok": True, "quota": {"limit_remaining": 7}}).encode("utf-8"))
 
-    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", fake_open)
 
     status, payload = providers.get_llm_proxy_quota_stats(query={"provider": ["anthropic"]})
 
@@ -95,7 +95,7 @@ def test_post_quota_stats_forwards_validated_body(monkeypatch):
     )
     seen = {}
 
-    def fake_urlopen(req, timeout):
+    def fake_open(req, *, timeout):
         seen["url"] = req.full_url
         seen["method"] = req.get_method()
         seen["authorization"] = req.headers.get("Authorization")
@@ -103,7 +103,7 @@ def test_post_quota_stats_forwards_validated_body(monkeypatch):
         seen["timeout"] = timeout
         return _FakeResponse(json.dumps({"quota": {"limit_remaining": 6}, "reload": True}).encode("utf-8"))
 
-    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", fake_open)
 
     status, payload = providers.get_llm_proxy_quota_stats(
         body={
@@ -153,7 +153,7 @@ def test_get_quota_stats_uses_custom_provider_authority_and_strips_duplicate_v1(
     )
     seen = {}
 
-    def fake_urlopen(req, timeout):
+    def fake_open(req, *, timeout):
         seen["url"] = req.full_url
         seen["method"] = req.get_method()
         seen["authorization"] = req.headers.get("Authorization")
@@ -162,7 +162,7 @@ def test_get_quota_stats_uses_custom_provider_authority_and_strips_duplicate_v1(
         seen["timeout"] = timeout
         return _FakeResponse(json.dumps({"ok": True, "quota": {"limit_remaining": 4}}).encode("utf-8"))
 
-    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", fake_open)
 
     status, payload = providers.get_llm_proxy_quota_stats(query={"provider": ["anthropic"]})
 
@@ -196,7 +196,7 @@ def test_get_quota_stats_rejects_unrelated_single_custom_provider(monkeypatch):
         called = True
         raise AssertionError("network should not be reached for unrelated custom providers")
 
-    monkeypatch.setattr(providers.urllib.request, "urlopen", explode)
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", explode)
 
     status, payload = providers.get_llm_proxy_quota_stats(query={"provider": ["anthropic"]})
 
@@ -216,10 +216,10 @@ def test_get_quota_stats_rejects_oversized_upstream_response(monkeypatch):
         api_key="server-held-secret",
     )
 
-    def fake_urlopen(req, timeout):
+    def fake_open(req, *, timeout):
         return _FakeResponse(b"x" * (providers._LLM_PROXY_QUOTA_STATS_MAX_RESPONSE_BYTES + 1))
 
-    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", fake_open)
 
     status, payload = providers.get_llm_proxy_quota_stats(query={"provider": ["anthropic"]})
 
@@ -244,7 +244,7 @@ def test_post_quota_stats_rejects_invalid_action_or_scope_without_network(monkey
         called = True
         raise AssertionError("network should not be reached for invalid llm-proxy quota requests")
 
-    monkeypatch.setattr(providers.urllib.request, "urlopen", explode)
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", explode)
 
     for body in (
         {"action": "", "scope": "provider"},
@@ -280,7 +280,7 @@ def test_post_quota_stats_null_body_fails_before_network(monkeypatch):
         called = True
         raise AssertionError("network should not be reached for null llm-proxy quota requests")
 
-    monkeypatch.setattr(providers.urllib.request, "urlopen", explode)
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", explode)
 
     result = routes.handle_post(
         SimpleNamespace(headers={}, rfile=BytesIO()),
@@ -292,6 +292,84 @@ def test_post_quota_stats_null_body_fails_before_network(monkeypatch):
         "status": 400,
     }
     assert called is False
+
+
+def test_get_quota_stats_rejects_upstream_redirects_without_following(monkeypatch):
+    _set_llm_proxy_config(
+        monkeypatch,
+        base_url="https://llm-proxy.example.test",
+        api_key="server-held-secret",
+    )
+    seen = []
+
+    def fake_open(req, *, timeout):
+        seen.append({
+            "url": req.full_url,
+            "authorization": req.headers.get("Authorization"),
+            "timeout": timeout,
+        })
+        raise providers.urllib.error.HTTPError(
+            req.full_url,
+            302,
+            "Found",
+            {"Location": "https://attacker.example.test/steal"},
+            None,
+        )
+
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", fake_open)
+
+    status, payload = providers.get_llm_proxy_quota_stats(query={"provider": ["anthropic"]})
+
+    assert status == 503
+    assert payload == {
+        "ok": False,
+        "error": "llm_proxy_quota_stats_unavailable",
+        "message": "llm-proxy quota stats is temporarily unavailable.",
+    }
+    assert seen == [{
+        "url": "https://llm-proxy.example.test/v1/quota-stats?provider=anthropic",
+        "authorization": "Bearer server-held-secret",
+        "timeout": 3.0,
+    }]
+
+
+def test_get_quota_stats_redacts_upstream_echo_payload(monkeypatch):
+    _set_llm_proxy_config(
+        monkeypatch,
+        base_url="https://llm-proxy.example.test",
+        api_key="server-held-secret",
+    )
+
+    def fake_open(req, *, timeout):
+        return _FakeResponse(json.dumps({
+            "api_key": "server-held-secret",
+            "authorization": "Bearer server-held-secret",
+            "nested": {
+                "tokens": [
+                    "server-held-secret",
+                    "Bearer server-held-secret",
+                    "safe-value",
+                ]
+            },
+        }).encode("utf-8"))
+
+    monkeypatch.setattr(providers, "_llm_proxy_quota_stats_open", fake_open)
+
+    status, payload = providers.get_llm_proxy_quota_stats(query={"provider": ["anthropic"]})
+
+    assert status == 200
+    assert payload == {
+        "api_key": "[REDACTED]",
+        "authorization": "[REDACTED]",
+        "nested": {
+            "tokens": [
+                "[REDACTED]",
+                "[REDACTED]",
+                "safe-value",
+            ]
+        },
+    }
+    assert "server-held-secret" not in json.dumps(payload)
 
 
 def test_quota_stats_route_reports_unconfigured_proxy_without_secret_leak(monkeypatch):
