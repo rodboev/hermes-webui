@@ -81,9 +81,63 @@ def truncate_context_for_display_keep(
         return []
     if len(ctx) == len(msgs):
         return ctx[:keep]
+    if len(ctx) < len(msgs):
+        return ctx[:keep]
     if len(msgs) == 0:
         return []
-    # Context tail aligns with full display transcript; preserve leading-only rows.
+
+    def _row_matches(context_row: Any, msg_row: Any) -> bool:
+        """Match rows by stable id, then (role, content, timestamp), then
+        (role, content)."""
+        if not isinstance(context_row, dict) or not isinstance(msg_row, dict):
+            return False
+
+        context_id = context_row.get('id')
+        msg_id = msg_row.get('id')
+        if context_id is not None and msg_id is not None and context_id == msg_id:
+            return True
+
+        context_ts = context_row.get('timestamp')
+        msg_ts = msg_row.get('timestamp')
+        if context_ts is not None and msg_ts is not None:
+            if (
+                context_row.get('role') == msg_row.get('role')
+                and context_row.get('content') == msg_row.get('content')
+                and context_ts == msg_ts
+            ):
+                return True
+
+        return (
+            context_row.get('role') == msg_row.get('role')
+            and context_row.get('content') == msg_row.get('content')
+        )
+
+    def _first_match_from(message: Any, start_idx: int) -> int | None:
+        for idx in range(start_idx, len(ctx)):
+            if _row_matches(ctx[idx], message):
+                return idx
+        return None
+
+    matches = [None] * len(msgs)
+    next_ctx_idx = 0
+    for msg_idx, message in enumerate(msgs):
+        match_idx = _first_match_from(message, next_ctx_idx)
+        matches[msg_idx] = match_idx
+        if match_idx is not None:
+            next_ctx_idx = match_idx + 1
+
+    # Cut at the first unkept display turn, or fallback to the last kept turn
+    # if the boundary is not directly alignable.
+    if keep < len(msgs):
+        first_unkept = matches[keep]
+        if first_unkept is not None:
+            return ctx[:first_unkept]
+        if keep > 0:
+            last_kept = matches[keep - 1]
+            if last_kept is not None:
+                return ctx[:last_kept + 1]
+
+    # Final fallback preserves #5096 behavior when alignment is unreliable.
     prefix_len = max(0, len(ctx) - len(msgs))
     prefix = ctx[:prefix_len]
     suffix = ctx[prefix_len:]
