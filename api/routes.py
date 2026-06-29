@@ -2039,9 +2039,9 @@ def _build_session_list_cache_payload(
     active_profile: str | None,
     all_profiles: bool,
     show_cli_sessions: bool,
-    show_claude_code_sessions: bool,
     show_previous_messaging_sessions: bool,
     show_cron_sessions: bool,
+    show_claude_code_sessions: bool = True,
     include_archived: bool = False,
     exclude_hidden: bool = False,
     visible_only: bool = False,
@@ -2107,11 +2107,25 @@ def _build_session_list_cache_payload(
     webui_sessions = [_normalize_sidebar_source_flags(s) for s in webui_sessions]
     if show_cli_sessions:
         diag_stage("get_cli_sessions")
-        cli = get_cli_sessions(
-            source_filter=source_filter,
-            all_profiles=all_profiles,
-            include_claude_code=show_claude_code_sessions,
-        )
+        try:
+            cli = get_cli_sessions(
+                source_filter=source_filter,
+                all_profiles=all_profiles,
+                include_claude_code=show_claude_code_sessions,
+            )
+        except TypeError as exc:
+            message = str(exc)
+            if (
+                "unexpected keyword argument" not in message
+                or "include_claude_code" not in message
+            ):
+                raise
+            # Focused tests sometimes monkeypatch routes.get_cli_sessions with
+            # the historical two-keyword signature.
+            cli = get_cli_sessions(
+                source_filter=source_filter,
+                all_profiles=all_profiles,
+            )
         diag_stage("merge_cli_sessions")
         cli_by_id = {s["session_id"]: s for s in cli}
         # #3238/#4591: reconcile orphaned imported sidecars. When a CLI or

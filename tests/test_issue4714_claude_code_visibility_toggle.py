@@ -6,6 +6,7 @@ The route must keep `show_cli_sessions` as the parent gate while allowing
 
 import io
 import json
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -62,6 +63,12 @@ def _common_monkeypatches(monkeypatch, rows, cli_rows):
     monkeypatch.setattr(routes, "agent_session_rows_existing", lambda ids, profile=None: {row["session_id"] for row in rows})
     monkeypatch.setattr(routes, "get_cli_sessions", lambda source_filter=None, all_profiles=False, include_claude_code=True: cli_rows)
     monkeypatch.setattr(profiles, "get_active_profile_name", lambda: "default")
+
+
+def _extract_between(source: str, start_marker: str, end_marker: str) -> str:
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    return source[start:end]
 
 
 def _rows_webui():
@@ -204,22 +211,122 @@ def test_session_list_cache_key_changes_with_claude_code_toggle():
 
 
 def test_preferences_autosave_maps_claude_code_toggle():
-    """Preferences autosave wiring includes the Claude Code toggle payload fields."""
-    panels = PANELS_JS.read_text(encoding="utf-8")
-    index = INDEX_HTML.read_text(encoding="utf-8")
+    """Preferences autosave payloads keep the child toggle gated by the parent."""
+    autosave_block = _extract_between(
+        PANELS_JS.read_text(encoding="utf-8"),
+        "  const showCliCb=$('settingsShowCliSessions');",
+        "  const syncCb=$('settingsSyncInsights');",
+    )
+    script = f"""
+const block = {json.dumps(autosave_block)};
+const elements = {{
+  settingsShowCliSessions: {{ checked: false }},
+  settingsShowClaudeCodeSessions: {{ checked: true }},
+  settingsShowCronSessions: {{ checked: true }},
+  settingsShowPreviousMessagingSessions: {{ checked: false }},
+}};
+function $(id) {{
+  return elements[id] || null;
+}}
+const payload = {{}};
+eval(block);
+console.log(JSON.stringify(payload));
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    payload = json.loads(result.stdout)
 
-    assert "settingsShowClaudeCodeSessions" in panels
-    assert "show_claude_code_sessions" in panels
-    assert "settingsShowClaudeCodeSessions" in index
+    assert payload["show_cli_sessions"] is False
+    assert payload["show_claude_code_sessions"] is False
 
 
 def test_claude_code_checkbox_is_parent_gated_in_ui():
-    """The child checkbox must follow the parent non-WebUI toggle."""
-    panels = PANELS_JS.read_text(encoding="utf-8")
+    """The child checkbox should disable live when the parent turns off."""
+    settings_block = _extract_between(
+        PANELS_JS.read_text(encoding="utf-8"),
+        "    const showCliCb=$('settingsShowCliSessions');",
+        "    const showPreviousMessagingCb=$('settingsShowPreviousMessagingSessions');",
+    )
+    script = f"""
+const block = {json.dumps(settings_block)};
+function makeCheckbox(checked) {{
+  return {{
+    checked,
+    disabled: false,
+    listeners: {{}},
+    addEventListener(name, fn) {{
+      this.listeners[name] = fn;
+    }},
+  }};
+}}
+const elements = {{
+  settingsShowCliSessions: makeCheckbox(true),
+  settingsShowClaudeCodeSessions: makeCheckbox(true),
+  settingsShowCronSessions: makeCheckbox(true),
+}};
+const settings = {{
+  show_cli_sessions: true,
+  show_claude_code_sessions: true,
+  show_cron_sessions: true,
+}};
+let autosaveCalls = 0;
+function _schedulePreferencesAutosave() {{
+  autosaveCalls += 1;
+}}
+function $(id) {{
+  return elements[id] || null;
+}}
+eval(block);
+const initial = {{
+  claudeDisabled: elements.settingsShowClaudeCodeSessions.disabled,
+  cronDisabled: elements.settingsShowCronSessions.disabled,
+}};
+elements.settingsShowCliSessions.checked = false;
+elements.settingsShowCliSessions.listeners.change();
+console.log(JSON.stringify({{
+  initial,
+  after: {{
+    claudeDisabled: elements.settingsShowClaudeCodeSessions.disabled,
+    cronDisabled: elements.settingsShowCronSessions.disabled,
+    autosaveCalls,
+  }},
+}}));
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    payload = json.loads(result.stdout)
 
-    assert "showClaudeCodeCb.disabled=showCliCb?!showCliCb.checked:true;" in panels
-    assert "payload.show_claude_code_sessions=!!(showCliCb&&showCliCb.checked&&showClaudeCodeCb.checked);" in panels
-    assert "if(showClaudeCodeCb) showClaudeCodeCb.disabled=!enabled;" in panels
+    assert payload["initial"] == {
+        "claudeDisabled": False,
+        "cronDisabled": False,
+    }
+    assert payload["after"] == {
+        "claudeDisabled": True,
+        "cronDisabled": True,
+        "autosaveCalls": 1,
+    }
+
+
+def test_save_settings_gates_claude_code_toggle_under_parent():
+    """The explicit Save Settings path should keep the child toggle subordinate."""
+    save_block = _extract_between(
+        PANELS_JS.read_text(encoding="utf-8"),
+        "  body.show_cli_sessions=showCliSessions;",
+        "  body.pinned_sessions_limit=pinnedSessionsLimit;",
+    )
+    script = f"""
+const block = {json.dumps(save_block)};
+const showCliSessions = false;
+const showClaudeCodeSessions = true;
+const showCronSessions = true;
+const showPreviousMessagingSessions = false;
+const body = {{}};
+eval(block);
+console.log(JSON.stringify(body));
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    body = json.loads(result.stdout)
+
+    assert body["show_cli_sessions"] is False
+    assert body["show_claude_code_sessions"] is False
 
 
 def test_locale_keys_exist_in_every_locale_block():
