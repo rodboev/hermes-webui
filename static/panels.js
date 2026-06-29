@@ -8341,6 +8341,22 @@ function _extensionSidecarCard(sidecars){
     const origin=(sidecar&&sidecar.origin)||'';
     const healthPath=(sidecar&&sidecar.health_path)||'';
     const healthUrl=(sidecar&&sidecar.health_url)||'';
+    const proxy=(sidecar&&sidecar.proxy&&typeof sidecar.proxy==='object')?sidecar.proxy:{};
+    const proxyAvailable=proxy.available===true;
+    const proxyConsented=proxy.consented===true;
+    const proxyConsentRequired=proxy.consent_required===true;
+    const proxyOriginChanged=proxy.origin_changed===true;
+    const proxyPath=(proxy&&proxy.path)||'';
+    const proxyStatus=proxyConsented
+      ?'consented'
+      :(proxyOriginChanged
+        ?'reconfirm required'
+        :(proxyConsentRequired
+          ?'approval required'
+          :'unavailable'));
+    const proxyButton=(proxyAvailable&&id)
+      ?`<button class="sm-btn extension-toggle-btn" type="button" data-extension-sidecar-proxy-id="${esc(id)}" data-extension-sidecar-proxy-approved="${proxyConsented?'false':'true'}">${esc(proxyConsented?'Revoke proxy consent':'Approve proxy consent')}</button>`
+      :'';
     return `<div class="extension-sidecar-row" data-sidecar-index="${index}">
       <div class="extension-sidecar-row-head">
         <div class="extension-sidecar-title">${esc(title)}</div>
@@ -8351,7 +8367,10 @@ function _extensionSidecarCard(sidecars){
         <div><span>Origin</span><code>${esc(origin)}</code></div>
         <div><span>Health path</span><code>${esc(healthPath)}</code></div>
         <div><span>Health URL</span><code>${esc(healthUrl)}</code></div>
+        <div><span>Proxy</span><code>${esc(proxyStatus)}</code></div>
+        <div><span>Proxy path</span><code>${esc(proxyPath)}</code></div>
       </div>
+      <div class="extension-sidecar-actions">${proxyButton}</div>
       <div class="extension-sidecar-runtime" data-sidecar-runtime-index="${index}" hidden></div>
     </div>`;
   }).join('')}</div>`:'<div class="extension-url-empty">No loopback sidecars declared.</div>';
@@ -8515,6 +8534,7 @@ function _renderExtensionsPanel(data,seq){
     </div>
   `;
   _bindExtensionToggleButtons(target);
+  _bindExtensionSidecarProxyButtons(target);
   _bindExtensionSettingsButtons(target);
   _monitorExtensionSidecars(sidecars,seq);
 }
@@ -8523,6 +8543,13 @@ function _bindExtensionToggleButtons(root){
   if(!root) return;
   root.querySelectorAll('[data-extension-toggle-id]').forEach(btn=>{
     btn.addEventListener('click',()=>handleExtensionToggle(btn));
+  });
+}
+
+function _bindExtensionSidecarProxyButtons(root){
+  if(!root) return;
+  root.querySelectorAll('[data-extension-sidecar-proxy-id]').forEach(btn=>{
+    btn.addEventListener('click',()=>handleExtensionSidecarProxyConsent(btn));
   });
 }
 
@@ -8542,6 +8569,25 @@ async function handleExtensionToggle(btn){
     btn.disabled=false;
     btn.textContent=previousText;
     showToast('Failed to update extension: '+(e&&e.message?e.message:String(e)));
+  }
+}
+
+async function handleExtensionSidecarProxyConsent(btn){
+  if(!btn||btn.disabled) return;
+  const id=btn.dataset.extensionSidecarProxyId||'';
+  const approved=btn.dataset.extensionSidecarProxyApproved==='true';
+  if(!id) return;
+  const previousText=btn.textContent;
+  btn.disabled=true;
+  btn.textContent=approved?'Approving…':'Revoking…';
+  try{
+    const data=await api('/api/extensions/sidecar-proxy-consent',{method:'POST',body:JSON.stringify({id,approved})});
+    showToast(approved?'Extension sidecar proxy approved.':'Extension sidecar proxy consent revoked.');
+    _renderExtensionsPanel(data,++_extensionsSidecarMonitorSeq);
+  }catch(e){
+    btn.disabled=false;
+    btn.textContent=previousText;
+    showToast('Failed to update extension sidecar proxy consent: '+(e&&e.message?e.message:String(e)));
   }
 }
 
