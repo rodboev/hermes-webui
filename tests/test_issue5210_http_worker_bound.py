@@ -22,12 +22,12 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _worker_count(server: QuietHTTPServer) -> int:
+def _worker_count(server: _ObservedQuietHTTPServer) -> int:
     with server.worker_lock:
         return server.worker_starts
 
 
-def _wait_for_worker_count(server: QuietHTTPServer, expected: int, *, timeout: float = 2.0) -> None:
+def _wait_for_worker_count(server: _ObservedQuietHTTPServer, expected: int, *, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         current = _worker_count(server)
@@ -39,7 +39,7 @@ def _wait_for_worker_count(server: QuietHTTPServer, expected: int, *, timeout: f
     raise AssertionError(f"timed out waiting for worker count {expected}, got {_worker_count(server)}")
 
 
-def _assert_worker_count_stays(server: QuietHTTPServer, expected: int, *, duration: float = 0.35) -> None:
+def _assert_worker_count_stays(server: _ObservedQuietHTTPServer, expected: int, *, duration: float = 0.35) -> None:
     deadline = time.monotonic() + duration
     while time.monotonic() < deadline:
         current = _worker_count(server)
@@ -47,7 +47,7 @@ def _assert_worker_count_stays(server: QuietHTTPServer, expected: int, *, durati
         time.sleep(0.01)
 
 
-def _wait_for_worker_slot_release(server: QuietHTTPServer, *, timeout: float = 2.0) -> None:
+def _wait_for_worker_slot_release(server: _ObservedQuietHTTPServer, *, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if server._request_worker_slots.acquire(blocking=False):
@@ -203,6 +203,47 @@ def test_over_capacity_plain_http_gets_fast_503_without_starting_handler(monkeyp
         assert headers["Connection"].lower() == "close"
         assert body == b""
         _assert_worker_count_stays(srv.httpd, 1)
+
+        srv.httpd.release_event.set()
+        hold_thread.join(timeout=5)
+        assert "error" not in hold_result, hold_result.get("error")
+        assert hold_result["value"][0] == 200
+
+
+def test_slow_overflow_cleanup_does_not_block_later_rejects(monkeypatch):
+    monkeypatch.setattr(QuietHTTPServer, "max_request_workers", 1, raising=False)
+    drain_entered = threading.Event()
+    release_drain = threading.Event()
+    original_drain = QuietHTTPServer._drain_request_input_nonblocking
+    calls = 0
+
+    def blocking_first_drain(self, request) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            drain_entered.set()
+            assert release_drain.wait(timeout=5)
+            return
+        original_drain(self, request)
+
+    monkeypatch.setattr(QuietHTTPServer, "_drain_request_input_nonblocking", blocking_first_drain)
+
+    with _ServerRunner(_GateHandler) as srv:
+        hold_thread, hold_result = _start_request_thread(srv.port, "/hold")
+        assert srv.httpd.hold_entered.wait(timeout=5)
+        _wait_for_worker_count(srv.httpd, 1)
+
+        slow_sock = socket.create_connection(("127.0.0.1", srv.port), timeout=2)
+        try:
+            assert drain_entered.wait(timeout=5)
+            status, headers, body = _request(srv.port, "/fast", timeout=1)
+            assert status == 503
+            assert headers["Connection"].lower() == "close"
+            assert body == b""
+            _assert_worker_count_stays(srv.httpd, 1)
+        finally:
+            release_drain.set()
+            slow_sock.close()
 
         srv.httpd.release_event.set()
         hold_thread.join(timeout=5)

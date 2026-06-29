@@ -119,6 +119,7 @@ class QuietHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 64
     max_request_workers = 128
+    max_overflow_reject_workers = 16
     _OVERFLOW_RESPONSE = (
         b"HTTP/1.1 503 Service Unavailable\r\n"
         b"Connection: close\r\n"
@@ -133,6 +134,7 @@ class QuietHTTPServer(ThreadingHTTPServer):
         self.ssl_context: object | None = None
         super().__init__(*args, **kwargs)
         self._request_worker_slots = threading.BoundedSemaphore(self.max_request_workers)
+        self._overflow_reject_slots = threading.BoundedSemaphore(self.max_overflow_reject_workers)
         self.accept_loop_requests_total = 0
         self.accept_loop_last_request_at = 0.0
 
@@ -226,7 +228,24 @@ class QuietHTTPServer(ThreadingHTTPServer):
                 pass
 
     def _reject_overflow_request(self, request) -> None:
-        if getattr(self, "ssl_context", None) is None:
+        if getattr(self, "ssl_context", None) is not None:
+            self._close_request_quietly(request)
+            return
+        if not self._overflow_reject_slots.acquire(blocking=False):
+            self._close_request_quietly(request)
+            return
+        try:
+            threading.Thread(
+                target=self._reject_overflow_request_worker,
+                args=(request,),
+                daemon=True,
+            ).start()
+        except Exception:
+            self._overflow_reject_slots.release()
+            self._close_request_quietly(request)
+
+    def _reject_overflow_request_worker(self, request) -> None:
+        try:
             self._drain_request_input_nonblocking(request)
             try:
                 request.sendall(self._OVERFLOW_RESPONSE)
@@ -236,7 +255,9 @@ class QuietHTTPServer(ThreadingHTTPServer):
                     pass
             except Exception:
                 pass
-        self._close_request_quietly(request)
+        finally:
+            self._close_request_quietly(request)
+            self._overflow_reject_slots.release()
 
     def process_request(self, request, client_address):
         if not self._request_worker_slots.acquire(blocking=False):
