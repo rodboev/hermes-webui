@@ -281,13 +281,14 @@ def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(m
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(request, timeout=10):
-        captured["url"] = request.full_url
-        captured["method"] = request.get_method()
-        captured["data"] = request.data
-        captured["headers"] = {k.lower(): v for k, v in request.header_items()}
-        captured["timeout"] = timeout
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, request, timeout=10):
+            captured["url"] = request.full_url
+            captured["method"] = request.get_method()
+            captured["data"] = request.data
+            captured["headers"] = {k.lower(): v for k, v in request.header_items()}
+            captured["timeout"] = timeout
+            return FakeResponse()
 
     monkeypatch.setattr(routes, "_check_csrf", lambda handler: True)
     monkeypatch.setattr(
@@ -299,7 +300,11 @@ def test_extension_sidecar_proxy_route_uses_shared_resolver_and_strips_headers(m
             "upstream_url": f"http://127.0.0.1:17787/{proxy_path}?{query}",
         },
     )
-    monkeypatch.setattr(routes, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        routes,
+        "_extension_sidecar_proxy_same_origin_opener",
+        lambda allowed_origin: FakeOpener(),
+    )
 
     raw_body = b'{"ping":"pong"}'
     handler = FakeHandler(raw_body)
@@ -363,7 +368,15 @@ def test_extension_sidecar_proxy_route_preserves_upstream_http_errors(monkeypatc
         ErrorHeaders({"Content-Type": "text/plain", "Set-Cookie": "drop=1"}),
         io.BytesIO(b"sidecar said no"),
     )
-    monkeypatch.setattr(routes, "urlopen", lambda request, timeout=10: (_ for _ in ()).throw(error))
+    class FakeOpener:
+        def open(self, request, timeout=10):
+            raise error
+
+    monkeypatch.setattr(
+        routes,
+        "_extension_sidecar_proxy_same_origin_opener",
+        lambda allowed_origin: FakeOpener(),
+    )
 
     handler = FakeHandler()
     result = routes.handle_get(
@@ -389,7 +402,15 @@ def test_extension_sidecar_proxy_route_returns_sanitized_502(monkeypatch):
             "upstream_url": "http://127.0.0.1:17787/v1/ping",
         },
     )
-    monkeypatch.setattr(routes, "urlopen", lambda request, timeout=10: (_ for _ in ()).throw(OSError("no route")))
+    class FakeOpener:
+        def open(self, request, timeout=10):
+            raise OSError("no route")
+
+    monkeypatch.setattr(
+        routes,
+        "_extension_sidecar_proxy_same_origin_opener",
+        lambda allowed_origin: FakeOpener(),
+    )
 
     handler = FakeHandler()
     result = routes.handle_get(
@@ -401,6 +422,83 @@ def test_extension_sidecar_proxy_route_returns_sanitized_502(monkeypatch):
     assert json.loads(handler.body.decode("utf-8")) == {
         "error": "Failed to reach extension sidecar"
     }
+
+
+def test_extension_sidecar_proxy_redirect_guard_preserves_origin_only():
+    from api import routes
+
+    assert routes._extension_sidecar_proxy_redirect_url(
+        "http://127.0.0.1:17787",
+        "http://127.0.0.1:17787/v1/ping",
+        "/v1/next?debug=1",
+    ) == "http://127.0.0.1:17787/v1/next?debug=1"
+    assert routes._extension_sidecar_proxy_redirect_url(
+        "http://127.0.0.1:17787",
+        "http://127.0.0.1:17787/v1/ping",
+        "http://evil.example/steal",
+    ) is None
+    assert routes._extension_sidecar_proxy_redirect_url(
+        "http://127.0.0.1:17787",
+        "http://127.0.0.1:17787/v1/ping",
+        "http://127.0.0.1:17788/other-port",
+    ) is None
+
+
+def test_extension_sidecar_proxy_route_uses_same_origin_redirect_opener(monkeypatch):
+    from api import routes
+
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def read(self):
+            return b'{"ok":true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeOpener:
+        def open(self, request, timeout=10):
+            captured["url"] = request.full_url
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "api.extensions.resolve_extension_sidecar_proxy_target",
+        lambda extension_id, proxy_path, query="": {
+            "extension_id": extension_id,
+            "origin": "http://127.0.0.1:17787",
+            "proxy_path": "/api/extensions/templates/sidecar/",
+            "upstream_url": "http://127.0.0.1:17787/v1/ping",
+        },
+    )
+    monkeypatch.setattr(
+        routes,
+        "_extension_sidecar_proxy_same_origin_opener",
+        lambda allowed_origin: (
+            captured.__setitem__("allowed_origin", allowed_origin),
+            FakeOpener(),
+        )[1],
+    )
+
+    handler = FakeHandler()
+    result = routes.handle_get(
+        handler,
+        SimpleNamespace(path="/api/extensions/templates/sidecar/v1/ping", query=""),
+    )
+    assert result is True
+    assert captured == {
+        "allowed_origin": "http://127.0.0.1:17787",
+        "url": "http://127.0.0.1:17787/v1/ping",
+        "timeout": 10,
+    }
+    assert handler.status == 200
+    assert handler.body == b'{"ok":true}'
 
 
 def test_extension_sidecar_proxy_consent_route_is_wired(monkeypatch):

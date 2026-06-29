@@ -28,9 +28,9 @@ import uuid
 from collections import defaultdict
 from pathlib import Path
 from contextlib import closing
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from api.agent_sessions import (
     MESSAGING_SOURCES,
     _looks_like_default_cli_title,
@@ -4595,6 +4595,36 @@ def _send_extension_sidecar_proxy_response(handler, status: int, body: bytes, he
     return True
 
 
+def _extension_sidecar_proxy_redirect_url(
+    allowed_origin: str,
+    request_url: str,
+    redirect_url: str,
+) -> str | None:
+    resolved = urljoin(request_url, redirect_url or "")
+    parts = urlsplit(resolved)
+    if not parts.scheme or not parts.netloc:
+        return None
+    redirect_origin = f"{parts.scheme}://{parts.netloc}"
+    if redirect_origin != allowed_origin:
+        return None
+    return resolved
+
+
+def _extension_sidecar_proxy_same_origin_opener(allowed_origin: str):
+    class _SameOriginRedirectHandler(HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            resolved = _extension_sidecar_proxy_redirect_url(
+                allowed_origin,
+                req.full_url,
+                newurl,
+            )
+            if not resolved:
+                raise URLError("Extension sidecar redirect crossed declared origin")
+            return super().redirect_request(req, fp, code, msg, headers, resolved)
+
+    return build_opener(_SameOriginRedirectHandler)
+
+
 def _handle_extension_sidecar_proxy(
     handler,
     parsed,
@@ -4628,7 +4658,8 @@ def _handle_extension_sidecar_proxy(
             headers=_extension_sidecar_proxy_request_headers(handler),
             method=method,
         )
-        with urlopen(request, timeout=10) as response:
+        opener = _extension_sidecar_proxy_same_origin_opener(target["origin"])
+        with opener.open(request, timeout=10) as response:
             return _send_extension_sidecar_proxy_response(
                 handler,
                 getattr(response, "status", 200),
