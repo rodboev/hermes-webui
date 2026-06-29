@@ -79,9 +79,7 @@ def truncate_context_for_display_keep(
     msgs = full_messages if isinstance(full_messages, list) else []
     if not ctx:
         return []
-    if len(ctx) == len(msgs):
-        return ctx[:keep]
-    if len(ctx) < len(msgs):
+    if len(ctx) <= len(msgs):
         return ctx[:keep]
     if len(msgs) == 0:
         return []
@@ -129,13 +127,20 @@ def truncate_context_for_display_keep(
     # Cut at the first unkept display turn, or fallback to the last kept turn
     # if the boundary is not directly alignable.
     if keep < len(msgs):
-        first_unkept = matches[keep]
-        if first_unkept is not None:
-            return ctx[:first_unkept]
+        last_kept = None
         if keep > 0:
             last_kept = matches[keep - 1]
-            if last_kept is not None:
+        first_unkept = matches[keep]
+        if first_unkept is not None:
+            if (
+                last_kept is not None
+                and isinstance(msgs[keep - 1], dict)
+                and msgs[keep - 1].get('role') == 'user'
+            ):
                 return ctx[:last_kept + 1]
+            return ctx[:first_unkept]
+        if last_kept is not None:
+            return ctx[:last_kept + 1]
 
     # Final fallback preserves #5096 behavior when alignment is unreliable.
     prefix_len = max(0, len(ctx) - len(msgs))

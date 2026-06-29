@@ -83,6 +83,29 @@ def test_truncate_context_for_display_keep_keeps_tool_rows_before_next_display_a
     assert contents[-1] != "u2"
 
 
+def test_truncate_context_for_display_keep_drops_unkept_tool_rows_after_user_boundary():
+    msgs = [
+        {"role": "user", "content": "u1", "id": "u1", "timestamp": 1.0},
+        {"role": "assistant", "content": "a1", "id": "a1", "timestamp": 2.0},
+        {"role": "user", "content": "u2", "id": "u2", "timestamp": 3.0},
+        {"role": "assistant", "content": "a2", "id": "a2", "timestamp": 4.0},
+    ]
+    ctx = [
+        {"role": "user", "content": "u1", "id": "u1", "timestamp": 1.0},
+        {"role": "assistant", "content": "a1", "id": "a1", "timestamp": 2.0},
+        {"role": "user", "content": "u2", "id": "u2", "timestamp": 3.0},
+        {"role": "assistant", "content": "tool-call-after-user-keep", "id": "tool-call-after-user-keep"},
+        {"role": "tool", "content": "tool-result-after-user-keep", "id": "tool-result-after-user-keep"},
+        {"role": "assistant", "content": "a2", "id": "a2", "timestamp": 4.0},
+    ]
+    out = truncate_context_for_display_keep(ctx, msgs, 3)
+    contents = [m["content"] for m in out]
+    assert contents == ["u1", "a1", "u2"]
+    assert "tool-call-after-user-keep" not in contents
+    assert "tool-result-after-user-keep" not in contents
+    assert "a2" not in contents
+
+
 def test_truncate_context_for_display_keep_prefers_compact_summary_fallback():
     msgs = [
         {"role": "user", "content": "u1", "id": "u1", "timestamp": 1.0},
