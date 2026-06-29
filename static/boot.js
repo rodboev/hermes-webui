@@ -1750,6 +1750,8 @@ document.addEventListener('keydown',async e=>{
        && !S.session.pending_user_message){
       $('msg').focus();return;
     }
+    // Keep keyboard and button entry points in sync: if a remembered draft
+    // session exists, reopen it before creating a blank chat.
     if(typeof _restoreRememberedNewChatDraftSession==='function'
        && await _restoreRememberedNewChatDraftSession()){
       await renderSessionList();closeMobileSidebar();$('msg').focus();return;

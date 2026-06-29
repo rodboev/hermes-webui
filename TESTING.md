@@ -876,6 +876,8 @@ STEPS:
 EXPECT:
   - A new "Untitled" session is created
   - Empty state shown, input focused
+  - If a remembered draft session exists, the shortcut reopens that draft instead
+    of creating a blank chat
   - Does NOT work if a request is in-flight (Send is disabled)
 FAIL: Nothing happens, browser intercepts shortcut for its own purpose, crash.
 

@@ -15,7 +15,7 @@ BOOT_JS = (REPO / "static" / "boot.js").read_text(encoding="utf-8")
 INDEX = (REPO / "static" / "index.html").read_text(encoding="utf-8")
 ARCH = (REPO / "ARCHITECTURE.md").read_text(encoding="utf-8")
 NODE = shutil.which("node")
-pytestmark = pytest.mark.skipif(NODE is None, reason="node not on PATH")
+requires_node = pytest.mark.skipif(NODE is None, reason="node not on PATH")
 
 
 _B14_MARKER = "if((e.metaKey||e.ctrlKey)&&e.shiftKey&&!e.altKey&&(e.key==='o'||e.key==='O'))"
@@ -171,6 +171,7 @@ def _expect_order(result, expected):
     assert result["calls"] == expected, f"{result['name']} call order mismatch: {result['calls']}"
 
 
+@requires_node
 def test_ctrl_k_no_longer_creates_new_chat():
     """Ctrl/Cmd+K should be ignored and must not create a new session."""
     results = _run_b14_handler([
@@ -187,6 +188,7 @@ def test_ctrl_k_no_longer_creates_new_chat():
         assert row["calls"] == [], f"{name}: unexpected calls: {row['calls']}"
 
 
+@requires_node
 def test_ctrl_shift_o_creates_new_chat_and_keeps_mobile_close_sequence():
     """Ctrl+Shift+O must create and activate the new chat surface."""
     results = _run_b14_handler([
@@ -205,6 +207,7 @@ def test_ctrl_shift_o_creates_new_chat_and_keeps_mobile_close_sequence():
     )
 
 
+@requires_node
 def test_cmd_shift_o_creates_new_chat():
     """Cmd+Shift+O must follow the same new-chat sequence."""
     results = _run_b14_handler([
@@ -223,6 +226,7 @@ def test_cmd_shift_o_creates_new_chat():
     )
 
 
+@requires_node
 def test_ctrl_shift_o_keeps_empty_idle_guard():
     """Empty, in-flight-free sessions must only focus the composer."""
     results = _run_b14_handler([
@@ -245,6 +249,7 @@ def test_ctrl_shift_o_keeps_empty_idle_guard():
         assert row["calls"] == expected, f"{name}: expected {expected}, got {row['calls']}"
 
 
+@requires_node
 def test_ctrl_shift_o_restores_remembered_draft_before_new_session():
     """The shortcut should match the New Conversation button's draft restore path."""
     results = _run_b14_handler([

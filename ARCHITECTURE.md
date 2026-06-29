@@ -1501,8 +1501,9 @@ B10: `es.addEventListener('tool', ...)` now calls `removeThinking()` before upda
      status and shows a compact `.msg-role + .msg-body` tool-running row. `ensureAssistantRow()`
      also removes `#toolRunningRow` when first token arrives.
 
-B14: `document.addEventListener('keydown', ...)` at global scope catches Cmd/Ctrl+Shift+O
-     and calls `newSession()` if not busy.
+B14: `document.addEventListener('keydown', ...)` at global scope catches Cmd/Ctrl+Shift+O,
+     preserves the empty-idle guard, reopens a remembered draft session when one exists,
+     and otherwise falls through to `newSession()`.
 
 
 ### Sprint 4 (March 30, 2026): Relocation + Session Power Features + Phase A/B
