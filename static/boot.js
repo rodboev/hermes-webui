@@ -1712,7 +1712,7 @@ $('msg').addEventListener('keydown',e=>{
     }
   }
 });
-// B14: Cmd/Ctrl+K creates a new chat from anywhere
+// B14: Cmd/Ctrl+Shift+O creates a new chat from anywhere
 document.addEventListener('keydown',async e=>{
   // Cmd/Ctrl+B toggles desktop sidebar collapse (VS Code convention).
   // Skip when typing in an input/textarea/contenteditable so text-edit
@@ -1737,7 +1737,7 @@ document.addEventListener('keydown',async e=>{
       return;
     }
   }
-  if((e.metaKey||e.ctrlKey)&&e.key==='k'){
+  if((e.metaKey||e.ctrlKey)&&e.shiftKey&&!e.altKey&&(e.key==='o'||e.key==='O')){
     e.preventDefault();
     // If the current session has no messages AND nothing is in flight, just focus
     // the composer rather than creating another empty session that will clutter
@@ -1750,7 +1750,7 @@ document.addEventListener('keydown',async e=>{
        && !S.session.pending_user_message){
       $('msg').focus();return;
     }
-    // Cmd/Ctrl+K should always create a new conversation, even while the current
+    // Cmd/Ctrl+Shift+O should always create a new conversation, even while the current
     // one is still streaming. The old !S.busy guard meant users had to wait for
     // a long generation to finish before they could start something new — exactly
     // the moment they want to switch context. newSession() leaves the in-flight

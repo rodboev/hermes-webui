@@ -23,7 +23,7 @@ def _block_from_opening_brace(src: str, brace: int, label: str) -> str:
 
 
 def _escape_block() -> str:
-    document_keydown = BOOT_JS.index("// B14: Cmd/Ctrl+K creates a new chat from anywhere")
+    document_keydown = BOOT_JS.index("// B14: Cmd/Ctrl+Shift+O creates a new chat from anywhere")
     start = BOOT_JS.index("if(e.key==='Escape'){", document_keydown)
     brace = BOOT_JS.index("{", start)
     return _block_from_opening_brace(BOOT_JS, brace, "document Escape handler")
