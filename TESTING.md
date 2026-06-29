@@ -870,9 +870,9 @@ EXPECT:
   - NOT: thinking dots AND "Running..." AND streaming text all visible at once
 FAIL: Thinking dots stay while tool runs, or multiple rows stacked confusingly.
 
-### T17.3: B14 - Cmd/Ctrl+K Creates New Chat
+### T17.3: B14 - Cmd/Ctrl+Shift+O Creates New Chat
 STEPS:
-  1. Press Cmd+K (Mac) or Ctrl+K (Windows/Linux) while on the Chat tab
+  1. Press Cmd+Shift+O (Mac) or Ctrl+Shift+O (Windows/Linux) while on the Chat tab
 EXPECT:
   - A new "Untitled" session is created
   - Empty state shown, input focused

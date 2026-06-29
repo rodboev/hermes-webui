@@ -76,7 +76,7 @@ Remaining gaps and forward work live in [Forward Work](#forward-work) below.
 - [x] Pure-text + tool-call streams both recover
 
 ### Sessions
-- [x] Create session (+ button or Cmd/Ctrl+K)
+- [x] Create session (+ button or Cmd/Ctrl+Shift+O)
 - [x] Load session (click in sidebar)
 - [x] Delete session (hover trash, toast undo, fallback)
 - [x] Auto-title from first user message + adaptive title refresh (configurable cadence)
