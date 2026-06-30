@@ -48,6 +48,12 @@ def _default_message_mode_steer_option(locale_key):
     assert match, f"missing default message mode steer option for {locale_key}"
     return match.group(1)
 
+def _default_message_mode_description(locale_key):
+    block = _locale_block(locale_key)
+    match = re.search(r"settings_desc_default_message_mode: ([\"'])((?:\\.|(?!\1).)*)\1", block)
+    assert match, f"missing default message mode description for {locale_key}"
+    return match.group(2)
+
 
 def test_backend_default_resolves_to_steer():
     assert '"default_message_mode": "steer"' in CONFIG_PY
@@ -89,3 +95,24 @@ def test_busy_input_labels_stay_in_their_locale_blocks():
 
 def test_russian_steer_option_keeps_mid_turn_meaning():
     assert _default_message_mode_steer_option("ru") == "Steer (коррекция в середине хода)"
+
+def test_localized_descriptions_keep_draft_restore_meaning():
+    expected_restore_phrases = {
+        "it": "bozza viene ripristinata",
+        "ja": "下書きが復元",
+        "ru": "черновик восстанавливается",
+        "es": "borrador se restaura",
+        "de": "Entwurf wiederhergestellt",
+        "zh": "恢复草稿",
+        "'zh-Hant'": "恢復草稿",
+        "pt": "rascunho é restaurado",
+        "ko": "초안이 복원",
+        "fr": "brouillon est restauré",
+        "tr": "taslak geri yüklenir",
+        "pl": "szkic zostaje przywrócony",
+        "vi": "bản nháp sẽ được khôi phục",
+    }
+    for locale_key, restore_phrase in expected_restore_phrases.items():
+        assert restore_phrase in _default_message_mode_description(locale_key), (
+            f"{locale_key} description must describe restoring the draft when Steer is unavailable"
+        )
