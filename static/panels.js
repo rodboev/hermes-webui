@@ -7935,6 +7935,9 @@ async function loadSettingsPanel(){
       window._projectQuickCreate=pqcCb.checked;
       pqcCb.onchange=function(){
         window._projectQuickCreate=this.checked;
+        // Rebuild the sidebar so the per-project + buttons appear/disappear
+        // immediately, rather than only on the next render.
+        try{ if(typeof renderSessionListFromCache==='function') renderSessionListFromCache(); }catch(_){}
         _scheduleAppearanceAutosave();
       };
     }
