@@ -6181,6 +6181,11 @@ function _attachProjectQuickCreateButton(chip, project){
     _setActiveProjectFilter(project.project_id);
     try{
       await newSession(false,{project_id:project.project_id});
+      // newSession() does not repaint the sidebar (callers own that — see the
+      // newSession contract). Repaint from the post-create state so the new
+      // project-assigned session appears deterministically.
+      try{ if(typeof renderSessionListFromCache==='function') renderSessionListFromCache(); }catch(_){}
+      try{ if(typeof renderSessionList==='function') void renderSessionList({deferWhileInteracting:false}); }catch(_){}
     }catch(err){
       _setActiveProjectFilter(previousProject);
       if(typeof showToast==='function') showToast('New conversation failed: '+(err&&err.message||err));
