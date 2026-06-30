@@ -5241,7 +5241,7 @@ const LOCALES = {
     settings_placeholder_max_tokens_fallback: 'Переопределения нет (резерв: {0})',
     settings_default_message_mode_queue: 'Поставить в очередь',
     settings_default_message_mode_interrupt: 'Прервать текущий оборот',
-    settings_default_message_mode_steer: 'Steer (прерывание + отправка)',
+    settings_default_message_mode_steer: 'Steer (коррекция в середине хода)',
     settings_label_busy_placeholder_hint: 'Show busy placeholder hint',
     settings_desc_busy_placeholder_hint: 'Shows the composer placeholder with the current busy action while the session is running and the draft is empty.',
     composer_placeholder_busy_queue: 'Enter = queue | /interrupt | /background | /steer',

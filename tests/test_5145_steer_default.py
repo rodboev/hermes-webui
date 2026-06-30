@@ -42,6 +42,12 @@ def _default_message_mode_label(locale_key):
     assert match, f"missing default message mode label for {locale_key}"
     return match.group(1)
 
+def _default_message_mode_steer_option(locale_key):
+    block = _locale_block(locale_key)
+    match = re.search(r"settings_default_message_mode_steer: '([^']+)'", block)
+    assert match, f"missing default message mode steer option for {locale_key}"
+    return match.group(1)
+
 
 def test_backend_default_resolves_to_steer():
     assert '"default_message_mode": "steer"' in CONFIG_PY
@@ -80,3 +86,6 @@ def test_busy_input_labels_stay_in_their_locale_blocks():
     assert _default_message_mode_label("tr") == "Varsayılan mesaj modu"
     assert _default_message_mode_label("pl") == "Domyślny tryb wiadomości"
     assert _default_message_mode_label("vi") == "Chế độ tin nhắn mặc định"
+
+def test_russian_steer_option_keeps_mid_turn_meaning():
+    assert _default_message_mode_steer_option("ru") == "Steer (коррекция в середине хода)"
