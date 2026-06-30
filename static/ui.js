@@ -6334,12 +6334,12 @@ function getComposerPrimaryAction(){
   }
   const explicitAction=_getExplicitBusyCommandAction(msg&&msg.value);
   if(explicitAction) return explicitAction;
-  const busyMode=window._busyInputMode||'queue';
-  if(busyMode==='steer'){
+  const defaultMessageMode=window._defaultMessageMode||'queue';
+  if(defaultMessageMode==='steer'){
     if(S.activeStreamId&&typeof _trySteer==='function') return 'steer';
     return 'queue';
   }
-  if(busyMode==='interrupt'){
+  if(defaultMessageMode==='interrupt'){
     if(S.activeStreamId&&typeof cancelStream==='function') return 'interrupt';
     return 'queue';
   }

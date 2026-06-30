@@ -38,32 +38,32 @@ def _locale_block(locale_key):
 
 def _busy_input_label(locale_key):
     block = _locale_block(locale_key)
-    match = re.search(r"settings_label_busy_input_mode: '([^']+)'", block)
+    match = re.search(r"settings_label_default_message_mode: '([^']+)'", block)
     assert match, f"missing busy input label for {locale_key}"
     return match.group(1)
 
 
 def test_backend_default_resolves_to_steer():
-    assert '"busy_input_mode": "steer"' in CONFIG_PY
+    assert '"default_message_mode": "steer"' in CONFIG_PY
 
 
 def test_boot_defaults_resolve_to_steer():
-    assert "window._busyInputMode=(s.busy_input_mode||'steer')" in BOOT_JS
-    assert "window._busyInputMode='steer'" in BOOT_JS
+    assert "window._defaultMessageMode=(s.default_message_mode||s.busy_input_mode||'steer')" in BOOT_JS
+    assert "window._defaultMessageMode='steer'" in BOOT_JS
 
 
 def test_settings_panel_fallbacks_resolve_to_steer():
-    assert "String(settings.busy_input_mode||'steer')" in PANELS_JS
+    assert "String(settings.default_message_mode||settings.busy_input_mode||'steer')" in PANELS_JS
     assert "['queue','interrupt','steer'].includes(val)?val:'steer'" in PANELS_JS
-    assert "window._busyInputMode=body.busy_input_mode||'steer'" in PANELS_JS
-    assert "const busyInputMode=($('settingsBusyInputMode')||{}).value||'steer'" in PANELS_JS
+    assert "window._defaultMessageMode=body.default_message_mode||body.busy_input_mode||'steer'" in PANELS_JS
+    assert "const defaultMessageMode=($('settingsDefaultMessageMode')||{}).value||'steer'" in PANELS_JS
 
 
 def test_busy_input_label_changes_without_key_or_id_drift():
-    assert 'id="settingsBusyInputMode"' in INDEX_HTML
-    assert 'data-i18n="settings_label_busy_input_mode">While agent is running' in INDEX_HTML
-    assert _busy_input_label("en") == "While agent is running"
-    assert I18N_JS.count("settings_label_busy_input_mode: 'While agent is running'") == 1
+    assert 'id="settingsDefaultMessageMode"' in INDEX_HTML
+    assert 'data-i18n="settings_label_default_message_mode">Default message mode' in INDEX_HTML
+    assert _busy_input_label("en") == "Default message mode"
+    assert I18N_JS.count("settings_label_default_message_mode: 'Default message mode'") == 1
 
 
 def test_busy_input_labels_stay_in_their_locale_blocks():
