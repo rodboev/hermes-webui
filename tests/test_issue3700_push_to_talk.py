@@ -79,13 +79,10 @@ def test_hold_release_routes_to_stop_mic():
     assert "if(startSeq!==_micStartSeq) return;" in src
 
 
-def test_ctrl_shift_d_routes_through_toggle_helper():
+def test_reserved_ctrl_shift_d_shortcut_is_not_bound():
     src = _boot_src()
-    assert "(e.metaKey||e.ctrlKey)&&e.shiftKey&&!e.altKey&&(e.key==='d'||e.key==='D')" in src
-    assert "const isComposer=t&&(t.id==='msg'||(t.closest&&t.closest('#msg')));" in src
-    assert "if((!isText||isComposer)&&typeof window._toggleMicCapture==='function'){" in src
-    assert "typeof window._toggleMicCapture==='function'" in src
-    assert "await window._toggleMicCapture();" in src
+    assert "(e.metaKey||e.ctrlKey)&&e.shiftKey&&!e.altKey&&(e.key==='d'||e.key==='D')" not in src
+    assert "await window._toggleMicCapture();" not in src
 
 
 def test_stop_mic_still_exposed_and_active_capture_mode_retained():

@@ -1918,16 +1918,6 @@ document.addEventListener('keydown',async e=>{
       return;
     }
   }
-  if((e.metaKey||e.ctrlKey)&&e.shiftKey&&!e.altKey&&(e.key==='d'||e.key==='D')){
-    const t=e.target;
-    const isText=t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);
-    const isComposer=t&&(t.id==='msg'||(t.closest&&t.closest('#msg')));
-    if((!isText||isComposer)&&typeof window._toggleMicCapture==='function'){
-      e.preventDefault();
-      await window._toggleMicCapture();
-      return;
-    }
-  }
   // Enter on approval card = Allow once (when a button inside the card is focused or
   // card is visible and focus is not on an input/textarea/select)
   if(e.key==='Enter'&&!e.metaKey&&!e.ctrlKey&&!e.shiftKey){
