@@ -82,6 +82,8 @@ def test_hold_release_routes_to_stop_mic():
 def test_ctrl_shift_d_routes_through_toggle_helper():
     src = _boot_src()
     assert "(e.metaKey||e.ctrlKey)&&e.shiftKey&&!e.altKey&&(e.key==='d'||e.key==='D')" in src
+    assert "const isComposer=t&&(t.id==='msg'||(t.closest&&t.closest('#msg')));" in src
+    assert "if((!isText||isComposer)&&typeof window._toggleMicCapture==='function'){" in src
     assert "typeof window._toggleMicCapture==='function'" in src
     assert "await window._toggleMicCapture();" in src
 
