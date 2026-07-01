@@ -6,6 +6,10 @@ def _boot_src() -> str:
     return Path("static/boot.js").read_text(encoding="utf-8")
 
 
+def _commands_src() -> str:
+    return Path("static/commands.js").read_text(encoding="utf-8")
+
+
 def test_start_mic_capture_extracted():
     src = _boot_src()
     assert re.search(r"async function _startMicCapture\([^)]*\)\{", src)
@@ -24,6 +28,14 @@ def test_toggle_helper_respects_hidden_mic_setting():
     assert "function _micButtonAvailable()" in src
     assert "btn.classList.contains('composer-control-hidden')" in src
     assert "btn.getAttribute('aria-hidden')==='true'" in src
+
+
+def test_voice_command_respects_hidden_mic_setting_before_clicking():
+    src = _commands_src()
+    assert "function cmdVoice()" in src
+    assert "mic.classList.contains('composer-control-hidden')" in src
+    assert "mic.getAttribute('aria-hidden')!=='true'" in src
+    assert "showToast(t('cmd_voice_use_mic'));" in src
 
 
 def test_old_onclick_handler_removed():
