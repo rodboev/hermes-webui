@@ -1735,6 +1735,8 @@ function _sidebarOriginLabelForId(originId, fallback='') {
 }
 
 function _sidebarOriginIdForSession(session) {
+  const rawOrigin = _normalizeSidebarOriginId(_sourceKeyForSession(session));
+  if (rawOrigin === 'cron') return 'cron';
   if (!session || !_isExternalSession(session)) return 'webui';
   if (_isMessagingSession(session)) {
     const messagingOrigin = _normalizeSidebarOriginId(_sourceKeyForSession(session));
@@ -1742,7 +1744,7 @@ function _sidebarOriginIdForSession(session) {
       ? messagingOrigin
       : 'cli';
   }
-  return _normalizeSidebarOriginId(_sourceKeyForSession(session)) === 'cron' ? 'cron' : 'cli';
+  return rawOrigin === 'cron' ? 'cron' : 'cli';
 }
 
 function _isCliSession(session) {
@@ -6095,6 +6097,25 @@ function renderSessionListFromCache(){
     note.appendChild(retry);
     list.appendChild(note);
   }
+  const sessionSearchInput=$('sessionSearch');
+  const sessionSearchField=sessionSearchInput ? sessionSearchInput.closest('.session-search-field') : null;
+  let sessionSearchInputWrap=sessionSearchField ? sessionSearchField.querySelector('.session-search-input-wrap') : null;
+  if(sessionSearchField && !sessionSearchInputWrap){
+    sessionSearchInputWrap=document.createElement('div');
+    sessionSearchInputWrap.className='session-search-input-wrap';
+    const searchIcon=sessionSearchField.querySelector('.sidebar-search-icon');
+    const clearBtn=$('sessionSearchClear');
+    if(searchIcon) sessionSearchInputWrap.appendChild(searchIcon);
+    sessionSearchInputWrap.appendChild(sessionSearchInput);
+    if(clearBtn) sessionSearchInputWrap.appendChild(clearBtn);
+    sessionSearchField.prepend(sessionSearchInputWrap);
+  }
+  let sessionSearchFilterSlot=sessionSearchField ? sessionSearchField.querySelector('.session-search-filter-slot') : null;
+  if(sessionSearchField && !sessionSearchFilterSlot){
+    sessionSearchFilterSlot=document.createElement('div');
+    sessionSearchFilterSlot.className='session-search-filter-slot';
+    sessionSearchField.appendChild(sessionSearchFilterSlot);
+  }
   const filterBar=document.createElement('div');
   filterBar.className='session-filter-bar';
   const funnelBtn=document.createElement('button');
@@ -6187,7 +6208,8 @@ function renderSessionListFromCache(){
   });
   filterBar.appendChild(funnelBtn);
   filterBar.appendChild(popover);
-  list.appendChild(filterBar);
+  if(sessionSearchFilterSlot) sessionSearchFilterSlot.replaceChildren(filterBar);
+  else list.appendChild(filterBar);
   // Project filter bar — show when there are real projects OR there are
   // unassigned sessions (so the Unassigned chip has something to filter to).
   const hasUnprojected=profileFiltered.some(s=>!s.project_id);
