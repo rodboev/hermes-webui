@@ -1804,8 +1804,11 @@ def _session_list_cache_key(
     include_archived: bool = False,
     exclude_hidden: bool = False,
     visible_only: bool = False,
+    show_webhook_sessions: bool = False,
     source_filter: str | None = None,
     sidebar_source: str | None = None,
+    archived_limit: int | None = None,
+    archived_offset: int = 0,
     show_claude_code_sessions: bool = True,
 ) -> tuple:
     return _route_session_list_cache_key(
@@ -1817,8 +1820,11 @@ def _session_list_cache_key(
         include_archived=include_archived,
         exclude_hidden=exclude_hidden,
         visible_only=visible_only,
+        show_webhook_sessions=show_webhook_sessions,
         source_filter=source_filter,
         sidebar_source=sidebar_source,
+        archived_limit=archived_limit,
+        archived_offset=archived_offset,
     ) + (bool(show_claude_code_sessions),)
 
 _ROUTE_SESSION_LIST_CACHE_DYNAMIC_EXPORTS = {
