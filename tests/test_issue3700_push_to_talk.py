@@ -19,6 +19,13 @@ def test_toggle_mic_capture_exposed_on_window():
     assert "window._toggleMicCapture=_toggleMicCapture;" in src
 
 
+def test_toggle_helper_respects_hidden_mic_setting():
+    src = _boot_src()
+    assert "function _micButtonAvailable()" in src
+    assert "btn.classList.contains('composer-control-hidden')" in src
+    assert "btn.getAttribute('aria-hidden')==='true'" in src
+
+
 def test_old_onclick_handler_removed():
     src = _boot_src()
     assert "btn.onclick=async()=>{" not in src

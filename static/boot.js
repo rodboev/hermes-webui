@@ -871,7 +871,12 @@ function _micToastKeyForRecognitionError(error){
   }
 
   function _micButtonAvailable(){
-    return !!(btn&&btn.style.display!=='none'&&!btn.disabled);
+    if(!btn||btn.disabled) return false;
+    if(btn.style.display==='none') return false;
+    if(btn.classList.contains('composer-control-hidden')) return false;
+    if(btn.getAttribute('aria-hidden')==='true') return false;
+    if(window.getComputedStyle&&window.getComputedStyle(btn).display==='none') return false;
+    return true;
   }
 
   async function _startMicCapture(holdRequired=false){
