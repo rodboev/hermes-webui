@@ -7795,8 +7795,8 @@ async function _autosavePreferencesSettings(payload){
       document.documentElement.dataset.conversationOutline=window._showConversationOutline?'enabled':'disabled';
       if(typeof applyConversationOutlinePreference==='function') applyConversationOutlinePreference();
     }
-    if(payload&&payload.busy_input_mode!==undefined){
-      window._busyInputMode=(saved&&saved.busy_input_mode)||'queue';
+    if(payload&&payload.default_message_mode!==undefined){
+      window._defaultMessageMode=(saved&&saved.default_message_mode)||(saved&&saved.busy_input_mode)||'steer';
       if(typeof _applyBusyComposerPlaceholder==='function') _applyBusyComposerPlaceholder();
     }
     if(payload&&payload.show_busy_placeholder_hint!==undefined){

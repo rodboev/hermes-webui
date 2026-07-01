@@ -6357,7 +6357,7 @@ function _applyBusyComposerPlaceholder(){
     input.placeholder=idlePlaceholder;
     return;
   }
-  const busyMode=window._busyInputMode||'queue';
+  const busyMode=window._defaultMessageMode||'steer';
   const busyPlaceholderKey=busyMode==='interrupt'
     ? 'composer_placeholder_busy_interrupt'
     : busyMode==='steer'
