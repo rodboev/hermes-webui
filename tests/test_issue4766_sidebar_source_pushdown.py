@@ -290,12 +290,16 @@ def test_origin_filter_toggle_updates_local_state_without_refetch():
     normalize_origin_fn = _extract_function(src, "_normalizeSidebarOriginId")
     persist_fn = _extract_function(src, "_persistOriginFilters")
     signature_fn = _extract_function(src, "_originFilterSignature")
+    capture_seed_fn = _extract_function(src, "_captureOriginFilterCronDefaultSeed")
+    include_default_fn = _extract_function(src, "_originFilterDefaultsInclude")
     ensure_fn = _extract_function(src, "_ensureOriginFilterDefaults")
     fn_toggle = _extract_function(src, "_toggleOriginFilter")
     script = f"""
     const renderCalls = [];
+    global.window = {{ _showCliSessions: true, _showCronSessions: false }};
     global._originFiltersHydrated = false;
     global._originFiltersLoadedFromStorage = false;
+    global._originFilterCronDefaultSeed = null;
     global._activeOriginFilters = new Set(['webui', 'cli']);
     global._activeProject = 'demo-project';
     global._selectedSessions = new Set(['first', 'second']);
@@ -312,6 +316,8 @@ global.localStorage = {{
     {normalize_origin_fn}
     {persist_fn}
     {signature_fn}
+    {capture_seed_fn}
+    {include_default_fn}
     {ensure_fn}
     {fn_toggle}
     _toggleOriginFilter('cli');
@@ -349,9 +355,11 @@ def test_origin_filter_defaults_expand_catalog_without_overriding_saved_choices(
     normalize_origin_fn = _extract_function(src, "_normalizeSidebarOriginId")
     persist_fn = _extract_function(src, "_persistOriginFilters")
     signature_fn = _extract_function(src, "_originFilterSignature")
+    capture_seed_fn = _extract_function(src, "_captureOriginFilterCronDefaultSeed")
+    include_default_fn = _extract_function(src, "_originFilterDefaultsInclude")
     ensure_fn = _extract_function(src, "_ensureOriginFilterDefaults")
     script = f"""
-    global.window = {{ _showCliSessions: true }};
+    global.window = {{ _showCliSessions: true, _showCronSessions: false }};
     global.localStorage = {{
       writes: [],
       setItem(key, value) {{
@@ -361,9 +369,12 @@ def test_origin_filter_defaults_expand_catalog_without_overriding_saved_choices(
     global._activeOriginFilters = new Set(['webui']);
     global._originFiltersHydrated = false;
     global._originFiltersLoadedFromStorage = false;
+    global._originFilterCronDefaultSeed = null;
     {normalize_origin_fn}
     {persist_fn}
     {signature_fn}
+    {capture_seed_fn}
+    {include_default_fn}
     {ensure_fn}
 const firstChanged = _ensureOriginFilterDefaults([
   {{ id: 'webui' }},

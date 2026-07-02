@@ -1915,13 +1915,16 @@ function _sidebarOriginOptions(originCounts, originLabels) {
 }
 
 function _ensureOriginFilterDefaults(originOptions) {
+  _captureOriginFilterCronDefaultSeed();
   const optionIds = (originOptions || [])
     .map(origin => _normalizeSidebarOriginId(origin && origin.id))
     .filter(origin => origin && origin !== 'webui');
   if (!_originFiltersHydrated) {
     const next = new Set(['webui']);
     if (window._showCliSessions) {
-      for (const originId of optionIds) next.add(originId);
+      for (const originId of optionIds) {
+        if (_originFilterDefaultsInclude(originId)) next.add(originId);
+      }
     }
     if (_originFilterSignature(next) === _originFilterSignature(_activeOriginFilters)) {
       _originFiltersHydrated = true;
@@ -1940,7 +1943,9 @@ function _ensureOriginFilterDefaults(originOptions) {
     _persistOriginFilters();
     return true;
   }
-  for (const originId of optionIds) next.add(originId);
+  for (const originId of optionIds) {
+    if (_originFilterDefaultsInclude(originId)) next.add(originId);
+  }
   if (_originFilterSignature(next) === _originFilterSignature(_activeOriginFilters)) return false;
   _activeOriginFilters = next;
   _persistOriginFilters();
@@ -1988,6 +1993,7 @@ async function _toggleSidebarPreviousMessagingSessions(enabled) {
 async function _ensureSidebarOriginSettingsInitialized() {
   if (_sidebarOriginSettingsInitPromise) return _sidebarOriginSettingsInitPromise;
   if (typeof window._showCliSessions === 'undefined') return null;
+  _captureOriginFilterCronDefaultSeed();
   if (window._showCliSessions && window._showCronSessions) return null;
   _sidebarOriginSettingsInitPromise = _persistSidebarVisibilitySettings({
     show_previous_messaging_sessions: !!window._showPreviousMessagingSessions,
@@ -3104,6 +3110,16 @@ let _archivedCliCount = 0;        // archived non-WebUI sessions not fetched unt
 let _activeOriginFilters = new Set(['webui']);  // always includes 'webui'; user may add 'cli'
 let _originFiltersLoadedFromStorage = false;
 let _originFiltersHydrated = false;
+let _originFilterCronDefaultSeed = null; // null means pre-persist value not captured yet
+function _captureOriginFilterCronDefaultSeed() {
+  if (_originFilterCronDefaultSeed === null) {
+    _originFilterCronDefaultSeed = !!window._showCronSessions;
+  }
+  return _originFilterCronDefaultSeed;
+}
+function _originFilterDefaultsInclude(originId) {
+  return originId !== 'cron' || _captureOriginFilterCronDefaultSeed();
+}
 let _sidebarOriginCatalog = [];
 let _sidebarOriginCatalogFetchedAt = 0;
 let _sidebarOriginCatalogRequest = null;
