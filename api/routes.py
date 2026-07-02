@@ -16462,6 +16462,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     """Connect to a pinned IP while keeping Host and TLS SNI on the hostname."""
 
     def connect(self):
+        sys.audit("http.client.connect", self, self.host, self.port)
         pinned_host = _tts_resolve_pinned_address(self.host)
         self.sock = self._create_connection(
             (pinned_host, self.port), self.timeout, self.source_address

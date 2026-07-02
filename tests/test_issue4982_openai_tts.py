@@ -254,11 +254,13 @@ def test_openai_tts_pinned_connection_preserves_host_and_sni(monkeypatch):
     response_bytes = _http_response_bytes(200, b"audio-openai", headers={"Content-Length": "11"})
     fake_socket = _FakeSocketForHttps(response_bytes)
     observed = {}
+    created = []
 
     def _fake_getaddrinfo(*_args, **_kwargs):
         return [(0, 0, 0, "", ("1.1.1.1", 443))]
 
-    def _fake_create_connection(_address, *_args, **_kwargs):
+    def _fake_create_connection(address, *_args, **_kwargs):
+        created.append(address)
         return fake_socket
 
     def _fake_wrap_socket(_context, sock, *args, server_hostname=None, **_kwargs):
@@ -280,6 +282,7 @@ def test_openai_tts_pinned_connection_preserves_host_and_sni(monkeypatch):
     assert h.status == 200
     assert h.sent_headers["Content-Type"] == "audio/mpeg"
     assert h.wfile.getvalue().startswith(b"audio-open")
+    assert created == [("1.1.1.1", 443)]
     assert observed["server_hostname"] == host
     sent = b"".join(fake_socket.writes).decode("utf-8", "replace")
     assert f"Host: {host}" in sent
@@ -289,11 +292,13 @@ def test_openai_tts_rejects_redirect_with_pinned_opener(monkeypatch):
     host = "redirect-openai.example.com"
     response_bytes = _http_response_bytes(302, headers={"Location": "http://169.254.169.254/v1/audio/speech"}, reason="Found")
     fake_socket = _FakeSocketForHttps(response_bytes)
+    created = []
 
     def _fake_getaddrinfo(*_args, **_kwargs):
         return [(0, 0, 0, "", ("1.1.1.1", 443))]
 
-    def _fake_create_connection(_address, *_args, **_kwargs):
+    def _fake_create_connection(address, *_args, **_kwargs):
+        created.append(address)
         return fake_socket
 
     def _fake_wrap_socket(_context, sock, *args, **kwargs):
@@ -312,6 +317,7 @@ def test_openai_tts_rejects_redirect_with_pinned_opener(monkeypatch):
     routes._handle_tts(h, None)
 
     assert h.status in (500, 502)
+    assert created == [("1.1.1.1", 443)]
     assert "OpenAI TTS generation failed" in (h.payload() or {}).get("error", "")
 
 
