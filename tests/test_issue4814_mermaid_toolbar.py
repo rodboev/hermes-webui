@@ -239,10 +239,17 @@ function runScenario(payload) {
     lightboxState.viewport.clientWidth = payload.viewportWidth || 960;
     lightboxState.viewport.clientHeight = payload.viewportHeight || 540;
     lightboxState.viewport.getBoundingClientRect = () => ({left: 0, top: 0, width: lightboxState.viewport.clientWidth, height: lightboxState.viewport.clientHeight});
+    const initialScale = lightboxState.scale;
+    const initialViewportWidth = lightboxState.viewport.style.width;
+    const initialViewportHeight = lightboxState.viewport.style.height;
+    lightboxState.fit();
     return {
-      scale: lightboxState.scale,
-      viewportWidth: lightboxState.viewport.style.width,
-      viewportHeight: lightboxState.viewport.style.height,
+      initialScale,
+      fitScale: lightboxState.scale,
+      initialViewportWidth,
+      initialViewportHeight,
+      viewportWidthAfterFit: lightboxState.viewport.style.width,
+      viewportHeightAfterFit: lightboxState.viewport.style.height,
       lightboxLabels: labelsFromToolbar(lightbox),
       mode: lightboxState.mode,
     };
@@ -421,7 +428,11 @@ def test_lightbox_wide_diagram_fits_modal_envelope(_driver_path):
 
     assert result["mode"] == "lightbox"
     expected_max_width = int(360 * 0.9)
-    assert _px(result["viewportWidth"]) <= expected_max_width
-    assert _px(result["viewportWidth"]) > 0
-    assert _px(result["viewportHeight"]) > 0
-    assert result["scale"] < 0.1
+    expected_max_height = int(640 * 0.9)
+    assert _px(result["initialViewportWidth"]) == expected_max_width
+    assert _px(result["initialViewportHeight"]) == expected_max_height
+    assert result["initialScale"] > result["fitScale"]
+    assert result["initialScale"] > 0.25
+    assert result["fitScale"] < 0.1
+    assert _px(result["viewportWidthAfterFit"]) == expected_max_width
+    assert _px(result["viewportHeightAfterFit"]) == expected_max_height

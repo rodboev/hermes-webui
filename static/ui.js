@@ -1678,9 +1678,13 @@ function _mountMermaidViewer(svgEl, options = {}) {
   }
 
   if(mode === 'lightbox'){
-    state.scale = _fitScale();
-    viewport.style.width = Math.max(1, Math.round(box.width * state.scale)) + 'px';
-    viewport.style.height = Math.max(1, Math.round(box.height * state.scale)) + 'px';
+    const envelope = _viewportFallbackSize();
+    const fitScale = Math.max(_minScale(), Math.min(_MERMAID_VIEWER_MAX_SCALE, _rawFitScale(envelope)));
+    const readableHeight = Math.max(_MERMAID_VIEWER_INLINE_MIN_HEIGHT, Math.min(envelope.height, Math.round(box.height)));
+    const readableScale = Math.min(_MERMAID_VIEWER_MAX_SCALE, readableHeight / Math.max(1, box.height));
+    state.scale = Math.max(fitScale, readableScale);
+    viewport.style.width = Math.max(1, Math.round(envelope.width)) + 'px';
+    viewport.style.height = Math.max(1, Math.round(envelope.height)) + 'px';
   } else {
     const initialHeight = _inlineViewportHeight();
     const readableScale = initialHeight / Math.max(1, box.height);
