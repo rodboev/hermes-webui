@@ -16746,7 +16746,7 @@ def _handle_tts(handler, parsed):
         # dialed. Keep the no-redirect handler in the same chain to block
         # bearer leaks and SSRF bounce redirects after hostname validation.
         try:
-            with _tts_open(req, timeout=30, opener_factory=lambda: build_opener(_NoRedirectTtsHandler(), _PinnedHTTPSHandler())) as resp:
+            with _tts_open(req, timeout=30, opener_factory=lambda: build_opener(ProxyHandler({}), _NoRedirectTtsHandler(), _PinnedHTTPSHandler())) as resp:
                 audio_data = _buffer_tts_audio_response(resp)
         except ValueError:
             logger.warning("OpenAI TTS rejected an invalid upstream response", exc_info=True)

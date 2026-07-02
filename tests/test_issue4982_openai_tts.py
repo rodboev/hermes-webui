@@ -224,8 +224,14 @@ def test_openai_tts_does_not_connect_to_rebound_private_address(monkeypatch):
         return [(0, 0, 0, "", ("169.254.169.254", 443))]
 
     def _fake_create_connection(address, *args, **_kwargs):
-        created.append(address)
-        raise AssertionError(f"connect should not run with this test; got {address}")
+        dial_host, dial_port = address
+        try:
+            socket.inet_aton(dial_host)
+            resolved = dial_host
+        except OSError:
+            resolved = socket.getaddrinfo(dial_host, dial_port)[0][4][0]
+        created.append((resolved, dial_port))
+        raise AssertionError(f"connect should not run with this test; got {(resolved, dial_port)}")
 
     def _fake_wrap_socket(_context, sock, *args, **kwargs):
         return sock
@@ -319,6 +325,44 @@ def test_openai_tts_rejects_redirect_with_pinned_opener(monkeypatch):
     assert h.status in (500, 502)
     assert created == [("1.1.1.1", 443)]
     assert "OpenAI TTS generation failed" in (h.payload() or {}).get("error", "")
+
+
+def test_openai_tts_ignores_https_proxy_and_dials_pinned_target(monkeypatch):
+    host = "proxy-safe-openai.example.com"
+    response_bytes = _http_response_bytes(200, b"audio-openai", headers={"Content-Length": "11"})
+    fake_socket = _FakeSocketForHttps(response_bytes)
+    created = []
+
+    def _fake_getaddrinfo(target_host, *_args, **_kwargs):
+        if target_host == host:
+            return [(0, 0, 0, "", ("1.1.1.1", 443))]
+        if target_host == "127.0.0.1":
+            return [(0, 0, 0, "", ("127.0.0.1", 8888))]
+        raise AssertionError(f"unexpected DNS lookup for {target_host}")
+
+    def _fake_create_connection(address, *_args, **_kwargs):
+        created.append(address)
+        return fake_socket
+
+    def _fake_wrap_socket(_context, sock, *args, **kwargs):
+        return sock
+
+    import api.config as config
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+    monkeypatch.setattr(socket, "create_connection", _fake_create_connection)
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", _fake_wrap_socket)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+    monkeypatch.setenv("https_proxy", "http://127.0.0.1:8888")
+    monkeypatch.setattr(config, "get_config", lambda: {
+        "tts": {"openai": {"base_url": f"https://{host}/v1"}}
+    })
+    h = _post({"text": "Hello", "engine": "openai"}, client="10.82.0.11")
+    routes._handle_tts(h, None)
+
+    assert h.status == 200
+    assert created == [("1.1.1.1", 443)]
 
 
 @pytest.mark.parametrize("base_url", [
