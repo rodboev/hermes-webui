@@ -31,7 +31,7 @@ pkgs.stdenv.mkDerivation {
     cp -r "${./../static}" "$out/${runtimeDir}/"
 
     makeWrapper ${pythonEnv}/bin/python3 "$out/bin/hermes-webui" \
-      --add-flags "$out/${runtimeDir}/bootstrap.py --foreground --no-browser"
+      --add-flags "$out/${runtimeDir}/bootstrap.py --foreground --no-browser --skip-agent-install"
 
     runHook postInstall
   '';
