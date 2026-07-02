@@ -1196,6 +1196,7 @@ const LOCALES = {
     providers_status_not_configured: 'No API key',
     providers_status_oauth: 'OAuth',
     providers_status_api_key: 'API key',
+    providers_status_model: 'Model',
     providers_status_not_configured_label: 'Not configured',
     providers_oauth_hint: 'Authenticated via OAuth. No API key needed.',
     providers_oauth_config_yaml_hint: 'Token configured via config.yaml. To update, edit the providers section in your config.yaml or run hermes auth.',
