@@ -10,12 +10,99 @@ Verifies:
   7. i18n keys exist for all branch-related strings
   8. git-branch icon exists in icons.js
 """
+import json
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+COMMANDS_JS = ROOT / "static" / "commands.js"
+NODE = shutil.which("node")
 
 
 def _read(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
+
+
+def _extract_async_function(source: str, name: str) -> str:
+    start = source.find(f"async function {name}(")
+    assert start != -1, f"Could not find async function {name}"
+    brace = source.find("{", start)
+    assert brace != -1, f"Could not find opening brace for {name}"
+    depth = 0
+    for idx in range(brace, len(source)):
+        ch = source[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:idx + 1]
+    pytest.fail(f"Could not extract complete function body for {name}")
+
+
+def _run_node(script: str) -> str:
+    if NODE is None:
+        pytest.skip("node not on PATH")
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as handle:
+        handle.write(script)
+        script_path = handle.name
+    try:
+        proc = subprocess.run(
+            [NODE, script_path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return proc.stdout.strip()
+    finally:
+        Path(script_path).unlink(missing_ok=True)
+
+
+def _commands_harness(body: str) -> str:
+    source = COMMANDS_JS.read_text(encoding="utf-8")
+    cmd_branch = _extract_async_function(source, "cmdBranch")
+    fork_from = _extract_async_function(source, "forkFromMessage")
+    return _run_node(
+        "\n".join([
+            "const calls = [];",
+            "const toasts = [];",
+            "let ensureCalls = 0;",
+            "let loadedSessions = [];",
+            "let renderCalls = 0;",
+            "let _oldestIdx = 0;",
+            "let S = { session: null, busy: false };",
+            "const t = (key) => ({",
+            "  no_active_session: 'No active session',",
+            "  branch_forked: 'Forked into new session',",
+            "  branch_failed: 'Fork failed: ',",
+            "}[key] || key);",
+            "const showToast = (...args) => { toasts.push(args); };",
+            "const api = async (url, opts) => {",
+            "  calls.push({ url, body: JSON.parse(opts.body) });",
+            "  return { session_id: 'forked-session' };",
+            "};",
+            "const loadSession = async (sid) => { loadedSessions.push(sid); };",
+            "const renderSessionList = async () => { renderCalls += 1; };",
+            "const _ensureAllMessagesLoaded = async () => { ensureCalls += 1; };",
+            "function _isReadOnlySession(session) {",
+            "  return !!(session && (session.read_only || session.is_read_only));",
+            "}",
+            cmd_branch,
+            fork_from,
+            "(async () => {",
+            body,
+            "})().catch((err) => {",
+            "  console.error(err && err.stack ? err.stack : String(err));",
+            "  process.exit(1);",
+            "});",
+        ])
+    )
 
 
 # ── Backend ────────────────────────────────────────────────────────────────────
@@ -280,6 +367,66 @@ def test_fork_button_in_message_actions():
     # The footHtml template should include forkBtn
     assert '${forkBtn}' in src, \
         "forkBtn should be included in message actions template"
+
+
+def test_fork_button_is_hidden_for_read_only_sessions():
+    """Read-only sessions should not render the message-level fork affordance."""
+    src = _read('static/ui.js')
+    assert "const readOnlySession=typeof _isReadOnlySession==='function'" in src, \
+        "ui.js should derive a read-only session flag from the shared helper"
+    assert "const forkBtn  = readOnlySession ? '' :" in src, \
+        "fork button should be suppressed when the active session is read-only"
+
+
+def test_cmdBranch_rejects_read_only_sessions_without_posting():
+    """The /branch command must not POST for read-only sessions."""
+    result = _commands_harness(
+        "S.session = { session_id: 'cron-1', read_only: true };\n"
+        "await cmdBranch('');\n"
+        "console.log(JSON.stringify({ calls, toasts, ensureCalls, loadedSessions, renderCalls }));"
+    )
+    payload = json.loads(result)
+    assert payload["calls"] == [], "read-only /branch should not POST /api/session/branch"
+    assert payload["ensureCalls"] == 0, "cmdBranch should not trigger message loading"
+    assert payload["loadedSessions"] == [], "read-only /branch should not switch sessions"
+    assert payload["renderCalls"] == 0, "read-only /branch should not refresh the session list"
+    assert payload["toasts"], "read-only /branch should surface a toast"
+    assert payload["toasts"][0][0] == "Read-only sessions cannot be forked."
+
+
+def test_forkFromMessage_rejects_read_only_sessions_without_loading_or_posting():
+    """Read-only message forks must stop before the load/post path."""
+    result = _commands_harness(
+        "S.session = { session_id: 'cron-1', read_only: true };\n"
+        "await forkFromMessage(1);\n"
+        "console.log(JSON.stringify({ calls, toasts, ensureCalls, loadedSessions, renderCalls }));"
+    )
+    payload = json.loads(result)
+    assert payload["calls"] == [], "read-only forkFromMessage should not POST /api/session/branch"
+    assert payload["ensureCalls"] == 0, "read-only forkFromMessage should return before loading messages"
+    assert payload["loadedSessions"] == [], "read-only forkFromMessage should not switch sessions"
+    assert payload["renderCalls"] == 0, "read-only forkFromMessage should not refresh the session list"
+    assert payload["toasts"], "read-only forkFromMessage should surface a toast"
+    assert payload["toasts"][0][0] == "Read-only sessions cannot be forked."
+
+
+def test_forkFromMessage_preserves_absolute_keep_count_for_writable_sessions():
+    """The read-only guard must not break the existing absolute keep_count fix."""
+    result = _commands_harness(
+        "S.session = { session_id: 'webui-1', read_only: false };\n"
+        "_oldestIdx = 5;\n"
+        "await forkFromMessage(3);\n"
+        "console.log(JSON.stringify({ calls, toasts, ensureCalls, loadedSessions, renderCalls }));"
+    )
+    payload = json.loads(result)
+    assert len(payload["calls"]) == 1, "writable forkFromMessage should still POST once"
+    call = payload["calls"][0]
+    assert call["url"] == "/api/session/branch"
+    assert call["body"]["session_id"] == "webui-1"
+    assert call["body"]["keep_count"] == 8, "keep_count should remain absolute across the guard"
+    assert payload["ensureCalls"] == 2, "writable forkFromMessage should preserve both message-load calls"
+    assert payload["loadedSessions"] == ["forked-session"]
+    assert payload["renderCalls"] == 1
 
 
 # ── Frontend: sidebar parent indicator ────────────────────────────────────────
