@@ -397,7 +397,7 @@ def test_lightbox_mode_uses_same_viewer_helper_without_fullscreen(_driver_path):
 def test_lightbox_wide_diagram_fits_modal_envelope(_driver_path):
     result = _run_node(_driver_path, {
         "scenario": "wide-lightbox",
-        "width": 2400,
+        "width": 4000,
         "height": 320,
         "viewportWidth": 360,
         "viewportHeight": 640,
@@ -408,4 +408,4 @@ def test_lightbox_wide_diagram_fits_modal_envelope(_driver_path):
     assert _px(result["viewportWidth"]) <= 324
     assert _px(result["viewportWidth"]) > 0
     assert _px(result["viewportHeight"]) > 0
-    assert result["scale"] < 0.25
+    assert result["scale"] < 0.1

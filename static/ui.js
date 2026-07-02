@@ -1397,7 +1397,6 @@ function _openImgLightbox(imgEl) {
 }
 
 const _MERMAID_VIEWER_MIN_SCALE = 0.25;
-const _MERMAID_VIEWER_LIGHTBOX_MIN_SCALE = 0.1;
 const _MERMAID_VIEWER_MAX_SCALE = 8;
 const _MERMAID_VIEWER_ZOOM_STEP = 1.2;
 const _MERMAID_VIEWER_INLINE_MIN_HEIGHT = 220;
@@ -1525,8 +1524,13 @@ function _mountMermaidViewer(svgEl, options = {}) {
     };
   }
 
+  function _rawFitScale(size){
+    return Math.min(size.width / Math.max(1, box.width), size.height / Math.max(1, box.height));
+  }
+
   function _minScale(){
-    return mode === 'lightbox' ? _MERMAID_VIEWER_LIGHTBOX_MIN_SCALE : _MERMAID_VIEWER_MIN_SCALE;
+    if(mode !== 'lightbox') return _MERMAID_VIEWER_MIN_SCALE;
+    return Math.min(_MERMAID_VIEWER_MIN_SCALE, _rawFitScale(_viewportSize()));
   }
 
   function _inlineViewportHeight(){
@@ -1552,7 +1556,7 @@ function _mountMermaidViewer(svgEl, options = {}) {
 
   function _fitScale(){
     const size = _viewportSize();
-    return Math.max(_minScale(), Math.min(_MERMAID_VIEWER_MAX_SCALE, Math.min(size.width / box.width, size.height / box.height)));
+    return Math.max(_minScale(), Math.min(_MERMAID_VIEWER_MAX_SCALE, _rawFitScale(size)));
   }
 
   function _setScale(nextScale, anchorX, anchorY){
