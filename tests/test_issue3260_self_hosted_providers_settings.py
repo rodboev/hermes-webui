@@ -74,6 +74,68 @@ eval(fnSource);
 """
 
 
+_PROBE_DRIVER = r"""
+const fs = require('fs');
+const scenario = JSON.parse(process.argv[2] || '{}');
+const fnSource = fs.readFileSync(process.argv[3], 'utf8');
+const calls = [];
+const toasts = [];
+const saveBtn = { disabled: true, textContent: 'Save' };
+const testBtn = { disabled: false, textContent: 'Test connection' };
+const probeStatus = { style: {}, textContent: '' };
+const baseUrlInput = { value: scenario.baseUrl };
+const apiKeyInput = { value: scenario.apiKey || '' };
+const modelInput = { value: scenario.model || '' };
+
+globalThis._providerCardEls = new Map();
+globalThis._providerCardEls.set(scenario.providerId, {
+  isSelfHosted: true,
+  baseUrlInput,
+  apiKeyInput,
+  modelInput,
+  saveBtn,
+  testBtn,
+  probeStatus,
+  setModelChoices(models) {
+    this.modelChoices = models;
+  },
+  updateSaveState() {
+    saveBtn.disabled = !(baseUrlInput.value.trim() && modelInput.value.trim());
+  },
+});
+
+globalThis.api = async (url, opts) => {
+  calls.push({
+    url,
+    method: opts.method,
+    body: JSON.parse(opts.body),
+  });
+  return {
+    ok: true,
+    models: [{ id: scenario.discoveredModel }],
+  };
+};
+globalThis.showToast = (msg) => toasts.push(msg);
+
+eval(fnSource);
+
+(async () => {
+  await _testSelfHostedConnection(scenario.providerId);
+  process.stdout.write(JSON.stringify({
+    calls,
+    toasts,
+    saveDisabled: saveBtn.disabled,
+    modelValue: modelInput.value,
+    probeText: probeStatus.textContent,
+    testDisabled: testBtn.disabled,
+  }));
+})().catch((error) => {
+  process.stderr.write(String(error && error.stack || error));
+  process.exit(1);
+});
+"""
+
+
 @pytest.fixture
 def isolated_self_hosted_env(monkeypatch, tmp_path):
     _install_fake_hermes_cli(monkeypatch)
@@ -281,3 +343,42 @@ def test_save_self_hosted_provider_posts_expected_payload(tmp_path):
     assert payload["refreshCount"] == 1
     assert payload["reloadCount"] == 1
     assert payload["apiKeyAfter"] == ""
+
+
+def test_probe_self_hosted_provider_populates_model_and_enables_save(tmp_path):
+    if NODE is None:
+        pytest.skip("node is required to execute the self-hosted provider harness")
+
+    fn_path = tmp_path / "testSelfHostedConnection.js"
+    fn_path.write_text(
+        extract_function(PANELS_JS, "_testSelfHostedConnection", prefix="async function"),
+        encoding="utf-8",
+    )
+    driver_path = tmp_path / "probe-driver.js"
+    driver_path.write_text(_PROBE_DRIVER, encoding="utf-8")
+    scenario = {
+        "providerId": "ollama",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "apiKey": "",
+        "model": "",
+        "discoveredModel": "qwen3:8b",
+    }
+    result = subprocess.run(
+        [NODE, str(driver_path), json.dumps(scenario), str(fn_path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["calls"] == [{
+        "url": "/api/onboarding/probe",
+        "method": "POST",
+        "body": {
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",
+        },
+    }]
+    assert payload["modelValue"] == "qwen3:8b"
+    assert payload["saveDisabled"] is False
+    assert payload["probeText"] == "Connected. 1 model(s) available."
+    assert payload["testDisabled"] is False

@@ -10413,6 +10413,7 @@ function _buildProviderCard(p){
       probeStatus,
       isSelfHosted:true,
       setModelChoices,
+      updateSaveState:checkSaveEnabled,
     });
     focusInput=modelInput;
     testBtn.onclick=()=>_testSelfHostedConnection(p.id);
@@ -10650,6 +10651,9 @@ async function _testSelfHostedConnection(providerId){
       }
       if(!els.modelInput.value&&models.length&&models[0]&&models[0].id){
         els.modelInput.value=models[0].id;
+      }
+      if(els.updateSaveState){
+        els.updateSaveState();
       }
     }else{
       const err=(res&&res.error)||'unreachable';
