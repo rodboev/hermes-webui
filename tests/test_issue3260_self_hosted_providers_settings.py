@@ -20,11 +20,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PANELS_JS = (ROOT / "static" / "panels.js").read_text(encoding="utf-8")
 NODE = shutil.which("node")
 
-pytestmark = pytest.mark.skipif(
-    NODE is None,
-    reason="node is required to execute the self-hosted provider harness",
-)
-
 
 _DRIVER = r"""
 const fs = require('fs');
@@ -159,11 +154,56 @@ def test_apply_self_hosted_provider_setup_persists_lmstudio_base_url_and_active_
     assert cfg["model"]["base_url"] == "http://127.0.0.1:1234/v1"
     assert cfg["model"]["default"] == onboarding._normalize_model_for_provider("lmstudio", "local-model")
     assert calls == ["invalidate"]
+
+
+def test_apply_self_hosted_provider_setup_persists_base_url_without_switching_active_provider(
+    isolated_self_hosted_env,
+    monkeypatch,
+):
+    _tmp_path, fake_config_path = isolated_self_hosted_env
+    onboarding._save_yaml_config(fake_config_path, {
+        "model": {
+            "provider": "anthropic",
+            "default": "claude-sonnet-4-5",
+            "base_url": "",
+        },
+        "providers": {},
+    })
+    calls = []
+    monkeypatch.setattr(onboarding, "invalidate_models_cache", lambda: calls.append("invalidate"))
+    body = onboarding.apply_self_hosted_provider_setup({
+        "provider": "ollama",
+        "model": "qwen3:8b",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "activate": False,
+    })
+    assert body["ok"] is True
+    assert body["provider"] == "ollama"
+    assert "model" not in body
     cfg = onboarding._load_yaml_config(fake_config_path)
-    assert cfg["providers"]["lmstudio"]["base_url"] == "http://127.0.0.1:1234/v1"
-    assert cfg["model"]["provider"] == "lmstudio"
-    assert cfg["model"]["base_url"] == "http://127.0.0.1:1234/v1"
-    assert cfg["model"]["default"] == onboarding._normalize_model_for_provider("lmstudio", "local-model")
+    assert cfg["providers"]["ollama"]["base_url"] == "http://127.0.0.1:11434/v1"
+    assert cfg["model"]["provider"] == "anthropic"
+    assert cfg["model"]["default"] == "claude-sonnet-4-5"
+    assert cfg["model"]["base_url"] == ""
+    assert calls == ["invalidate"]
+
+
+def test_apply_self_hosted_provider_setup_omits_env_write_for_empty_optional_key(
+    isolated_self_hosted_env,
+    monkeypatch,
+):
+    tmp_path, _fake_config_path = isolated_self_hosted_env
+    calls = []
+    monkeypatch.setattr(onboarding, "invalidate_models_cache", lambda: calls.append("invalidate"))
+    body = onboarding.apply_self_hosted_provider_setup({
+        "provider": "lmstudio",
+        "model": "local-model",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "api_key": "",
+    })
+    assert body["ok"] is True
+    assert not (tmp_path / ".env").exists()
+    assert calls == ["invalidate"]
 
 
 def test_post_self_hosted_provider_rejects_invalid_provider(isolated_self_hosted_env):
@@ -198,6 +238,7 @@ def test_get_providers_exposes_self_hosted_flags_and_base_url(monkeypatch, tmp_p
         assert by_id["ollama"]["configurable"] is False
         assert by_id["lmstudio"]["is_self_hosted"] is True
         assert by_id["lmstudio"]["base_url"] == "http://127.0.0.1:1234/v1"
+        assert by_id["ollama-cloud"]["is_self_hosted"] is False
     finally:
         config.cfg.clear()
         config.cfg.update(old_cfg)
@@ -205,6 +246,9 @@ def test_get_providers_exposes_self_hosted_flags_and_base_url(monkeypatch, tmp_p
 
 
 def test_save_self_hosted_provider_posts_expected_payload(tmp_path):
+    if NODE is None:
+        pytest.skip("node is required to execute the self-hosted provider harness")
+
     fn_path = tmp_path / "saveSelfHostedProvider.js"
     fn_path.write_text(
         extract_function(PANELS_JS, "_saveSelfHostedProvider", prefix="async function"),
