@@ -10951,15 +10951,9 @@ function _refreshTransparentLiveRow(existing, node){
     const [name, value] = pair;
     existing.setAttribute(name, value);
   }
-  if(Object.prototype.hasOwnProperty.call(node, 'className')){
-    existing.className = node.className;
-  }
-  if(Object.prototype.hasOwnProperty.call(node, 'textContent')){
-    existing.textContent = node.textContent;
-  }
-  if(Object.prototype.hasOwnProperty.call(node, 'innerHTML')){
-    existing.innerHTML = node.innerHTML;
-  }
+  existing.className = node.className || '';
+  existing.textContent = node.textContent || '';
+  existing.innerHTML = node.innerHTML || '';
   return existing;
 }
 function _renderLiveAnchorActivitySceneForStream(streamId, sessionId, opts){

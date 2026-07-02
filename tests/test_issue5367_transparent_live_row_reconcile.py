@@ -51,8 +51,8 @@ class FakeElement {{
     this.style = Object.create(null);
     this.hidden = false;
     this.id = '';
-    this.textContent = '';
-    this.innerHTML = '';
+    this._textContent = '';
+    this._innerHTML = '';
     this._classes = new Set();
     const self = this;
     this.classList = {{
@@ -68,6 +68,22 @@ class FakeElement {{
   }}
   set className(value){{
     this._classes = new Set(String(value).trim().split(/\\s+/).filter(Boolean));
+  }}
+  get textContent(){{
+    return this._textContent;
+  }}
+  set textContent(value){{
+    this._textContent = String(value ?? '');
+    this._innerHTML = this._textContent;
+    this.children = [];
+  }}
+  get innerHTML(){{
+    return this._innerHTML;
+  }}
+  set innerHTML(value){{
+    this._innerHTML = String(value ?? '');
+    this._textContent = this._innerHTML;
+    this.children = [];
   }}
   setAttribute(name, value){{
     const key = String(name);
