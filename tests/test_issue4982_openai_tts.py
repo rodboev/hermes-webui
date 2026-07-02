@@ -257,7 +257,7 @@ def test_openai_tts_does_not_connect_to_rebound_private_address(monkeypatch):
 
 def test_openai_tts_pinned_connection_preserves_host_and_sni(monkeypatch):
     host = "static-openai.example.com"
-    response_bytes = _http_response_bytes(200, b"audio-openai", headers={"Content-Length": "11"})
+    response_bytes = _http_response_bytes(200, b"audio-openai")
     fake_socket = _FakeSocketForHttps(response_bytes)
     observed = {}
     created = []
@@ -287,7 +287,7 @@ def test_openai_tts_pinned_connection_preserves_host_and_sni(monkeypatch):
 
     assert h.status == 200
     assert h.sent_headers["Content-Type"] == "audio/mpeg"
-    assert h.wfile.getvalue().startswith(b"audio-open")
+    assert h.wfile.getvalue() == b"audio-openai"
     assert created == [("1.1.1.1", 443)]
     assert observed["server_hostname"] == host
     sent = b"".join(fake_socket.writes).decode("utf-8", "replace")
@@ -329,7 +329,7 @@ def test_openai_tts_rejects_redirect_with_pinned_opener(monkeypatch):
 
 def test_openai_tts_ignores_https_proxy_and_dials_pinned_target(monkeypatch):
     host = "proxy-safe-openai.example.com"
-    response_bytes = _http_response_bytes(200, b"audio-openai", headers={"Content-Length": "11"})
+    response_bytes = _http_response_bytes(200, b"audio-openai")
     fake_socket = _FakeSocketForHttps(response_bytes)
     created = []
 
@@ -362,6 +362,7 @@ def test_openai_tts_ignores_https_proxy_and_dials_pinned_target(monkeypatch):
     routes._handle_tts(h, None)
 
     assert h.status == 200
+    assert h.wfile.getvalue() == b"audio-openai"
     assert created == [("1.1.1.1", 443)]
 
 

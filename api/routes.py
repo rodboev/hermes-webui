@@ -26,6 +26,8 @@ import sys
 import threading
 import time
 import uuid
+import http.client
+import socket as _socket
 from collections import defaultdict
 from pathlib import Path
 from contextlib import closing
@@ -16441,11 +16443,6 @@ def _buffer_tts_audio_response(resp, *, max_bytes: int | None = None) -> bytes:
         if len(audio_data) > max_bytes:
             raise ValueError("upstream audio exceeded byte limit")
     return bytes(audio_data)
-
-
-import http.client
-import socket as _socket
-
 
 class _NoRedirectTtsHandler(HTTPRedirectHandler):
     """Refuse to follow redirects on the TTS call.
