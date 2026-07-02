@@ -1083,29 +1083,27 @@ def apply_self_hosted_provider_setup(body: dict) -> dict:
     model_cfg = cfg.get("model", {})
     if not isinstance(model_cfg, dict):
         model_cfg = {}
+    original_model_cfg = dict(model_cfg)
+    env_var = provider_meta.get("env_var")
 
     if do_activate:
         model_cfg["provider"] = provider
         model_cfg["default"] = _normalize_model_for_provider(provider, model)
         model_cfg["base_url"] = base_url
-    cfg["model"] = model_cfg
+        cfg["model"] = model_cfg
+    elif "model" in cfg:
+        cfg["model"] = original_model_cfg
     _save_yaml_config(config_path, cfg)
 
-    if api_key:
-        env_var = provider_meta.get("env_var")
-        if env_var:
-            _write_env_file(_get_active_hermes_home() / ".env", {env_var: api_key})
+    if api_key and env_var:
+        _write_env_file(_get_active_hermes_home() / ".env", {env_var: api_key})
+        os.environ[env_var] = api_key
 
     try:
         from api.profiles import _reload_dotenv
         _reload_dotenv(_get_active_hermes_home())
     except Exception:
         logger.debug("Failed to reload dotenv")
-
-    if api_key:
-        env_var = provider_meta.get("env_var")
-        if env_var:
-            os.environ[env_var] = api_key
 
     try:
         # hermes_cli may cache config at import time; ask it to reload if possible.

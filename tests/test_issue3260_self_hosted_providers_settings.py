@@ -110,9 +110,12 @@ globalThis.api = async (url, opts) => {
     method: opts.method,
     body: JSON.parse(opts.body),
   });
+  const discoveredModels = Array.isArray(scenario.discoveredModels)
+    ? scenario.discoveredModels
+    : [{ id: scenario.discoveredModel }];
   return {
     ok: true,
-    models: [{ id: scenario.discoveredModel }],
+    models: discoveredModels,
   };
 };
 globalThis.showToast = (msg) => toasts.push(msg);
@@ -223,11 +226,15 @@ def test_apply_self_hosted_provider_setup_persists_base_url_without_switching_ac
     monkeypatch,
 ):
     _tmp_path, fake_config_path = isolated_self_hosted_env
+    original_model_cfg = {
+        "provider": "anthropic",
+        "default": "claude-sonnet-4-5",
+        "base_url": "",
+    }
     onboarding._save_yaml_config(fake_config_path, {
         "model": {
-            "provider": "anthropic",
-            "default": "claude-sonnet-4-5",
-            "base_url": "",
+            **original_model_cfg,
+            "custom_flag": "preserve-me",
         },
         "providers": {},
     })
@@ -244,9 +251,7 @@ def test_apply_self_hosted_provider_setup_persists_base_url_without_switching_ac
     assert "model" not in body
     cfg = onboarding._load_yaml_config(fake_config_path)
     assert cfg["providers"]["ollama"]["base_url"] == "http://127.0.0.1:11434/v1"
-    assert cfg["model"]["provider"] == "anthropic"
-    assert cfg["model"]["default"] == "claude-sonnet-4-5"
-    assert cfg["model"]["base_url"] == ""
+    assert cfg["model"] == {**original_model_cfg, "custom_flag": "preserve-me"}
     assert calls == ["invalidate"]
 
 
@@ -412,3 +417,32 @@ def test_probe_self_hosted_provider_populates_model_and_enables_save(tmp_path):
     assert payload["saveDisabled"] is False
     assert payload["probeText"] == "Connected. 1 model(s) available."
     assert payload["testDisabled"] is False
+
+
+def test_probe_self_hosted_provider_accepts_string_models(tmp_path):
+    if NODE is None:
+        pytest.skip("node is required to execute the self-hosted provider harness")
+
+    fn_path = tmp_path / "testSelfHostedConnection.js"
+    fn_path.write_text(
+        extract_function(PANELS_JS, "_testSelfHostedConnection", prefix="async function"),
+        encoding="utf-8",
+    )
+    driver_path = tmp_path / "probe-driver-string.js"
+    driver_path.write_text(_PROBE_DRIVER, encoding="utf-8")
+    scenario = {
+        "providerId": "ollama",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "apiKey": "",
+        "model": "",
+        "discoveredModels": ["qwen3:8b"],
+    }
+    result = subprocess.run(
+        [NODE, str(driver_path), json.dumps(scenario), str(fn_path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["modelValue"] == "qwen3:8b"
+    assert payload["saveDisabled"] is False

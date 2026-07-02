@@ -10657,8 +10657,8 @@ async function _testSelfHostedConnection(providerId){
         els.probeStatus.style.color='var(--ok)';
         els.probeStatus.textContent=`Connected. ${count} model(s) available.`;
       }
-      if(!els.modelInput.value&&models.length&&models[0]&&models[0].id){
-        els.modelInput.value=models[0].id;
+      if(!els.modelInput.value&&models.length&&models[0]){
+        els.modelInput.value=models[0].id||models[0];
       }
       if(els.updateSaveState){
         els.updateSaveState();
