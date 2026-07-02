@@ -8258,6 +8258,33 @@ function toggleUpdateSummaryExpanded(){
   _syncUpdateSummaryExpandButton(expanded);
 }
 const WHATS_NEW_SUMMARY_STORAGE_KEY='hermes-whats-new-generated-summaries';
+const WHATS_NEW_SUMMARY_STORAGE_MAX_BYTES=256*1024;
+function _summaryStorageByteLength(value){
+  const text=typeof value==='string'?value:JSON.stringify(value);
+  if(text==null) return 0;
+  if(typeof TextEncoder==='function') return new TextEncoder().encode(text).length;
+  return text.length;
+}
+function _summaryCacheEntriesSortedByRecency(entries){
+  return entries.sort((left,right)=>{
+    const leftKey=left[0];
+    const rightKey=right[0];
+    const leftSummary=left[1];
+    const rightSummary=right[1];
+    const leftUpdatedAt=leftSummary&&leftSummary.updatedAt;
+    const rightUpdatedAt=rightSummary&&rightSummary.updatedAt;
+    if(typeof leftUpdatedAt==='number'&&typeof rightUpdatedAt==='number'&&leftUpdatedAt!==rightUpdatedAt){
+      return rightUpdatedAt-leftUpdatedAt;
+    }
+    if(typeof leftUpdatedAt==='number') return -1;
+    if(typeof rightUpdatedAt==='number') return 1;
+    if(leftKey==='webui'&&rightKey!=='webui') return -1;
+    if(rightKey==='webui'&&leftKey!=='webui') return 1;
+    if(leftKey==='agent'&&rightKey!=='agent') return -1;
+    if(rightKey==='agent'&&leftKey!=='agent') return 1;
+    return leftKey<rightKey?-1:(leftKey>rightKey?1:0);
+  });
+}
 function _loadStoredUpdateSummaries(){
   window._whatsNewGeneratedSummaries=window._whatsNewGeneratedSummaries||{};
   try{
@@ -8271,7 +8298,21 @@ function _loadStoredUpdateSummaries(){
   return window._whatsNewGeneratedSummaries;
 }
 function _persistGeneratedSummaries(){
-  try{sessionStorage.setItem(WHATS_NEW_SUMMARY_STORAGE_KEY,JSON.stringify(window._whatsNewGeneratedSummaries||{}));}catch(_e){}
+  const current=window._whatsNewGeneratedSummaries||{};
+  const next={};
+  try{
+    _summaryCacheEntriesSortedByRecency(Object.entries(current)).forEach((entry)=>{
+      const candidate={...next,...Object.fromEntries([entry])};
+      if(_summaryStorageByteLength(JSON.stringify(candidate))<=WHATS_NEW_SUMMARY_STORAGE_MAX_BYTES){
+        Object.assign(next, Object.fromEntries([entry]));
+      }else{
+        const key=entry[0];
+        if(current[key]) delete current[key];
+      }
+    });
+    window._whatsNewGeneratedSummaries=next;
+    sessionStorage.setItem(WHATS_NEW_SUMMARY_STORAGE_KEY,JSON.stringify(next));
+  }catch(_e){}
 }
 function _pruneGeneratedSummaries(data){
   const cache=_loadStoredUpdateSummaries();
@@ -8302,6 +8343,7 @@ function _rememberGeneratedSummary(target,payload,data){
   window._whatsNewGeneratedSummaries[target]={
     signature:_updateSummarySignature(data&&data[target]),
     payload:payload,
+    updatedAt:Date.now(),
   };
   _persistGeneratedSummaries();
 }
