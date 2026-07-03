@@ -7512,7 +7512,7 @@ def _load_branch_source_or_refuse(handler, sid: str):
     except KeyError:
         _foreign_session, _reason = _claim_or_synthesize_cli_session(sid)
         if _reason == "not_claimable":
-            bad(handler, "Read-only sessions cannot be branched from WebUI", 400)
+            bad(handler, "Read-only sessions cannot be branched from WebUI", 403)
             return None
         bad(handler, "Session not found", 404)
         return None
@@ -13730,7 +13730,7 @@ def handle_post(handler, parsed) -> bool:
         # (Opus pre-release follow-up.)
         if not isinstance(body["session_id"], str):
             return bad(handler, "session_id must be a string")
-        # _claim_or_synthesize_cli_session(body["session_id"]); if _reason == "not_claimable": return bad(handler, "Read-only sessions cannot be branched from WebUI", 400)
+        # _claim_or_synthesize_cli_session(body["session_id"]); if _reason == "not_claimable": return bad(handler, "Read-only sessions cannot be branched from WebUI", 403)
         source = _load_branch_source_or_refuse(handler, body["session_id"])
         if source is None:
             return True

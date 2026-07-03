@@ -181,8 +181,8 @@ def test_branch_endpoint_consults_foreign_session_guard_on_missing_sidecar():
         "Branch handler should classify missing-sidecar foreign sessions before returning"
     assert 'if _reason == "not_claimable":' in block, \
         "Branch handler should branch on not_claimable foreign ownership"
-    assert 'return bad(handler, "Read-only sessions cannot be branched from WebUI", 400)' in block, \
-        "Branch handler should return a provenance-correct 400 for read-only foreign sessions"
+    assert 'return bad(handler, "Read-only sessions cannot be branched from WebUI", 403)' in block, \
+        "Branch handler should return a provenance-correct 403 for read-only foreign sessions"
 
 
 def test_branch_endpoint_returns_new_session_id():
@@ -315,7 +315,7 @@ def test_branch_auto_title():
     assert '(fork)' in block, "Branch handler should auto-title as '(fork)'"
 
 
-def test_branch_route_rejects_not_claimable_foreign_sessions_with_400(monkeypatch):
+def test_branch_route_rejects_not_claimable_foreign_sessions_with_403(monkeypatch):
     """Direct or stale branch POSTs for read-only foreign sessions must refuse clearly."""
     handler = _FakeHandler()
     monkeypatch.setattr(routes, "_check_csrf", lambda _handler: True)
@@ -332,7 +332,7 @@ def test_branch_route_rejects_not_claimable_foreign_sessions_with_400(monkeypatc
     )
     cap = _capture_route(monkeypatch)
     routes.handle_post(handler, urlparse("/api/session/branch"))
-    assert cap["bad"] == ("Read-only sessions cannot be branched from WebUI", 400)
+    assert cap["bad"] == ("Read-only sessions cannot be branched from WebUI", 403)
 
 
 def test_branch_route_keeps_404_for_truly_missing_sessions(monkeypatch):
