@@ -1006,29 +1006,30 @@ def test_token_v1_injects_persisted_token_when_auth_enabled(tmp_path, monkeypatc
     assert target["auth_token"] == sc.current_token("templates")
 
 
-def test_token_v1_auth_off_allows_loopback_origin(tmp_path, monkeypatch):
-    _token_v1_manifest(monkeypatch, tmp_path, origin="http://127.0.0.1:17787")
+def test_token_v1_auth_off_rejects_consent(tmp_path, monkeypatch):
+    _token_v1_manifest(monkeypatch, tmp_path)
     from api.extensions import (
-        resolve_extension_sidecar_proxy_target,
+        ExtensionSidecarProxyError,
         set_extension_sidecar_proxy_consent,
     )
 
-    set_extension_sidecar_proxy_consent("templates", True)
-    target = resolve_extension_sidecar_proxy_target("templates", "v1/ping")
-    assert target["auth_token"]  # loopback allowed even with auth off
+    with pytest.raises(ExtensionSidecarProxyError) as exc:
+        set_extension_sidecar_proxy_consent("templates", True)
+    assert exc.value.status == 503
 
 
-def test_token_v1_auth_off_blocks_non_loopback_origin(tmp_path, monkeypatch):
+def test_token_v1_auth_off_rejects_resolution_even_with_consent(tmp_path, monkeypatch):
     _token_v1_manifest(monkeypatch, tmp_path, origin="http://127.0.0.1:17787")
-    import api.extensions as extensions
     from api.extensions import (
         ExtensionSidecarProxyError,
         resolve_extension_sidecar_proxy_target,
-        set_extension_sidecar_proxy_consent,
     )
 
-    set_extension_sidecar_proxy_consent("templates", True)
-    monkeypatch.setattr(extensions, "_sidecar_origin_is_loopback", lambda origin: False)
+    (tmp_path / "webui-state" / "extension-overrides.json").write_text(
+        '{"version": 1, "disabled_extensions": [], '
+        '"sidecar_proxy_consents": {"templates": "http://127.0.0.1:17787"}}',
+        encoding="utf-8",
+    )
     with pytest.raises(ExtensionSidecarProxyError) as exc:
         resolve_extension_sidecar_proxy_target("templates", "v1/ping")
     assert exc.value.status == 503
@@ -1063,7 +1064,7 @@ def test_unknown_proxy_auth_value_rejects_sidecar(tmp_path, monkeypatch):
         set_extension_sidecar_proxy_consent("templates", True)
 
 
-def test_status_payload_flags_auth_required_when_auth_off(tmp_path, monkeypatch):
+def test_status_payload_blocks_token_v1_when_auth_off(tmp_path, monkeypatch):
     _token_v1_manifest(monkeypatch, tmp_path)
     from api.extensions import get_extension_status
 
@@ -1073,7 +1074,10 @@ def test_status_payload_flags_auth_required_when_auth_off(tmp_path, monkeypatch)
     assert tmpl is not None
     proxy = tmpl["proxy"]
     assert proxy["proxy_auth"] == "token-v1"
-    assert proxy["posture"] == "local_unprotected"  # auth off -> panel warns pre-consent
+    assert proxy["posture"] == "local_unprotected"
+    assert proxy["available"] is False
+    assert proxy["consent_required"] is False
+    assert proxy["consented"] is False
 
 
 def test_inbound_x_hermes_header_is_stripped(monkeypatch):
@@ -1106,6 +1110,7 @@ def test_token_module_persists_and_rotates(tmp_path, monkeypatch):
     assert (token_dir / "templates.token").exists()
     assert sc.current_token("never") is None            # fail closed
     assert sc.ensure_token("../evil") is None            # path-escape rejected
+    assert sc.ensure_token("templates\n") is None       # fullmatch rejects trailing newlines
     # canonical (wider) id grammar is honored: uppercase/dot ids work
     assert sc.ensure_token("RSS.Feeds") is not None
     new = sc.reset_token("templates")

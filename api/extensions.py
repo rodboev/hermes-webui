@@ -811,16 +811,6 @@ def _normalize_loopback_sidecar_origin(value: object) -> Optional[str]:
     return f"{parsed.scheme}://{display_host}{':' + str(port) if port is not None else ''}"
 
 
-def _sidecar_origin_is_loopback(origin: object) -> bool:
-    """True only when the origin host is a canonical loopback address. Used to
-    gate the auth-off token-v1 posture: with WebUI auth off we proxy a token-v1
-    sidecar ONLY when its origin is provably loopback (127.0.0.1/localhost/::1)."""
-    if not isinstance(origin, str):
-        return False
-    parsed = urlsplit(origin)
-    return (parsed.hostname or "").lower() in _LOOPBACK_SIDECAR_HOSTS
-
-
 def _normalize_sidecar_health_path(value: object) -> Optional[str]:
     """Return a safe sidecar health path, or None when unsafe.
 
@@ -1187,20 +1177,19 @@ def _sidecar_proxy_public_status(
     available: bool,
     proxy_auth: str = "legacy",
 ) -> Dict[str, Any]:
-    consented = bool(available and approved_origin == origin)
-    origin_changed = bool(available and approved_origin and approved_origin != origin)
-    # token-v1 posture (§9.1). "protected" = WebUI auth on. "local_unprotected" =
-    # auth off: forwarding still succeeds for the loopback origin, but consent is
-    # grantable by any unauthenticated local caller, so the panel should warn the
-    # operator to enable authentication. Named a posture (not "auth_required")
-    # because nothing is actually blocked in the loopback case.
+    auth_enabled = None
     posture = None
     if available and proxy_auth == "token-v1":
         try:
             from api.auth import is_auth_enabled
-            posture = "protected" if is_auth_enabled() else "local_unprotected"
+            auth_enabled = is_auth_enabled()
+            posture = "protected" if auth_enabled else "local_unprotected"
         except Exception:
             posture = None
+    if proxy_auth == "token-v1" and auth_enabled is not True:
+        available = False
+    consented = bool(available and approved_origin == origin)
+    origin_changed = bool(available and approved_origin and approved_origin != origin)
     return {
         "available": available,
         "consented": consented,
@@ -1603,6 +1592,13 @@ def set_extension_sidecar_proxy_consent(extension_id: object, approved: object) 
         sidecar = item.get("sidecar")
         proxy = item.get("proxy") or {}
         if approved:
+            if sidecar is not None and sidecar.get("proxy_auth") == "token-v1":
+                from api.auth import is_auth_enabled
+                if not is_auth_enabled():
+                    raise ExtensionSidecarProxyError(
+                        "Sidecar proxy requires WebUI authentication; set a password in Settings.",
+                        status=503,
+                    )
             if sidecar is None or proxy.get("available") is not True:
                 raise ExtensionSidecarProxyError("Extension sidecar proxy is unavailable", status=409)
             consent_map[ext_id] = sidecar["origin"]
@@ -1670,6 +1666,14 @@ def resolve_extension_sidecar_proxy_target(
     item = by_id.get(ext_id) or {}
     sidecar = item.get("sidecar")
     proxy = item.get("proxy") or {}
+    proxy_auth = sidecar.get("proxy_auth", "legacy") if sidecar is not None else "legacy"
+    if proxy_auth == "token-v1":
+        from api.auth import is_auth_enabled
+        if not is_auth_enabled():
+            raise ExtensionSidecarProxyError(
+                "Sidecar proxy requires WebUI authentication; set a password in Settings.",
+                status=503,
+            )
     if sidecar is None or proxy.get("available") is not True:
         raise ExtensionSidecarProxyError("Extension sidecar proxy is unavailable", status=409)
     if proxy.get("consented") is not True:
@@ -1681,23 +1685,10 @@ def resolve_extension_sidecar_proxy_target(
     # token-v1 auth (§9.1/§9.2). Legacy sidecars proxy unchanged; token-v1
     # sidecars get a per-extension secret injected, and only proxy when the
     # trust posture is sound.
-    proxy_auth = sidecar.get("proxy_auth", "legacy")
     inject_token: Optional[str] = None
     if proxy_auth == "token-v1":
-        from api.auth import is_auth_enabled
         from api import extension_sidecar_auth as _sc_auth
 
-        if not is_auth_enabled():
-            # Auth off: the consent endpoint itself is unauthenticated, so any
-            # local caller could self-grant + drive the sidecar. Only allow when
-            # the sidecar origin is provably loopback (local_unprotected posture);
-            # never proxy an auth-off token-v1 call to a non-loopback origin.
-            if not _sidecar_origin_is_loopback(sidecar["origin"]):
-                raise ExtensionSidecarProxyError(
-                    "Sidecar proxy requires WebUI authentication for non-loopback "
-                    "origins; set a password in Settings.",
-                    status=503,
-                )
         token = _sc_auth.current_token(ext_id) or _sc_auth.ensure_token(ext_id)
         if not token:
             # Token could not be persisted+read → fail closed rather than proxy

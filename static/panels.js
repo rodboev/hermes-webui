@@ -9813,12 +9813,10 @@ function _extensionSidecarCard(sidecars){
     const proxyConsentRequired=proxy.consent_required===true;
     const proxyOriginChanged=proxy.origin_changed===true;
     const proxyPath=(proxy&&proxy.path)||'';
-    // token-v1 posture: 'local_unprotected' = WebUI auth is off, so proxy consent
-    // is grantable by any unauthenticated local caller. Warn the operator to
-    // enable authentication before wiring up a sidecar (design §9.1).
+    // token-v1 posture: 'local_unprotected' = unavailable until WebUI auth is enabled.
     const proxyUnprotected=proxy.posture==='local_unprotected';
     const proxyWarning=proxyUnprotected
-      ?`<div class="extension-sidecar-warning">⚠ WebUI authentication is off. This sidecar's proxy consent can be granted by any local process. Set a password in Settings → Password before using sidecar extensions.</div>`
+      ?`<div class="extension-sidecar-warning">⚠ WebUI authentication is off. Token-v1 sidecars stay unavailable until authentication is enabled. Set a password in Settings → Password before using sidecar extensions.</div>`
       :'';
     const proxyStatus=proxyConsented
       ?'consented'

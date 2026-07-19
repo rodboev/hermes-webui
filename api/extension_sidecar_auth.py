@@ -71,7 +71,7 @@ def _token_path(ext_id: str) -> Path:
 
 
 def _valid_ext_id(ext_id: object) -> bool:
-    return isinstance(ext_id, str) and bool(_EXT_ID_RE.match(ext_id))
+    return isinstance(ext_id, str) and bool(_EXT_ID_RE.fullmatch(ext_id))
 
 
 def _fingerprint(path: Path) -> Optional[Tuple]:

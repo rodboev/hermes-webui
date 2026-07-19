@@ -201,15 +201,13 @@ direct one. The `proxy_auth` field closes that gap:
   unchanged behavior). Only appropriate for read-only, non-sensitive sidecars.
 - Any **other** value fails closed (the sidecar declaration is rejected).
 
-**Auth-off posture:** WebUI authentication is optional and off by default. Because
-the consent endpoint itself is unauthenticated in that mode, a `token-v1` sidecar is
-proxied with auth off **only** when its origin is provably loopback
-(`127.0.0.1`/`localhost`/`::1`); any non-loopback `token-v1` origin returns `503`
-until a password/passkey is configured. The extensions panel surfaces
-`auth_required` so the operator is told to enable authentication before wiring up a
-sidecar. The token protects against other-UID and sandboxed local callers; it does
-**not** defend against arbitrary same-UID code (which can read the token file, WebUI's
-own signing key, or run the sidecar's tool directly).
+**Auth-off posture:** WebUI authentication is optional and off by default. A
+`token-v1` sidecar requires configured WebUI authentication for consent and
+proxying, regardless of its origin. While auth is off, the extensions panel
+reports `proxy.posture` as `local_unprotected` and keeps the token-v1 proxy
+unavailable. The token protects against other-UID and sandboxed local callers; it
+does **not** defend against arbitrary same-UID code (which can read the token file,
+WebUI's own signing key, or run the sidecar's tool directly).
 
 Extension entries may declare browser-local settings when they also request
 extension-owned storage:
