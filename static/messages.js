@@ -1706,7 +1706,7 @@ async function send(){
       }
     });
     optimisticMessages=[...S.messages];
-    INFLIGHT[activeSid]={messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]};
+    INFLIGHT[activeSid]=_preserveDeliveredSteerCacheForNewInflight(activeSid,{messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]});
     if(typeof saveInflightState==='function'){
       saveInflightState(activeSid,{streamId:null,messages:INFLIGHT[activeSid].messages,uploaded:uploadedNames,toolCalls:[]});
     }
@@ -1754,7 +1754,7 @@ async function send(){
     try{console.warn('[webui] pre-start optimistic UI failed; continuing to /api/chat/start', message);}catch(_){ }
     if(!S.messages.includes(userMsg)) S.messages.push(userMsg);
     optimisticMessages=[...S.messages];
-    INFLIGHT[activeSid]={messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]};
+    INFLIGHT[activeSid]=_preserveDeliveredSteerCacheForNewInflight(activeSid,{messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]});
     try{setBusy(true);}catch(_){S.busy=true;}
     if(S.session&&!S.session.pending_started_at) S.session.pending_started_at=Date.now()/1000;
     S.activeStreamId=null;
@@ -1933,7 +1933,7 @@ async function send(){
       upsertActiveSessionForLocalTurn({title:S.session&&S.session.title||displayText.slice(0,64),messageCount:S.messages.length,timestampMs:Date.now()});
     }
     if(!INFLIGHT[activeSid]){
-      INFLIGHT[activeSid]={messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]};
+    INFLIGHT[activeSid]=_preserveDeliveredSteerCacheForNewInflight(activeSid,{messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]});
     }
     const currentInflight=INFLIGHT[activeSid];
     markInflight(activeSid, streamId);
@@ -2002,6 +2002,12 @@ async function startRegeneration(sessionId, regenerationRevision){
 const LIVE_STREAMS={};
 const _STREAM_NOTIFICATION_BACKGROUND={};
 
+function _preserveDeliveredSteerCacheForNewInflight(sid, entry){
+  const existing=typeof INFLIGHT!=='undefined'&&INFLIGHT?INFLIGHT[sid]:null;
+  const records=existing&&Array.isArray(existing.deliveredSteers)?existing.deliveredSteers:[];
+  return records.length?{...entry,deliveredSteers:records}:entry;
+}
+
 function _deliveredSteerStreamId(record){
   if(!record||typeof record!=='object') return '';
   return String(record.stream_id||((record.payload&&record.payload.stream_id)||'')||'').trim();
@@ -2027,7 +2033,7 @@ function _settledAnchorSourceEventFromRow(row, sceneStreamId, sceneRunId, index)
   };
 }
 
-function _restoreDeliveredSteersIntoSettledMessages(messages, sid, records){
+function _restoreDeliveredSteersIntoSettledMessages(messages, sid, records, onRestored){
   if(!Array.isArray(messages)||!messages.length||!Array.isArray(records)||!records.length) return false;
   const api=typeof window!=='undefined'?window.HermesAssistantTurnAnchors:null;
   if(!api||typeof api.createAssistantTurnAnchorRegistry!=='function'||
@@ -2046,7 +2052,14 @@ function _restoreDeliveredSteersIntoSettledMessages(messages, sid, records){
     const message=messages[i];
     if(message&&message.role==='assistant') assistants.push({message,index:i});
   }
-  const soleAssistant=assistants.length===1?assistants[0]:null;
+  let lastUserIndex=-1;
+  for(let i=messages.length-1;i>=0;i-=1){
+    if(messages[i]&&messages[i].role==='user'){
+      lastUserIndex=i;
+      break;
+    }
+  }
+  const currentAssistants=assistants.filter(({index})=>index>lastUserIndex);
   let changed=false;
   for(const [streamId,streamRecords] of groups){
     let target=assistants.slice().reverse().find(({message})=>{
@@ -2062,20 +2075,14 @@ function _restoreDeliveredSteersIntoSettledMessages(messages, sid, records){
       if(recordTurnId&&sceneTurnId) return recordTurnId===sceneTurnId;
       return false;
     });
-    if(!target&&groups.size===1&&soleAssistant){
-      const candidate=soleAssistant.message;
-      const candidateScene=candidate&&candidate._anchor_activity_scene;
-      const candidateIdentity=candidateScene&&candidateScene.identity&&typeof candidateScene.identity==='object'
-        ? candidateScene.identity
-        : {};
-      const candidateHasIdentity=!!(
-        candidate._anchor_stream_id||candidate.stream_id||candidate.run_id||candidate.turn_id||
-        candidateIdentity.stream_id||candidateIdentity.run_id||candidateIdentity.turn_id
-      );
-      // A cache-only reload has one server assistant and no anchor metadata to
-      // match. That sole candidate is the current session's turn; avoid the
-      // unsafe guess when another assistant or any identity-bearing turn exists.
-      if(!candidateHasIdentity) target=soleAssistant;
+    // One assistant after the latest user message is the only safe current-turn
+    // fallback, including replacement-stream records that share that turn.
+    if(!target&&currentAssistants.length===1) target=currentAssistants[0];
+    if(!target&&lastUserIndex>=0&&!currentAssistants.length){
+      messages.push({role:'assistant',content:''});
+      target={message:messages[messages.length-1],index:messages.length-1};
+      assistants.push(target);
+      currentAssistants.push(target);
     }
     if(!target) continue;
     const existing=target.message._anchor_activity_scene&&typeof target.message._anchor_activity_scene==='object'
@@ -2141,6 +2148,7 @@ function _restoreDeliveredSteersIntoSettledMessages(messages, sid, records){
       terminal_state:(existing&&existing.terminal_state)||'completed',
     };
     target.message._anchor_stream_id=streamId;
+    if(typeof onRestored==='function') onRestored(streamRecords,streamId);
     changed=true;
   }
   return changed;
@@ -2409,6 +2417,9 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
   function _isActiveSession(){
     return !!(S.session&&S.session.session_id===activeSid);
   }
+  function _ownsCurrentStream(){
+    return !_isActiveSession() || S.activeStreamId===streamId;
+  }
   function _ownsActiveStreamOrBackground(){
     return !_isActiveSession() || S.activeStreamId===streamId;
   }
@@ -2607,6 +2618,11 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     _streamEndRecoveryTimer=setTimeout(()=>{void _runStreamEndRecovery(source);},delay);
   }
   function _finalizeStreamEndFallback(source){
+    if(!_ownsCurrentStream()){
+      _clearStreamEndRecovery();
+      _closeSource(source);
+      return;
+    }
     _clearStreamEndRecovery();
     if(_persistTimer){clearTimeout(_persistTimer);_persistTimer=null;}
     _cancelThrottledSnapshotTimer();
@@ -4034,12 +4050,20 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     const clearPersistedDeliveryCache=()=>{
       const pending=typeof INFLIGHT!=='undefined'&&INFLIGHT?INFLIGHT[activeSid]:null;
       if(!pending||!Array.isArray(pending.deliveredSteers)) return;
+      if(String(pending.streamId||'')!==String(streamId||'')) return;
       const retained=pending.deliveredSteers.filter(record=>!persistedDeliveryKeys.has(deliveryCacheKey(record)));
       if(retained.length){
         pending.deliveredSteers=retained;
         if(typeof saveInflightState==='function') saveInflightState(activeSid,pending);
         return;
       }
+      const hasOtherState=Object.keys(pending).some(key=>[
+        'streamId','deliveredSteers','updated_at'
+      ].indexOf(key)<0&&pending[key]!=null&&(
+        !Array.isArray(pending[key])||pending[key].length||
+        (typeof pending[key]==='string'&&pending[key].length)
+      ));
+      if(hasOtherState) return;
       delete INFLIGHT[activeSid];
       if(typeof clearInflightState==='function') clearInflightState(activeSid);
     };
@@ -7295,6 +7319,10 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     }
     try{
       const data=await api(`/api/session?session_id=${encodeURIComponent(activeSid)}`);
+      if(!_ownsCurrentStream()){
+        _closeSource(source);
+        return returnStatus?'stale':false;
+      }
       // Opus #2852 race-fix: if a late `done` event ran the finalize path while
       // we were awaiting the network roundtrip, bail out — done already settled.
       if(_streamFinalized) return returnStatus?'restored':true;
