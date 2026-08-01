@@ -1697,6 +1697,13 @@ async function _switchProfileForSessionLoad(profile){
   }
 }
 
+function _preserveSettledDeliveredSteersForRecovery(sid, records){
+  if(!sid||!Array.isArray(records)||!records.length) return false;
+  INFLIGHT[sid]={streamId:null,deliveredSteers:records};
+  if(typeof saveInflightState==='function') saveInflightState(sid,INFLIGHT[sid]);
+  return true;
+}
+
 async function loadSession(sid){
   const opts = arguments[1] || {};
   // Resolve canonical lineage SID BEFORE both the direct and sidebar preload
@@ -2057,6 +2064,9 @@ async function loadSession(sid){
       : [];
     settledDeliveredSteers=localDeliveredSteers.length?localDeliveredSteers:storedDeliveredSteers;
   }
+  const preserveSettledDeliveredSteers=()=>{
+    _preserveSettledDeliveredSteersForRecovery(sid,settledDeliveredSteers);
+  };
   // If the server says the session is idle, reset browser-side streaming flags
   // NOW — BEFORE _acknowledgeSessionVisit() below (whose sidebar repaint would
   // otherwise inherit the PREVIOUS session's busy/stream state) and before the
@@ -2075,6 +2085,7 @@ async function loadSession(sid){
       delete INFLIGHT[sid];
       if(typeof clearInflightState==='function') clearInflightState(sid);
     }
+    preserveSettledDeliveredSteers();
   }
 
   // and syncs the polling snapshot so a deferred /api/sessions poll landing
@@ -2171,6 +2182,7 @@ async function loadSession(sid){
       await _ensureMessagesLoaded(sid, {force:_keepStaleUntilLoaded, loadGeneration:_loadGeneration});
     } catch(e) {
       if (!_isCurrentLoad()) {
+        preserveSettledDeliveredSteers();
         _rearmActiveSessionStream();
         return;
       }
@@ -2290,10 +2302,14 @@ async function loadSession(sid){
       }
       if (typeof showToast === 'function') showToast('Failed to load conversation messages', 3000, 'error');
       if (_isCurrentLoad()) _loadingSessionId = null;
+      preserveSettledDeliveredSteers();
       return;
     }
     // Stale? A newer loadSession() call has already started (#1060).
-    if (!_isCurrentLoad()) return;
+    if (!_isCurrentLoad()) {
+      preserveSettledDeliveredSteers();
+      return;
+    }
 
     // Restore any queued message that survived page refresh or tab restore.
     if(typeof queueSessionMessage==='function'){
@@ -2323,7 +2339,11 @@ async function loadSession(sid){
     // Reconstruct tool calls from message metadata, or fall back to session-level summary.
     // (hasMessageToolMetadata already computed inside _ensureMessagesLoaded; S.toolCalls set there.)
     if(settledDeliveredSteers.length&&typeof _restoreDeliveredSteersIntoSettledMessages==='function'){
-      _restoreDeliveredSteersIntoSettledMessages(S.messages,sid,settledDeliveredSteers);
+      const restoredSettledSteers=_restoreDeliveredSteersIntoSettledMessages(S.messages,sid,settledDeliveredSteers);
+      if(restoredSettledSteers){
+        delete INFLIGHT[sid];
+        if(typeof clearInflightState==='function') clearInflightState(sid);
+      }
     }
     updateQueueBadge(sid);
 
