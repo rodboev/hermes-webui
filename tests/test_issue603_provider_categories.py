@@ -364,7 +364,7 @@ class TestApplyBaseURLSpecialized:
         )
 
     def test_mistral_gets_default_base_url(self, tmp_path, monkeypatch):
-        saved = self._run_setup(tmp_path, monkeypatch, "mistralai")
+        saved = self._run_setup(tmp_path, monkeypatch, "mistral")
         assert "mistral.ai" in saved.get("model", {}).get("base_url", ""), (
             "mistral setup must write the Mistral base_url to config"
         )
