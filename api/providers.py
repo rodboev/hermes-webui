@@ -35,6 +35,7 @@ except ImportError:  # pragma: no cover - exercised only where fcntl is unavaila
 from api.config import (
     _PROVIDER_DISPLAY,
     _PROVIDER_MODELS,
+    _resolve_provider_alias,
     _coerce_provider_cost_budget,
     _configured_model_ids,
     _custom_provider_slug_from_name,
@@ -61,7 +62,10 @@ logger = logging.getLogger(__name__)
 
 def _provider_env_var_for(provider_id: str) -> str | None:
     """Resolve the API-key env var for a provider (static table + plugin profiles)."""
-    return effective_provider_env_var(provider_id, _PROVIDER_ENV_VAR)
+    env_var = effective_provider_env_var(provider_id, _PROVIDER_ENV_VAR)
+    if env_var:
+        return env_var
+    return effective_provider_env_var(_resolve_provider_alias(provider_id), _PROVIDER_ENV_VAR)
 
 
 def _custom_provider_name_matches(provider_id: str, name: object) -> bool:
@@ -717,7 +721,7 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     "deepseek": "DEEPSEEK_API_KEY",
     "minimax": "MINIMAX_API_KEY",
     "minimax-cn": "MINIMAX_CN_API_KEY",
-    "mistralai": "MISTRAL_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
     "x-ai": "XAI_API_KEY",
     "xiaomi": "XIAOMI_API_KEY",
     "neuralwatt": "NEURALWATT_API_KEY",

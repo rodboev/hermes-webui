@@ -1193,7 +1193,7 @@ _PROVIDER_DISPLAY = {
     "opencode-zen": "OpenCode Zen",
     "opencode-go": "OpenCode Go",
     "lmstudio": "LM Studio",
-    "mistralai": "Mistral",
+    "mistral": "Mistral",
     "qwen": "Qwen",
     "x-ai": "xAI",
     "nvidia": "NVIDIA NIM",
@@ -1214,7 +1214,13 @@ _PROVIDER_DISPLAY = {
 # copy means the fix works even in environments where the agent tree is
 # not on ``sys.path`` (CI, installs without hermes-agent cloned
 # alongside the WebUI).
+_PROVIDER_DEFAULT_BASE_URL: dict[str, str] = {
+    "mistral": "https://api.mistral.ai/v1",
+}
+
+
 _PROVIDER_ALIASES = {
+    "mistralai": "mistral",
     "glm": "zai",
     "z-ai": "zai",
     "z.ai": "zai",
@@ -1529,7 +1535,7 @@ def _canonicalise_provider_id(name: object) -> str:
     # rejected valid aliases like `google-gemini`→`gemini`, leaving the id
     # uncanonicalised and silently breaking provider-ownership checks (#5511).
     # This still blocks aliases that point at non-canonical/legacy strings.
-    resolved = _resolve_provider_alias(raw)
+    resolved = _PROVIDER_ALIASES.get(raw) or _resolve_provider_alias(raw)
     if resolved and (resolved.lower() in _PROVIDER_DISPLAY or resolved.lower() in _PROVIDER_MODELS):
         return resolved.lower()
     return raw
@@ -1866,8 +1872,8 @@ _PROVIDER_MODELS = {
         {"id": "gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
         {"id": "gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
     ],
-    # Mistral — prefix used in OpenRouter model IDs (mistralai/mistral-large-latest)
-    "mistralai": [
+    # Mistral direct API catalog. OpenRouter model IDs keep their vendor prefix.
+    "mistral": [
         {"id": "mistral-large-latest", "label": "Mistral Large"},
         {"id": "mistral-small-latest", "label": "Mistral Small"},
     ],
@@ -3108,14 +3114,14 @@ def model_with_provider_context(model_id: str, model_provider: str | None = None
     needed to route away from the current default provider.
     """
     model = str(model_id or "").strip()
-    provider = str(model_provider or "").strip().lower()
+    provider = _canonicalise_provider_id(model_provider)
     if not model or not provider or provider == "default" or model.startswith("@"):
         return model
 
     model_cfg = cfg.get("model", {})
     config_provider = None
     if isinstance(model_cfg, dict):
-        config_provider = str(model_cfg.get("provider") or "").strip().lower()
+        config_provider = _canonicalise_provider_id(model_cfg.get("provider"))
 
     # ACP subprocess providers always need the explicit hint — their slash IDs
     # are not OpenRouter paths and must not inherit config_provider routing.
@@ -4643,6 +4649,7 @@ def set_hermes_default_model(model_id: str, provider: str | None = None, advance
         # so the agent's auxiliary client uses the ``no-key-required`` path.
         if persisted_provider.lower() == "local":
             persisted_provider = "custom"
+        persisted_provider = _canonicalise_provider_id(persisted_provider)
 
         model_cfg["default"] = persisted_model
         if persisted_provider:
@@ -4654,12 +4661,29 @@ def set_hermes_default_model(model_id: str, provider: str | None = None, advance
             if persisted_provider == "openai":
                 model_cfg["base_url"] = "https://api.openai.com/v1"
             else:
-                # Provider changed and we have no resolved URL for the new one.
-                # Drop the previous provider's base_url so New Chat doesn't route
-                # to the old endpoint — this MUST also cover custom:* providers
-                # (a different custom provider has a different URL); leaving the
-                # stale base_url sent requests to the wrong host (#4728).
-                model_cfg.pop("base_url", None)
+                canonical = _canonicalise_provider_id(persisted_provider)
+                try:
+                    from hermes_cli.models import list_available_providers
+
+                    agent_roster_ids = {
+                        _canonicalise_provider_id(item.get("id", ""))
+                        for item in list_available_providers()
+                        if isinstance(item, dict)
+                    }
+                except Exception:
+                    agent_roster_ids = set()
+                if (
+                    canonical not in agent_roster_ids
+                    and canonical in _PROVIDER_DEFAULT_BASE_URL
+                ):
+                    model_cfg["base_url"] = _PROVIDER_DEFAULT_BASE_URL[canonical]
+                    persisted_provider = canonical
+                    model_cfg["provider"] = canonical
+                else:
+                    # Provider changed and we have no resolved URL for the new one.
+                    # Drop the previous provider's base_url so New Chat doesn't route
+                    # to the old endpoint, including custom providers.
+                    model_cfg.pop("base_url", None)
 
         _apply_advanced_model_options(model_cfg, advanced)
         if not _main_model_supports_service_tier(persisted_model, persisted_provider):
@@ -6777,11 +6801,15 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         all_env: dict = {}
 
         _hermes_auth_used = False
+        _agent_roster_ids: set[str] = set()
         try:
             from hermes_cli.models import list_available_providers as _lap
             from hermes_cli.auth import get_auth_status as _gas
 
             for _p in _lap():
+                _agent_pid = _canonicalise_provider_id(_p.get("id", ""))
+                if _agent_pid:
+                    _agent_roster_ids.add(_agent_pid)
                 if not _p.get("authenticated"):
                     continue
                 try:
@@ -6790,7 +6818,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                         continue
                 except Exception:
                     logger.debug("Failed to get key source for provider %s", _p.get("id", "unknown"))
-                detected_providers.add(_p["id"])
+                detected_providers.add(_agent_pid)
             _hermes_auth_used = True
 
             # Belt-and-braces: list_available_providers() is the primary signal
@@ -6811,95 +6839,102 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         except Exception:
             logger.debug("Failed to detect auth providers from hermes")
 
-        if not _hermes_auth_used:
-            try:
-                from api.profiles import get_active_hermes_home as _gah2
-
-                hermes_env_path = _gah2() / ".env"
-            except ImportError:
-                hermes_env_path = _DEFAULT_HERMES_HOME / ".env"
-            env_keys = {}
-            if hermes_env_path.exists():
-                try:
-                    for line in hermes_env_path.read_text(encoding="utf-8").splitlines():
-                        line = line.strip()
-                        if line and not line.startswith("#") and "=" in line:
-                            k, v = line.split("=", 1)
-                            env_keys[k.strip()] = v.strip().strip('"').strip("'")
-                except Exception:
-                    logger.debug("Failed to parse hermes env file")
-            all_env = {**env_keys}
-            _anthropic_env_vars = _get_anthropic_fallback_env_vars()
-            for k in (
-                *_anthropic_env_vars,
-                "OPENAI_API_KEY",
-                "OPENROUTER_API_KEY",
-                "GOOGLE_API_KEY",
-                "GEMINI_API_KEY",
-                "GLM_API_KEY",
-                "KIMI_API_KEY",
-                "DEEPSEEK_API_KEY",
-                "XIAOMI_API_KEY",
-                "OPENCODE_ZEN_API_KEY",
-                "OPENCODE_GO_API_KEY",
-                "OPENCODE_API_KEY",
-                "MINIMAX_API_KEY",
-                "MINIMAX_CN_API_KEY",
-                "XAI_API_KEY",
-                "MISTRAL_API_KEY",
-                "AWS_ACCESS_KEY_ID",
-                "AWS_SECRET_ACCESS_KEY",
+        def _add_env_detected(provider_id: str) -> None:
+            canonical_id = _canonicalise_provider_id(provider_id)
+            if canonical_id and (
+                not _hermes_auth_used or canonical_id not in _agent_roster_ids
             ):
-                val = _thread_local_env_value(k).strip()
-                if val:
-                    all_env[k] = val
-            if any(all_env.get(env_var) for env_var in _anthropic_env_vars):
-                detected_providers.add("anthropic")
-            if all_env.get("OPENAI_API_KEY"):
-                # hermes-agent registers its OPENAI_API_KEY/OPENAI_BASE_URL provider
-                # under the slug `openai-api` (there is no bare `openai` in the agent
-                # registry — only `openai-api` and `openai-codex`). Detecting `openai`
-                # here would emit `@openai:` picker entries the agent can't resolve on
-                # the send path, so detect `openai-api` to match the registry (#3443).
-                detected_providers.add("openai-api")
-                # openai-codex uses ChatGPT OAuth (not OPENAI_API_KEY) for its default endpoint.
-                # Detecting it here lets users who have both credentials configured find it in the
-                # picker without a manual config.yaml edit. Users without Codex OAuth will see
-                # picker entries but hit auth errors at inference time (#1189 known limitation).
-                detected_providers.add("openai-codex")
-            if all_env.get("OPENROUTER_API_KEY"):
-                detected_providers.add("openrouter")
-            if all_env.get("GOOGLE_API_KEY"):
-                detected_providers.add("google")
-            if all_env.get("GEMINI_API_KEY"):
-                detected_providers.add("gemini")
-            if all_env.get("GLM_API_KEY"):
-                detected_providers.add("zai")
-            if all_env.get("KIMI_API_KEY"):
-                detected_providers.add("kimi-coding")
-            if all_env.get("MINIMAX_API_KEY"):
-                detected_providers.add("minimax")
-            if all_env.get("MINIMAX_CN_API_KEY"):
-                detected_providers.add("minimax-cn")
-            if all_env.get("DEEPSEEK_API_KEY"):
-                detected_providers.add("deepseek")
-            if all_env.get("XIAOMI_API_KEY"):
-                detected_providers.add("xiaomi")
-            if all_env.get("XAI_API_KEY"):
-                detected_providers.add("x-ai")
-            if all_env.get("MISTRAL_API_KEY"):
-                detected_providers.add("mistralai")
-            if all_env.get("OPENCODE_ZEN_API_KEY") or all_env.get("OPENCODE_API_KEY"):
-                detected_providers.add("opencode-zen")
-            if all_env.get("OPENCODE_GO_API_KEY") or all_env.get("OPENCODE_API_KEY"):
-                detected_providers.add("opencode-go")
-            # AWS Bedrock uses IAM credentials rather than a single API key.
-            # Detect when both access key and secret are available (#2720).
-            if all_env.get("AWS_ACCESS_KEY_ID") and all_env.get("AWS_SECRET_ACCESS_KEY"):
-                detected_providers.add("bedrock")
-            # LM Studio: detect via LM_API_KEY + LM_BASE_URL in ~/.hermes/.env
-            if all_env.get("LM_API_KEY") and all_env.get("LM_BASE_URL"):
-                detected_providers.add("lmstudio")
+                detected_providers.add(canonical_id)
+
+        # Keep profile-scoped env evidence active when the agent is importable.
+        try:
+            from api.profiles import get_active_hermes_home as _gah2
+
+            hermes_env_path = _gah2() / ".env"
+        except ImportError:
+            hermes_env_path = _DEFAULT_HERMES_HOME / ".env"
+        env_keys = {}
+        if hermes_env_path.exists():
+            try:
+                for line in hermes_env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        env_keys[k.strip()] = v.strip().strip('"').strip("'")
+            except Exception:
+                logger.debug("Failed to parse hermes env file")
+        all_env = {**env_keys}
+        _anthropic_env_vars = _get_anthropic_fallback_env_vars()
+        for k in (
+            *_anthropic_env_vars,
+            "OPENAI_API_KEY",
+            "OPENROUTER_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "GLM_API_KEY",
+            "KIMI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "XIAOMI_API_KEY",
+            "OPENCODE_ZEN_API_KEY",
+            "OPENCODE_GO_API_KEY",
+            "OPENCODE_API_KEY",
+            "MINIMAX_API_KEY",
+            "MINIMAX_CN_API_KEY",
+            "XAI_API_KEY",
+            "MISTRAL_API_KEY",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+        ):
+            val = _thread_local_env_value(k).strip()
+            if val:
+                all_env[k] = val
+        if any(all_env.get(env_var) for env_var in _anthropic_env_vars):
+            _add_env_detected("anthropic")
+        if all_env.get("OPENAI_API_KEY"):
+            # hermes-agent registers its OPENAI_API_KEY/OPENAI_BASE_URL provider
+            # under the slug `openai-api` (there is no bare `openai` in the agent
+            # registry — only `openai-api` and `openai-codex`). Detecting `openai`
+            # here would emit `@openai:` picker entries the agent can't resolve on
+            # the send path, so detect `openai-api` to match the registry (#3443).
+            _add_env_detected("openai-api")
+            # openai-codex uses ChatGPT OAuth (not OPENAI_API_KEY) for its default endpoint.
+            # Detecting it here lets users who have both credentials configured find it in the
+            # picker without a manual config.yaml edit. Users without Codex OAuth will see
+            # picker entries but hit auth errors at inference time (#1189 known limitation).
+            _add_env_detected("openai-codex")
+        if all_env.get("OPENROUTER_API_KEY"):
+            _add_env_detected("openrouter")
+        if all_env.get("GOOGLE_API_KEY"):
+            _add_env_detected("google")
+        if all_env.get("GEMINI_API_KEY"):
+            _add_env_detected("gemini")
+        if all_env.get("GLM_API_KEY"):
+            _add_env_detected("zai")
+        if all_env.get("KIMI_API_KEY"):
+            _add_env_detected("kimi-coding")
+        if all_env.get("MINIMAX_API_KEY"):
+            _add_env_detected("minimax")
+        if all_env.get("MINIMAX_CN_API_KEY"):
+            _add_env_detected("minimax-cn")
+        if all_env.get("DEEPSEEK_API_KEY"):
+            _add_env_detected("deepseek")
+        if all_env.get("XIAOMI_API_KEY"):
+            _add_env_detected("xiaomi")
+        if all_env.get("XAI_API_KEY"):
+            _add_env_detected("x-ai")
+        if all_env.get("MISTRAL_API_KEY"):
+            _add_env_detected("mistral")
+        if all_env.get("OPENCODE_ZEN_API_KEY") or all_env.get("OPENCODE_API_KEY"):
+            _add_env_detected("opencode-zen")
+        if all_env.get("OPENCODE_GO_API_KEY") or all_env.get("OPENCODE_API_KEY"):
+            _add_env_detected("opencode-go")
+        # AWS Bedrock uses IAM credentials rather than a single API key.
+        # Detect when both access key and secret are available (#2720).
+        if all_env.get("AWS_ACCESS_KEY_ID") and all_env.get("AWS_SECRET_ACCESS_KEY"):
+            _add_env_detected("bedrock")
+        # LM Studio: detect via LM_API_KEY + LM_BASE_URL in ~/.hermes/.env
+        if all_env.get("LM_API_KEY") and all_env.get("LM_BASE_URL"):
+            _add_env_detected("lmstudio")
 
         # Also detect providers explicitly listed in config.yaml providers section.
         # A user may configure a provider key via config.yaml providers.<name>.api_key

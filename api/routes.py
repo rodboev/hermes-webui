@@ -1827,7 +1827,7 @@ _PROVIDER_ALIASES = {
 _OPENAI_COMPAT_ENDPOINTS = {
     "zai": "https://api.z.ai/v1",
     "minimax": "https://api.minimax.chat/v1",
-    "mistralai": "https://api.mistral.ai/v1",
+    "mistral": "https://api.mistral.ai/v1",
     "xai": "https://api.x.ai/v1",
     "deepseek": "https://api.deepseek.com",
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -2853,6 +2853,7 @@ from api.config import (
     unregister_stream_owner,
     CHAT_LOCK,
     _get_session_agent_lock,
+    _resolve_provider_alias,
     CUSTOM_MODELS_ENDPOINT_TIMEOUT_SECONDS,
     load_settings,
     persisted_speech_settings_keys,
@@ -6552,7 +6553,7 @@ def _clean_session_model_provider(value: str | None) -> str | None:
     if provider.startswith("@"):
         parsed = _parse_provider_qualified_model_id(provider)
         provider = parsed[1].strip() if parsed else provider[1:]
-    return provider or None
+    return _resolve_provider_alias(provider) or None
 
 
 def _split_provider_qualified_model(model: str) -> tuple[str, str | None]:
@@ -20401,6 +20402,7 @@ def _handle_live_models(handler, parsed):
     """
     qs = parse_qs(parsed.query)
     provider = (qs.get("provider", [""])[0] or "").lower().strip()
+    requested_provider = provider
 
     try:
         from api.config import get_config as _gc
@@ -20415,8 +20417,9 @@ def _handle_live_models(handler, parsed):
         # without normalization, provider_model_ids() misses the alias and returns [].
         # Uses the WebUI-owned table (api/config._resolve_provider_alias) which
         # works even when hermes_cli is not on sys.path.
-        from api.config import _resolve_provider_alias
+        from api.config import _canonicalise_provider_id, _resolve_provider_alias
         provider = _resolve_provider_alias(provider)
+        provider = _canonicalise_provider_id(provider)
 
         cache_key = _live_models_cache_key(provider)
         cached = _get_cached_live_models(cache_key)
@@ -20424,6 +20427,8 @@ def _handle_live_models(handler, parsed):
             return j(handler, cached)
 
         def _finish(payload: dict):
+            if requested_provider:
+                payload["provider"] = requested_provider
             _set_cached_live_models(cache_key, payload)
             return j(handler, payload)
 
@@ -20613,6 +20618,8 @@ def _handle_live_models(handler, parsed):
                     import urllib.request
                     _providers_cfg = cfg.get("providers") or {}
                     _prov = _providers_cfg.get(provider, {}) if isinstance(_providers_cfg, dict) else {}
+                    if not _prov and isinstance(_providers_cfg, dict):
+                        _prov = _providers_cfg.get(requested_provider, {})
                     # Only use a provider-scoped key.  A top-level model.api_key
                     # is safe here only when it belongs to the requested provider;
                     # otherwise /api/models/live?provider=<other> could forward
@@ -20624,6 +20631,7 @@ def _handle_live_models(handler, parsed):
                             _active_provider = _resolve_provider_alias(
                                 (_model_cfg.get("provider") or "").strip().lower()
                             )
+                            _active_provider = _canonicalise_provider_id(_active_provider)
                             if _active_provider == provider:
                                 _key = _model_cfg.get("api_key")
                     if _key:
