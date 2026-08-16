@@ -38,7 +38,7 @@ class TestProviderDetectionEnvVars:
     def test_xai_env_maps_to_xai_provider(self):
         """XAI_API_KEY should retain the x-ai provider identity."""
         src = _src()
-        assert re.search(r'XAI_API_KEY.*?_add_env_detected\("x-ai"\)', src, re.DOTALL), \
+        assert re.search(r'XAI_API_KEY.*?add\("x-ai"\)', src, re.DOTALL), \
             "XAI_API_KEY must map to provider 'x-ai'"
 
     def test_mistral_env_maps_to_mistral_provider(self):
