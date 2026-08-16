@@ -6889,52 +6889,52 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
             if val:
                 all_env[k] = val
         if any(all_env.get(env_var) for env_var in _anthropic_env_vars):
-            _add_env_detected("anthropic")
+            detected_providers.add("anthropic")
         if all_env.get("OPENAI_API_KEY"):
             # hermes-agent registers its OPENAI_API_KEY/OPENAI_BASE_URL provider
             # under the slug `openai-api` (there is no bare `openai` in the agent
             # registry — only `openai-api` and `openai-codex`). Detecting `openai`
             # here would emit `@openai:` picker entries the agent can't resolve on
             # the send path, so detect `openai-api` to match the registry (#3443).
-            _add_env_detected("openai-api")
+            detected_providers.add("openai-api")
             # openai-codex uses ChatGPT OAuth (not OPENAI_API_KEY) for its default endpoint.
             # Detecting it here lets users who have both credentials configured find it in the
             # picker without a manual config.yaml edit. Users without Codex OAuth will see
             # picker entries but hit auth errors at inference time (#1189 known limitation).
-            _add_env_detected("openai-codex")
+            detected_providers.add("openai-codex")
         if all_env.get("OPENROUTER_API_KEY"):
-            _add_env_detected("openrouter")
+            detected_providers.add("openrouter")
         if all_env.get("GOOGLE_API_KEY"):
-            _add_env_detected("google")
+            detected_providers.add("google")
         if all_env.get("GEMINI_API_KEY"):
-            _add_env_detected("gemini")
+            detected_providers.add("gemini")
         if all_env.get("GLM_API_KEY"):
-            _add_env_detected("zai")
+            detected_providers.add("zai")
         if all_env.get("KIMI_API_KEY"):
-            _add_env_detected("kimi-coding")
+            detected_providers.add("kimi-coding")
         if all_env.get("MINIMAX_API_KEY"):
-            _add_env_detected("minimax")
+            detected_providers.add("minimax")
         if all_env.get("MINIMAX_CN_API_KEY"):
-            _add_env_detected("minimax-cn")
+            detected_providers.add("minimax-cn")
         if all_env.get("DEEPSEEK_API_KEY"):
-            _add_env_detected("deepseek")
+            detected_providers.add("deepseek")
         if all_env.get("XIAOMI_API_KEY"):
-            _add_env_detected("xiaomi")
+            detected_providers.add("xiaomi")
         if all_env.get("XAI_API_KEY"):
-            _add_env_detected("x-ai")
+            detected_providers.add("x-ai")
         if all_env.get("MISTRAL_API_KEY"):
             _add_env_detected("mistral")
         if all_env.get("OPENCODE_ZEN_API_KEY") or all_env.get("OPENCODE_API_KEY"):
-            _add_env_detected("opencode-zen")
+            detected_providers.add("opencode-zen")
         if all_env.get("OPENCODE_GO_API_KEY") or all_env.get("OPENCODE_API_KEY"):
-            _add_env_detected("opencode-go")
+            detected_providers.add("opencode-go")
         # AWS Bedrock uses IAM credentials rather than a single API key.
         # Detect when both access key and secret are available (#2720).
         if all_env.get("AWS_ACCESS_KEY_ID") and all_env.get("AWS_SECRET_ACCESS_KEY"):
-            _add_env_detected("bedrock")
+            detected_providers.add("bedrock")
         # LM Studio: detect via LM_API_KEY + LM_BASE_URL in ~/.hermes/.env
         if all_env.get("LM_API_KEY") and all_env.get("LM_BASE_URL"):
-            _add_env_detected("lmstudio")
+            detected_providers.add("lmstudio")
 
         # Also detect providers explicitly listed in config.yaml providers section.
         # A user may configure a provider key via config.yaml providers.<name>.api_key
