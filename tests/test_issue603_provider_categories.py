@@ -67,15 +67,15 @@ class TestProviderCatalog:
         }
         assert "gemini" in spec
         assert "deepseek" in spec
-        assert "mistralai" in spec
+        assert "mistral" in spec
         assert "x-ai" in spec
 
     def test_new_providers_exist(self):
-        expected = {"ollama", "lmstudio", "gemini", "deepseek", "mistralai", "x-ai"}
+        expected = {"ollama", "lmstudio", "gemini", "deepseek", "mistral", "x-ai"}
         assert expected.issubset(_SUPPORTED_PROVIDER_SETUPS.keys())
 
     def test_new_providers_have_env_vars(self):
-        for pid in ["ollama", "lmstudio", "gemini", "deepseek", "mistralai", "x-ai"]:
+        for pid in ["ollama", "lmstudio", "gemini", "deepseek", "mistral", "x-ai"]:
             meta = _SUPPORTED_PROVIDER_SETUPS[pid]
             assert meta["env_var"], f"Provider {pid} missing env_var"
             assert meta["default_model"], f"Provider {pid} missing default_model"
@@ -85,7 +85,7 @@ class TestProviderCatalog:
             assert _SUPPORTED_PROVIDER_SETUPS[pid]["requires_base_url"]
 
     def test_specialized_providers_have_base_url_defaults(self):
-        for pid in ["gemini", "deepseek", "mistralai", "x-ai"]:
+        for pid in ["gemini", "deepseek", "mistral", "x-ai"]:
             meta = _SUPPORTED_PROVIDER_SETUPS[pid]
             assert meta["default_base_url"], f"Provider {pid} missing default_base_url"
 
