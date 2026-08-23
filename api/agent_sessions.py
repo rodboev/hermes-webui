@@ -21,6 +21,8 @@ _COMPRESSION_SUMMARY_PREFIXES = (
     "[session arc summary",
     "[end of prior context — compaction summary below]",
 )
+_SYSTEM_DISPLAY_HIDDEN_PREFIX = "[system:"
+_AUTO_CONTINUE_NOTE_PREFIX = "[system note: your previous turn was interrupted mid-run"
 
 
 def _human_turn_content_text(content: object) -> str:
@@ -84,6 +86,8 @@ def is_human_user_turn(message: object) -> bool:
     if is_context_compression_marker(message) or text.lstrip().startswith(_TODO_INJECTION_HEADER):
         return False
     normalized = text.strip().lower()
+    if normalized.startswith(_SYSTEM_DISPLAY_HIDDEN_PREFIX) or normalized.startswith(_AUTO_CONTINUE_NOTE_PREFIX):
+        return False
     if normalized in {value.lower() for value in _LEGACY_CONTINUATION_HANDOFFS}:
         return False
     return not normalized.startswith(_COMPRESSION_SUMMARY_PREFIXES)
@@ -115,13 +119,16 @@ def _human_user_turn_sql_predicate(message_cols: set[str], alias: str = "m") -> 
     content = f"{alias}.content"
     structured_content = _sql_valid_structured_content_predicate(content)
     content_text = f"LOWER(LTRIM(CAST({content} AS TEXT)))"
+    normalized_content = f"LOWER(TRIM(CAST({content} AS TEXT)))"
     clauses.extend([
         f"typeof({content}) = 'text'",
         f"TRIM(CAST({content} AS TEXT)) <> ''",
         f"NOT {structured_content}",
         *[f"{content_text} NOT LIKE {prefix!r} || '%'" for prefix in _COMPRESSION_SUMMARY_PREFIXES],
         f"{content_text} NOT LIKE '[your active task list was preserved across context compression]%'",
-        f"LOWER(CAST({content} AS TEXT)) NOT IN ({', '.join(repr(value.lower()) for value in sorted(_LEGACY_CONTINUATION_HANDOFFS))})",
+        f"{content_text} NOT LIKE '{_SYSTEM_DISPLAY_HIDDEN_PREFIX}%'",
+        f"{content_text} NOT LIKE '{_AUTO_CONTINUE_NOTE_PREFIX}%'",
+        f"{normalized_content} NOT IN ({', '.join(repr(value.lower()) for value in sorted(_LEGACY_CONTINUATION_HANDOFFS))})",
     ])
     return "(" + " AND ".join(clauses) + ")"
 

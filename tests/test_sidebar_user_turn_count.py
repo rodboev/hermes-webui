@@ -930,6 +930,37 @@ def test_state_db_invalid_json_user_content_remains_a_scalar_human_turn(tmp_path
     assert row["actual_user_message_count"] == 2
 
 
+def test_state_db_sql_human_turn_predicate_matches_synthetic_marker_classifier(tmp_path):
+    db = tmp_path / "state.db"
+    _make_state_db(
+        db,
+        sessions=[("s1", "CLI Session", "gpt", 5, 1000.0, "cli", "cli")],
+        messages=[
+            ("s1", "user", 1.0),
+            ("s1", "user", 2.0),
+            ("s1", "user", 3.0),
+            ("s1", "user", 4.0),
+            ("s1", "assistant", 5.0),
+        ],
+    )
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE messages SET content = ? WHERE id = 2", ("[System: model changed]",))
+    conn.execute(
+        "UPDATE messages SET content = ? WHERE id = 3",
+        (" [System note: Your previous turn was interrupted mid-run — resumed]",),
+    )
+    conn.execute(
+        "UPDATE messages SET content = ? WHERE id = 4",
+        ("  Continue from the compressed conversation context above. This marker exists because no human user turn was available.  ",),
+    )
+    conn.commit()
+    conn.close()
+
+    row = agent_sessions.read_importable_agent_session_rows(db, exclude_sources=None)[0]
+
+    assert row["actual_user_message_count"] == 1
+
+
 def test_compact_uses_the_canonical_human_turn_truth_table():
     session = models.Session(session_id="truth-table")
     session.messages = [
@@ -941,6 +972,9 @@ def test_compact_uses_the_canonical_human_turn_truth_table():
         {"role": "user", "content": "[Your active task list was preserved across context compression]\n- [ ] task"},
         {"role": "user", "content": "Continue from the compressed conversation context above. This marker exists because no human user turn was available."},
         {"role": "user", "content": "Continue from the compressed conversation context above. This marker exists because the compacted transcript contained no preserved user turn."},
+        {"role": "user", "content": "[System: The active model for this chat has changed to gpt-5]"},
+        {"role": "user", "content": " [System note: Your previous turn was interrupted mid-run — the app resumed it]"},
+        {"role": "user", "content": "  Continue from the compressed conversation context above. This marker exists because no human user turn was available.  "},
         {"role": "user", "content": {"type": "text", "text": "structured"}},
     ]
     assert session.compact()["user_message_count"] == 2
