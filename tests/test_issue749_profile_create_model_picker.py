@@ -172,7 +172,13 @@ def test_profile_validation_catalog_uses_clone_source_config(monkeypatch):
     source_config = {
         "model": {"default": "source-only-model", "provider": "source-provider"},
         "providers": {
-            "source-provider": {"models": ["source-only-model", "source-alt-model"]}
+            "source-provider": {
+                "models": [
+                    "source-only-model",
+                    {"model": "source-dict-model"},
+                    {"name": "source-name-model"},
+                ]
+            }
         },
     }
 
@@ -182,7 +188,7 @@ def test_profile_validation_catalog_uses_clone_source_config(monkeypatch):
     )
 
     profiles._validate_profile_model_selection(
-        "source-alt-model",
+        "source-dict-model",
         "source-provider",
         config_obj=source_config,
     )
