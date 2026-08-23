@@ -204,11 +204,15 @@ def test_rejected_submission_is_interrupted_once(transaction_env, monkeypatch):
 
 
 def test_postcommit_failure_preserves_accepted_state(transaction_env, monkeypatch):
+    observed = []
+    done = threading.Event()
     session = new_session(workspace=str(transaction_env.parent))
+    monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: (observed.append(kwargs), done.set()))
     monkeypatch.setattr(routes, "set_last_workspace", lambda _workspace: (_ for _ in ()).throw(RuntimeError("postcommit")))
-    with pytest.raises(RuntimeError, match="postcommit") as caught:
-        _start(session)
-    assert caught.value._regeneration_accepted is True
+    response = _start(session)
+    assert response["session_id"] == session.session_id
+    assert done.wait(2)
+    assert observed
     assert session.active_stream_id
     assert config.session_writeback_owner(session.session_id) == session.active_stream_id
 
@@ -228,18 +232,26 @@ def test_session_list_publication_failure_does_not_reject_durable_start(transact
 def test_failed_admission_preserves_successor_owner_and_state(transaction_env, monkeypatch):
     session = new_session(workspace=str(transaction_env.parent))
     successor = "successor-stream"
+    successor_workspace = str(transaction_env / "successor-workspace")
 
-    def fail_after_successor(_workspace):
+    def install_successor_before_compensation(_self):
         config.register_session_writeback_owner(session.session_id, successor)
         session.pending_user_message = "successor"
         session.title = "successor title"
+        session.workspace = successor_workspace
         session.successor_only_state = {"kept": True}
-        raise RuntimeError("reject")
+        session.save()
+        raise RuntimeError("thread start rejected")
 
-    monkeypatch.setattr(routes, "set_last_workspace", fail_after_successor)
-    with pytest.raises(RuntimeError):
+    monkeypatch.setattr(threading.Thread, "start", install_successor_before_compensation)
+    with pytest.raises(RuntimeError, match="thread start rejected"):
         _start(session)
     assert config.session_writeback_owner(session.session_id) == successor
     assert session.pending_user_message == "successor"
     assert session.title == "successor title"
+    assert session.workspace == successor_workspace
     assert session.successor_only_state == {"kept": True}
+    reloaded = models.Session.load(session.session_id)
+    assert reloaded.pending_user_message == "successor"
+    assert reloaded.title == "successor title"
+    assert reloaded.workspace == successor_workspace

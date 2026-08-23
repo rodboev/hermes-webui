@@ -22732,7 +22732,7 @@ def _commit_chat_start_admission(
     from api.session_ops import restore_session_state, snapshot_session_state
 
     stream_id = uuid.uuid4().hex
-    snapshot = None
+    pre_attempt_snapshot = None
     marker_claim = {"goal": False, "background": False}
     was_hidden_empty_session = _is_hidden_empty_session(s)
     journal_event = {}
@@ -22774,7 +22774,7 @@ def _commit_chat_start_admission(
             _clear_gateway_run_starting(stream_id)
 
     try:
-        snapshot = snapshot_session_state(s)
+        pre_attempt_snapshot = snapshot_session_state(s)
         effective_goal_related, marker_claim = _claim_pending_start_markers(s, goal_related)
         register_session_writeback_owner(s.session_id, stream_id)
         writeback_owner_registered = True
@@ -22861,9 +22861,12 @@ def _commit_chat_start_admission(
         worker_release.set()
         try:
             set_last_workspace(workspace)
-        except Exception as exc:
-            exc._regeneration_accepted = True
-            raise
+        except Exception:
+            logger.warning(
+                "Failed to publish last workspace after accepted chat start for %s",
+                s.session_id,
+                exc_info=True,
+            )
         if was_hidden_empty_session:
             try:
                 publish_session_list_changed(
@@ -22876,10 +22879,6 @@ def _commit_chat_start_admission(
     except Exception as exc:
         if committed:
             raise
-        successor_owner = session_writeback_owner(s.session_id)
-        successor_state = None
-        if successor_owner and successor_owner != stream_id:
-            successor_state = snapshot_session_state(s)
         if thread_started and worker_thread is not None:
             worker_abort.set()
             worker_release.set()
@@ -22888,13 +22887,16 @@ def _commit_chat_start_admission(
             _cleanup_owned_resources()
         except Exception:
             logger.exception("Failed to clean rejected chat start %s", stream_id)
-        if successor_state is not None:
-            restore_session_state(s, successor_state)
-        elif snapshot is not None:
-            restore_session_state(s, snapshot)
+        # The owner registry is authoritative only after this attempt has
+        # relinquished its entries. A successor installed during Thread.start
+        # must keep its in-memory state and durable checkpoint untouched.
+        successor_owner = session_writeback_owner(s.session_id)
+        successor_present = bool(successor_owner and successor_owner != stream_id)
+        if not successor_present and pre_attempt_snapshot is not None:
+            restore_session_state(s, pre_attempt_snapshot)
         _restore_pending_start_markers(s, marker_claim)
         compensation_error = None
-        if save_attempted and snapshot is not None:
+        if save_attempted and pre_attempt_snapshot is not None and not successor_present:
             try:
                 save = getattr(s, "save", None)
                 if callable(save):
