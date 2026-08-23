@@ -258,6 +258,7 @@ def test_apply_self_hosted_provider_setup_persists_ollama_base_url_and_active_mo
     assert body["provider"] == "ollama"
     cfg = onboarding._load_yaml_config(fake_config_path)
     assert cfg["providers"]["ollama"]["base_url"] == "http://127.0.0.1:11434/v1"
+    assert "model" not in cfg["providers"]["ollama"]
     assert cfg["model"]["provider"] == "ollama"
     assert cfg["model"]["base_url"] == "http://127.0.0.1:11434/v1"
     assert cfg["model"]["default"] == onboarding._normalize_model_for_provider("ollama", "qwen3:8b")
@@ -277,6 +278,7 @@ def test_apply_self_hosted_provider_setup_persists_lmstudio_base_url_and_active_
     assert body["provider"] == "lmstudio"
     cfg = onboarding._load_yaml_config(fake_config_path)
     assert cfg["providers"]["lmstudio"]["base_url"] == "http://127.0.0.1:1234/v1"
+    assert "model" not in cfg["providers"]["lmstudio"]
     assert cfg["model"]["provider"] == "lmstudio"
     assert cfg["model"]["base_url"] == "http://127.0.0.1:1234/v1"
     assert cfg["model"]["default"] == onboarding._normalize_model_for_provider("lmstudio", "local-model")
@@ -434,17 +436,61 @@ def test_provider_card_uses_backend_projection_authority_matrix(isolated_self_ho
     assert saved_row["key_source"] == "config_yaml"
     assert "model-from-a" not in [m["id"] for m in saved_row["models"]]
     assert "model-from-b" in [m["id"] for m in saved_row["models"]]
-    result = subprocess.run(
-        [NODE, str(driver_path), json.dumps({"provider": saved_row}), str(fn_path)],
-        capture_output=True, text=True, check=True,
-    )
-    payload = json.loads(result.stdout)
+    def render_provider(row):
+        result = subprocess.run(
+            [NODE, str(driver_path), json.dumps({"provider": row}), str(fn_path)],
+            capture_output=True, text=True, check=True,
+        )
+        return json.loads(result.stdout)
+
+    payload = render_provider(saved_row)
     assert "Configured" in payload["headerText"]
     assert "provider-card-badge" in payload["headerHtml"]
     assert payload["baseUrlValue"] == endpoint_b
     assert "model-from-b" in payload["modelChoices"]
     assert "model-from-a" not in payload["modelChoices"]
     assert payload["modelValue"] == ""
+
+    keyless_cfg = {
+        "model": {
+            "provider": "openai",
+            "default": "active-model",
+            "base_url": "http://active/v1",
+        },
+        "providers": {
+            "ollama": {"base_url": endpoint_b, "models": ["model-from-b"]},
+        },
+    }
+    onboarding._save_yaml_config(fake_config_path, keyless_cfg)
+    config.cfg.clear()
+    config.cfg.update(keyless_cfg)
+    config._cfg_mtime = 0.0
+    invalidate_providers_cache()
+    keyless_row = next(p for p in get_providers()["providers"] if p["id"] == "ollama")
+    keyless_payload = render_provider(keyless_row)
+    assert keyless_row["base_url"] == endpoint_b
+    assert keyless_row["has_key"] is False
+    assert "Configured" in keyless_payload["headerText"]
+    assert "provider-card-badge" in keyless_payload["headerHtml"]
+
+    missing_cfg = {
+        "model": {
+            "provider": "openai",
+            "default": "active-model",
+            "base_url": "http://active/v1",
+        },
+        "providers": {"ollama": {}},
+    }
+    onboarding._save_yaml_config(fake_config_path, missing_cfg)
+    config.cfg.clear()
+    config.cfg.update(missing_cfg)
+    config._cfg_mtime = 0.0
+    invalidate_providers_cache()
+    missing_row = next(p for p in get_providers()["providers"] if p["id"] == "ollama")
+    missing_payload = render_provider(missing_row)
+    assert missing_row.get("base_url") in (None, "")
+    assert "Not configured" in missing_payload["headerText"]
+    assert "provider-card-badge" not in missing_payload["headerHtml"]
 
 
 def test_saved_provider_payload_has_no_singular_model_authority(monkeypatch, tmp_path):
@@ -481,6 +527,9 @@ def test_configured_status_key_is_present_once_in_all_locale_blocks():
     assert len(blocks) == 15
     assert all(block.count("providers_status_configured_label:") == 1 for block in blocks)
     assert all(block.count("providers_status_configured:") == 1 for block in blocks)
+    labels = [re.search(r"providers_status_configured_label: '([^']+)'", block).group(1) for block in blocks]
+    assert labels[0] == "Configured"
+    assert all(label != "Configured" for label in labels[1:])
 
 
 def test_save_self_hosted_provider_posts_expected_payload(tmp_path):
