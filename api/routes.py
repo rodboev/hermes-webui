@@ -7358,7 +7358,7 @@ def _resolve_compatible_session_model_state(
         routing_config = (
             profile_config
             if isinstance(profile_config, dict)
-            else get_config_snapshot()
+            else get_config()
         )
         try:
             providers_cfg = (
