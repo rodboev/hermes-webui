@@ -844,6 +844,25 @@ def test_state_db_leading_whitespace_serialized_json_reports_unknown_user_turns(
     assert row["actual_user_message_count"] is None
 
 
+def test_state_db_invalid_json_user_content_remains_a_scalar_human_turn(tmp_path):
+    db = tmp_path / "state.db"
+    _make_state_db(
+        db,
+        sessions=[("s1", "CLI Session", "gpt", 3, 1000.0, "cli", "cli")],
+        messages=[("s1", "user", 1.0), ("s1", "user", 2.0), ("s1", "assistant", 3.0)],
+    )
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE messages SET content = ? WHERE id = 2",
+        ("  {not-json}",),
+    )
+    conn.commit()
+    conn.close()
+
+    row = agent_sessions.read_importable_agent_session_rows(db, exclude_sources=None)[0]
+    assert row["actual_user_message_count"] == 2
+
+
 def test_compact_uses_the_canonical_human_turn_truth_table():
     session = models.Session(session_id="truth-table")
     session.messages = [

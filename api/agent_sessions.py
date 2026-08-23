@@ -92,8 +92,9 @@ def is_human_user_turn(message: object) -> bool:
 def _sql_valid_structured_content_predicate(content: str) -> str:
     normalized = f"TRIM(CAST({content} AS TEXT))"
     return (
-        f"(typeof({content}) = 'text' AND json_valid({normalized}) "
-        f"AND json_type({normalized}) IN ('array', 'object'))"
+        f"(typeof({content}) = 'text' AND "
+        f"COALESCE(json_type(CASE WHEN json_valid({normalized}) "
+        f"THEN {normalized} END) IN ('array', 'object'), 0))"
     )
 
 
