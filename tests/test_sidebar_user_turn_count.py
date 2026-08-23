@@ -408,6 +408,28 @@ console.log(JSON.stringify({
 
 
 @requires_node
+def test_lone_lineage_row_requires_the_server_projected_count():
+    """A lineage tip without a collapsed segment list must not use its direct count."""
+    result = json.loads(_run_node(_harness("""
+function metaFor(exact) {
+  return metaTextFor({
+    session_id:'lineage-tip',
+    _lineage_tip_id:'lineage-tip',
+    title:'Lone lineage tip',
+    message_count:50,
+    user_message_count:1,
+    ...(exact ? {_lineage_user_message_count:3} : {}),
+    updated_at:10,
+    last_message_at:10,
+  }, 'detailed');
+}
+console.log(JSON.stringify({unknown: metaFor(false), exact: metaFor(true)}));
+""")))
+    assert result["unknown"] == "50 msgs"
+    assert result["exact"] == "50 msgs · 3 from you"
+
+
+@requires_node
 def test_compact_density_renders_no_meta_line_for_a_collapsed_lineage():
     """Negative space: the aggregate is on the row but compact must not show it."""
     result = json.loads(_run_node(_harness(_OVERLAPPING_LINEAGE + """
