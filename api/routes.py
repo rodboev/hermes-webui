@@ -22634,12 +22634,17 @@ def _prepare_chat_start_session_for_stream(
 
 
 def _is_hidden_empty_session(s) -> bool:
+    composer_draft = getattr(s, "composer_draft", None)
+    has_composer_draft = isinstance(composer_draft, dict) and (
+        bool(composer_draft.get("text")) or bool(composer_draft.get("files"))
+    )
     return (
         getattr(s, "title", "Untitled") == "Untitled"
         and not getattr(s, "messages", None)
         and not getattr(s, "active_stream_id", None)
         and not getattr(s, "pending_user_message", None)
         and not getattr(s, "worktree_path", None)
+        and not has_composer_draft
     )
 
 

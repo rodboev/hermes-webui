@@ -91,6 +91,24 @@ def test_fresh_session_thread_start_failure_removes_sidecar_and_index(transactio
         assert all(row.get("session_id") != session.session_id for row in json.loads(models.SESSION_INDEX_FILE.read_text(encoding="utf-8")))
 
 
+def test_rejected_start_preserves_persisted_composer_draft(transaction_env, monkeypatch):
+    session = new_session(workspace=str(transaction_env.parent))
+    session.composer_draft = {"text": "keep this draft", "files": []}
+    session.save(touch_updated_at=False, skip_index=True)
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda _self: (_ for _ in ()).throw(RuntimeError("thread start rejected")),
+    )
+
+    with pytest.raises(RuntimeError, match="thread start rejected"):
+        _start(session)
+
+    reloaded = models.Session.load(session.session_id)
+    assert reloaded.composer_draft == {"text": "keep this draft", "files": []}
+    assert _users(reloaded) == []
+
+
 @pytest.mark.parametrize("backend", [False, True])
 def test_worker_waits_for_durable_acceptance_matrix(transaction_env, monkeypatch, backend):
     observed = []
