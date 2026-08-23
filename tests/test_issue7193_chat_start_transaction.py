@@ -66,10 +66,29 @@ def test_eager_rejected_start_retry_reload_has_one_user_prompt(transaction_env, 
     with pytest.raises(RuntimeError, match="reject"):
         _start(session)
     assert _users(session) == []
+    assert not session.path.exists()
+    if models.SESSION_INDEX_FILE.exists():
+        assert all(row.get("session_id") != session.session_id for row in json.loads(models.SESSION_INDEX_FILE.read_text(encoding="utf-8")))
     monkeypatch.setattr(routes, "create_stream_channel", lambda: object())
     _start(session)
     reloaded = models.Session.load(session.session_id)
     assert [row["content"] for row in _users(reloaded)] == ["retry me"]
+
+
+def test_fresh_session_thread_start_failure_removes_sidecar_and_index(transaction_env, monkeypatch):
+    session = new_session(workspace=str(transaction_env.parent))
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda _self: (_ for _ in ()).throw(RuntimeError("thread start rejected")),
+    )
+
+    with pytest.raises(RuntimeError, match="thread start rejected"):
+        _start(session)
+
+    assert not session.path.exists()
+    if models.SESSION_INDEX_FILE.exists():
+        assert all(row.get("session_id") != session.session_id for row in json.loads(models.SESSION_INDEX_FILE.read_text(encoding="utf-8")))
 
 
 @pytest.mark.parametrize("backend", [False, True])
@@ -117,7 +136,7 @@ def test_marker_claim_rollback_is_additive(transaction_env, monkeypatch, marker)
 
 def test_explicit_goal_related_start_does_not_claim_existing_goal_marker(transaction_env, monkeypatch):
     session = new_session(workspace=str(transaction_env.parent))
-    routes.add_pending_goal_continuation(session.session_id)
+    config.add_pending_goal_continuation(session.session_id)
     seen = []
     done = threading.Event()
     def worker(*args, **kwargs):
@@ -132,10 +151,10 @@ def test_explicit_goal_related_start_does_not_claim_existing_goal_marker(transac
 
 def test_marker_added_after_claim_survives_rollback(transaction_env, monkeypatch):
     session = new_session(workspace=str(transaction_env.parent))
-    routes.add_pending_goal_continuation(session.session_id)
+    config.add_pending_goal_continuation(session.session_id)
 
     def reject_and_produce():
-        routes.add_pending_goal_continuation(session.session_id)
+        config.add_pending_goal_continuation(session.session_id)
         raise RuntimeError("reject")
 
     monkeypatch.setattr(routes, "create_stream_channel", reject_and_produce)
@@ -148,7 +167,7 @@ def test_regeneration_admission_rejection_does_not_claim_markers(transaction_env
     from api.session_ops import RegenerationUnavailable
 
     session = new_session(workspace=str(transaction_env.parent))
-    routes.add_pending_goal_continuation(session.session_id)
+    config.add_pending_goal_continuation(session.session_id)
     monkeypatch.setattr(
         "api.session_ops.plan_regeneration",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -233,8 +252,10 @@ def test_failed_admission_preserves_successor_owner_and_state(transaction_env, m
     session = new_session(workspace=str(transaction_env.parent))
     successor = "successor-stream"
     successor_workspace = str(transaction_env / "successor-workspace")
+    failed_stream = {}
 
     def install_successor_before_compensation(_self):
+        failed_stream["id"] = session.active_stream_id
         config.register_session_writeback_owner(session.session_id, successor)
         session.pending_user_message = "successor"
         session.title = "successor title"
@@ -247,6 +268,9 @@ def test_failed_admission_preserves_successor_owner_and_state(transaction_env, m
     with pytest.raises(RuntimeError, match="thread start rejected"):
         _start(session)
     assert config.session_writeback_owner(session.session_id) == successor
+    assert failed_stream["id"]
+    assert session.active_stream_id == successor
+    assert failed_stream["id"] not in config.STREAMS
     assert session.pending_user_message == "successor"
     assert session.title == "successor title"
     assert session.workspace == successor_workspace
@@ -255,3 +279,4 @@ def test_failed_admission_preserves_successor_owner_and_state(transaction_env, m
     assert reloaded.pending_user_message == "successor"
     assert reloaded.title == "successor title"
     assert reloaded.workspace == successor_workspace
+    assert reloaded.active_stream_id == successor

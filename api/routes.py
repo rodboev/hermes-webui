@@ -2913,8 +2913,7 @@ from api.config import (
     get_config_snapshot,
     STREAM_GOAL_RELATED,
     PENDING_GOAL_CONTINUATION,
-    add_pending_goal_continuation,
-    discard_pending_goal_continuation,
+    discard_pending_bg_task_completion,
     _get_config_path,
     _load_yaml_config_file,
     _save_yaml_config_file,
@@ -2922,8 +2921,6 @@ from api.config import (
     get_config_for_profile_home,
     _cfg_lock,
     PENDING_BG_TASK_COMPLETIONS,
-    add_pending_bg_task_completion,
-    discard_pending_bg_task_completion,
     _parse_provider_qualified_model_id,
 )
 from api import config as api_config
@@ -22892,6 +22889,10 @@ def _commit_chat_start_admission(
         # must keep its in-memory state and durable checkpoint untouched.
         successor_owner = session_writeback_owner(s.session_id)
         successor_present = bool(successor_owner and successor_owner != stream_id)
+        successor_stream_remapped = False
+        if successor_present and getattr(s, "active_stream_id", None) == stream_id:
+            s.active_stream_id = successor_owner
+            successor_stream_remapped = True
         if not successor_present and pre_attempt_snapshot is not None:
             restore_session_state(s, pre_attempt_snapshot)
         _restore_pending_start_markers(s, marker_claim)
@@ -22900,11 +22901,26 @@ def _commit_chat_start_admission(
             try:
                 save = getattr(s, "save", None)
                 if callable(save):
-                    save(touch_updated_at=False)
+                    if was_hidden_empty_session:
+                        s.path.unlink(missing_ok=True)
+                        prune_session_from_index(s.session_id)
+                    else:
+                        save(touch_updated_at=False)
             except Exception as compensation_exc:
                 compensation_error = compensation_exc
                 logger.exception(
                     "Failed to persist compensated chat start for %s",
+                    s.session_id,
+                )
+        elif successor_stream_remapped:
+            try:
+                save = getattr(s, "save", None)
+                if callable(save):
+                    save(touch_updated_at=False)
+            except Exception as compensation_exc:
+                compensation_error = compensation_exc
+                logger.exception(
+                    "Failed to persist successor stream identity for %s",
                     s.session_id,
                 )
         if journal_event and journal_append is not None:
