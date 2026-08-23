@@ -7270,6 +7270,7 @@ function _syncSidebarExpansionForActiveSession(rows, activeSid){
 function _sidebarUserTurnCount(row){
   if(!row) return null;
   const usable=(value)=>(typeof value==='number'&&Number.isFinite(value)&&value>=0)?value:null;
+  if(Array.isArray(row._lineage_segments)) return usable(row._lineage_user_message_count);
   const lineage=usable(row._lineage_user_message_count);
   return lineage!==null?lineage:usable(row.user_message_count);
 }

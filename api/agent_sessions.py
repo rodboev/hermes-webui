@@ -89,6 +89,14 @@ def is_human_user_turn(message: object) -> bool:
     return not normalized.startswith(_COMPRESSION_SUMMARY_PREFIXES)
 
 
+def _sql_valid_structured_content_predicate(content: str) -> str:
+    normalized = f"TRIM(CAST({content} AS TEXT))"
+    return (
+        f"(typeof({content}) = 'text' AND json_valid({normalized}) "
+        f"AND json_type({normalized}) IN ('array', 'object'))"
+    )
+
+
 def _human_user_turn_sql_predicate(message_cols: set[str], alias: str = "m") -> str:
     """Build the native-SQL equivalent of :func:`is_human_user_turn`."""
     required = {"role", "content"}
@@ -104,11 +112,12 @@ def _human_user_turn_sql_predicate(message_cols: set[str], alias: str = "m") -> 
     if "_compressed_summary" in message_cols:
         clauses.append(f"COALESCE({alias}._compressed_summary, 0) = 0")
     content = f"{alias}.content"
+    structured_content = _sql_valid_structured_content_predicate(content)
     content_text = f"LOWER(LTRIM(CAST({content} AS TEXT)))"
     clauses.extend([
         f"typeof({content}) = 'text'",
         f"TRIM(CAST({content} AS TEXT)) <> ''",
-        f"NOT (typeof({content}) = 'text' AND json_valid({content}) AND json_type({content}) IN ('array', 'object'))",
+        f"NOT {structured_content}",
         *[f"{content_text} NOT LIKE {prefix!r} || '%'" for prefix in _COMPRESSION_SUMMARY_PREFIXES],
         f"{content_text} NOT LIKE '[your active task list was preserved across context compression]%'",
         f"LOWER(CAST({content} AS TEXT)) NOT IN ({', '.join(repr(value.lower()) for value in sorted(_LEGACY_CONTINUATION_HANDOFFS))})",
@@ -758,7 +767,9 @@ def read_importable_agent_session_rows(
                 structured_content = (
                     "EXISTS (SELECT 1 FROM messages sm "
                     "WHERE sm.session_id = s.id AND sm.role = 'user' AND "
-                    "(typeof(sm.content) <> 'text' OR sm.content LIKE '{%' OR sm.content LIKE '[%'))"
+                    f"(typeof(sm.content) <> 'text' OR "
+                    f"{_sql_valid_structured_content_predicate('sm.content')})"
+                    ")"
                 )
                 user_message_count_expr = (
                     f"CASE WHEN {structured_content} THEN NULL "

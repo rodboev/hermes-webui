@@ -346,6 +346,23 @@ console.log(JSON.stringify({
 
 
 @requires_node
+def test_collapsed_unknown_lineage_omits_tip_count_and_exact_control_renders_three():
+    result = json.loads(_run_node(_harness("""
+function lineageRows(exact) {
+  return [
+    {session_id:'parent-' + exact, title:'Unknown lineage', message_count:40, user_message_count:2, updated_at:300, last_message_at:300, pre_compression_snapshot:true, _lineage_root_id:'root-' + exact, _compression_segment_count:1},
+    {session_id:'child-' + exact, title:'Unknown lineage', parent_session_id:'parent-' + exact, message_count:50, user_message_count:1, ...(exact ? {_lineage_user_message_count:3} : {}), updated_at:200, last_message_at:200, _lineage_root_id:'root-' + exact, _compression_segment_count:2},
+  ];
+}
+const unknown = _collapseSessionLineageForSidebar(lineageRows(false))[0];
+const complete = _collapseSessionLineageForSidebar(lineageRows(true))[0];
+console.log(JSON.stringify({unknown: metaTextFor(unknown, 'detailed'), complete: metaTextFor(complete, 'detailed')}));
+""")))
+    assert "from you" not in result["unknown"]
+    assert result["complete"] == "50 msgs · 3 from you"
+
+
+@requires_node
 def test_overlapping_compression_segments_are_not_summed():
     """A snapshot parent and its continuation must not have their turns added."""
     result = json.loads(_run_node(_harness(_OVERLAPPING_LINEAGE + """
@@ -806,6 +823,25 @@ def test_real_agent_state_db_schema_reports_text_user_turns(tmp_path):
 
     row = agent_sessions.read_importable_agent_session_rows(db, exclude_sources=None)[0]
     assert row["actual_user_message_count"] == 2
+
+
+def test_state_db_leading_whitespace_serialized_json_reports_unknown_user_turns(tmp_path):
+    db = tmp_path / "state.db"
+    _make_state_db(
+        db,
+        sessions=[("s1", "CLI Session", "gpt", 3, 1000.0, "cli", "cli")],
+        messages=[("s1", "user", 1.0), ("s1", "user", 2.0), ("s1", "assistant", 3.0)],
+    )
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE messages SET content = ? WHERE id = 2",
+        ('  [{"type":"text","text":"structured"}]',),
+    )
+    conn.commit()
+    conn.close()
+
+    row = agent_sessions.read_importable_agent_session_rows(db, exclude_sources=None)[0]
+    assert row["actual_user_message_count"] is None
 
 
 def test_compact_uses_the_canonical_human_turn_truth_table():
