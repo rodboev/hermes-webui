@@ -168,6 +168,32 @@ def test_profile_model_selection_rejects_unknown_model_provider_pair():
         )
 
 
+def test_profile_validation_catalog_uses_clone_source_config(monkeypatch):
+    source_config = {
+        "model": {"default": "source-only-model", "provider": "source-provider"},
+        "providers": {
+            "source-provider": {"models": ["source-only-model", "source-alt-model"]}
+        },
+    }
+
+    monkeypatch.setattr(
+        "api.config.get_available_models",
+        lambda: (_ for _ in ()).throw(AssertionError("ambient catalog was consulted")),
+    )
+
+    profiles._validate_profile_model_selection(
+        "source-alt-model",
+        "source-provider",
+        config_obj=source_config,
+    )
+    with pytest.raises(ValueError, match="Selected model 'active-only-model'"):
+        profiles._validate_profile_model_selection(
+            "active-only-model",
+            "source-provider",
+            config_obj=source_config,
+        )
+
+
 def test_profile_create_rejects_unknown_model_before_creating_profile(monkeypatch):
     calls = []
 

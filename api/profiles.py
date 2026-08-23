@@ -2498,6 +2498,44 @@ def _profile_model_selection_exists(
 
 
 def _get_available_models_for_profile_validation(config_obj: dict | None = None) -> dict:
+    """Build the validation catalog for the profile whose config is supplied.
+
+    A clone may source its config from a profile other than the active one, so
+    validation must not fall back to the process-wide model catalog in that
+    case. The config contains the models advertised by custom providers and
+    the source profile's selected model.
+    """
+    if isinstance(config_obj, dict):
+        groups = []
+        model_cfg = config_obj.get("model")
+        if isinstance(model_cfg, dict):
+            provider = str(model_cfg.get("provider") or "").strip()
+            configured_models = model_cfg.get("models") or []
+            if isinstance(configured_models, (str, bytes)):
+                configured_models = [configured_models]
+            elif not isinstance(configured_models, (list, tuple)):
+                configured_models = []
+            values = [model_cfg.get("default"), *configured_models]
+            models = [{"id": str(value)} for value in values if value]
+            if provider or models:
+                groups.append({"provider_id": provider, "models": models, "extra_models": []})
+        providers = config_obj.get("providers")
+        if isinstance(providers, dict):
+            for provider, provider_cfg in providers.items():
+                if not isinstance(provider_cfg, dict):
+                    continue
+                models = provider_cfg.get("models") or []
+                if isinstance(models, dict):
+                    models = [{"id": str(value)} for value in models]
+                elif isinstance(models, (list, tuple)):
+                    models = [
+                        value if isinstance(value, dict) else {"id": str(value)}
+                        for value in models
+                    ]
+                else:
+                    models = []
+                groups.append({"provider_id": str(provider), "models": models, "extra_models": []})
+        return {"groups": groups}
     from api.config import get_available_models
 
     return get_available_models()
@@ -2594,8 +2632,9 @@ def create_profile_api(name: str, clone_from: str = None,
     default_model, model_provider = _split_webui_provider_model_value(
         default_model, model_provider, model_config
     )
+    validation_config = model_config if clone_from and clone_config else None
     _validate_profile_model_selection(
-        default_model, model_provider, config_obj=model_config
+        default_model, model_provider, config_obj=validation_config
     )
 
     try:
