@@ -1092,7 +1092,6 @@ def apply_self_hosted_provider_setup(body: dict) -> dict:
         providers_cfg[provider] = provider_cfg
 
     provider_cfg["base_url"] = base_url
-    provider_cfg["model"] = _normalize_model_for_provider(provider, model)
 
     model_cfg = cfg.get("model", {})
     if not isinstance(model_cfg, dict):
@@ -1102,7 +1101,7 @@ def apply_self_hosted_provider_setup(body: dict) -> dict:
 
     if do_activate:
         model_cfg["provider"] = provider
-        model_cfg["default"] = provider_cfg["model"]
+        model_cfg["default"] = _normalize_model_for_provider(provider, model)
         model_cfg["base_url"] = base_url
         cfg["model"] = model_cfg
     elif "model" in cfg:

@@ -11398,16 +11398,16 @@ function _buildProviderCard(p){
   const modelCount=Number.isFinite(p.models_total)
     ? p.models_total
     : (Array.isArray(p.models) ? p.models.length : 0);
-  const sourceLabel=p.key_source==='oauth'
-    ? t('providers_status_oauth')
-    : p.key_source==='config_yaml'
-      ? t('providers_status_configured')||'Configured'
-      : p.is_self_hosted && p.configured!==undefined
-        ? (p.configured
-          ? t('providers_status_configured_label')||'Configured'
-          : (p.has_key ? t('providers_status_api_key') : t('providers_status_not_configured_label')))
+  const isConfigured=p.is_self_hosted===true
+    ? typeof p.base_url==='string' && p.base_url.trim().length>0
+    : p.has_key;
+  const sourceLabel=p.is_self_hosted
+    ? (isConfigured ? t('providers_status_configured_label')||'Configured' : t('providers_status_not_configured_label'))
+    : p.key_source==='oauth'
+      ? t('providers_status_oauth')
+      : p.key_source==='config_yaml'
+        ? t('providers_status_configured')||'Configured'
         : (p.has_key ? t('providers_status_api_key') : t('providers_status_not_configured_label'));
-  const isConfigured=p.configured===undefined?p.has_key:p.configured;
   const metaParts=[];
   if(modelCount>0) metaParts.push(modelCount+(modelCount===1?' model':' models'));
   metaParts.push(sourceLabel);
@@ -11525,7 +11525,6 @@ function _buildProviderCard(p){
     };
     const initialModelChoices=Array.isArray(p.models)?p.models:[];
     setModelChoices(initialModelChoices);
-    modelInput.value=(p.configured_model||'').trim();
 
     const saveRow=document.createElement('div');
     saveRow.className='provider-card-row';

@@ -26,7 +26,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlparse
 
 try:  # POSIX-only; Windows-style environments fall back to process-local locking.
     import fcntl
@@ -2800,30 +2799,6 @@ def get_providers() -> dict[str, Any]:
             provider_base_url = _get_provider_base_url(pid) if is_self_hosted else None
         except Exception:
             provider_base_url = None
-        configured_model = None
-        configured = False
-        if is_self_hosted:
-            provider_cfg = providers_cfg.get(pid, {}) if isinstance(providers_cfg, dict) else {}
-            model_cfg = cfg.get("model", {})
-            if isinstance(model_cfg, dict) and str(model_cfg.get("provider") or "").strip().lower() == pid.lower():
-                configured_model = str(model_cfg.get("default") or "").strip() or None
-            if not configured_model and isinstance(provider_cfg, dict):
-                configured_model = str(provider_cfg.get("model") or "").strip() or None
-            try:
-                parsed_base_url = urlparse(str(provider_base_url or "").strip())
-                port_valid = True
-                try:
-                    _parsed_port = parsed_base_url.port
-                except ValueError:
-                    port_valid = False
-                configured = bool(
-                    parsed_base_url.scheme in {"http", "https"}
-                    and parsed_base_url.hostname
-                    and port_valid
-                    and configured_model
-                )
-            except Exception:
-                configured = False
         _is_plugin = is_plugin_model_provider(pid)
         providers.append({
             "id": pid,
@@ -2832,10 +2807,6 @@ def get_providers() -> dict[str, Any]:
             "configurable": not is_oauth and bool(_provider_env_var_for(pid)),
             "is_self_hosted": is_self_hosted,
             "base_url": provider_base_url,
-            **({
-                "configured": configured,
-                "configured_model": configured_model,
-            } if is_self_hosted else {}),
             "is_plugin_provider": _is_plugin,
             "is_oauth": is_oauth,
             "key_source": key_source,
