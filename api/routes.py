@@ -7870,6 +7870,22 @@ def _session_context_length_lookup_state(
     if not model_for_lookup:
         return "", provider_for_lookup, "", ""
     cfg = config_obj if isinstance(config_obj, dict) else None
+    if cfg is not None:
+        # An owner-scoped reload must not pass through the process-global
+        # resolver; the lookup helper already carries the complete owner config.
+        bare_model, explicit_provider = _split_provider_qualified_model(model_for_lookup, cfg)
+        owner_provider = provider_for_lookup or explicit_provider or ""
+        owner_lookup = _context_length_lookup_inputs_for_model(
+            bare_model or model_for_lookup,
+            owner_provider or None,
+            cfg=cfg,
+        )
+        return (
+            str(bare_model or model_for_lookup).strip(),
+            str(owner_lookup.provider or owner_provider).strip(),
+            str(owner_lookup.base_url or "").strip(),
+            str(owner_lookup.api_key or "").strip(),
+        )
     try:
         from api.config import model_with_provider_context, resolve_model_provider
 
