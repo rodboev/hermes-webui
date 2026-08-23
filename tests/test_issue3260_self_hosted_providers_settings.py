@@ -429,6 +429,37 @@ def test_get_providers_uses_matching_legacy_active_model_and_rejects_incomplete_
         config._cfg_mtime = old_mtime
 
 
+def test_get_providers_prefers_current_default_and_rejects_invalid_host(monkeypatch, tmp_path):
+    _install_fake_hermes_cli(monkeypatch)
+    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    config.cfg.clear()
+    config.cfg["model"] = {
+        "provider": "ollama",
+        "default": "current-model",
+        "base_url": "http://:11434/v1",
+    }
+    config.cfg["providers"] = {
+        "ollama": {
+            "base_url": "http://:11434/v1",
+            "model": "stale-model",
+        },
+    }
+    try:
+        config._cfg_mtime = 0.0
+        from api.providers import get_providers, invalidate_providers_cache
+
+        invalidate_providers_cache()
+        by_id = {p["id"]: p for p in get_providers()["providers"]}
+        assert by_id["ollama"]["configured_model"] == "current-model"
+        assert by_id["ollama"]["configured"] is False
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+
 def test_provider_card_renders_authoritative_status_and_model_prefill(tmp_path):
     if NODE is None:
         pytest.skip("node is required to execute the self-hosted provider card harness")
@@ -448,6 +479,11 @@ def test_provider_card_renders_authoritative_status_and_model_prefill(tmp_path):
             "configured": False, "configured_model": None, "has_key": False,
             "models": [{"id": "catalog-only"}], "models_total": 1,
         }, "Not configured", False, ""),
+        ({
+            "id": "ollama", "display_name": "Ollama", "is_self_hosted": True,
+            "configured": False, "configured_model": "stale-model", "has_key": True,
+            "models": [{"id": "catalog-only"}], "models_total": 1,
+        }, "API key", False, "stale-model"),
         ({
             "id": "openai", "display_name": "OpenAI", "has_key": True,
             "configurable": True, "models": [], "models_total": 0,

@@ -2804,17 +2804,22 @@ def get_providers() -> dict[str, Any]:
         configured = False
         if is_self_hosted:
             provider_cfg = providers_cfg.get(pid, {}) if isinstance(providers_cfg, dict) else {}
-            if isinstance(provider_cfg, dict):
-                configured_model = str(provider_cfg.get("model") or "").strip() or None
             model_cfg = cfg.get("model", {})
-            if not configured_model and isinstance(model_cfg, dict):
-                if str(model_cfg.get("provider") or "").strip().lower() == pid.lower():
-                    configured_model = str(model_cfg.get("default") or "").strip() or None
+            if isinstance(model_cfg, dict) and str(model_cfg.get("provider") or "").strip().lower() == pid.lower():
+                configured_model = str(model_cfg.get("default") or "").strip() or None
+            if not configured_model and isinstance(provider_cfg, dict):
+                configured_model = str(provider_cfg.get("model") or "").strip() or None
             try:
                 parsed_base_url = urlparse(str(provider_base_url or "").strip())
+                port_valid = True
+                try:
+                    _parsed_port = parsed_base_url.port
+                except ValueError:
+                    port_valid = False
                 configured = bool(
                     parsed_base_url.scheme in {"http", "https"}
-                    and parsed_base_url.netloc
+                    and parsed_base_url.hostname
+                    and port_valid
                     and configured_model
                 )
             except Exception:
