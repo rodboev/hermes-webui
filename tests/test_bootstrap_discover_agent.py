@@ -185,7 +185,9 @@ def test_root_fhs_layout_is_in_candidate_list(monkeypatch, tmp_path):
 
     bootstrap.discover_agent_dir()
 
-    assert any(p == "/usr/local/lib/hermes-agent" for p in probed), (
+    assert any(
+        p.replace("\\", "/").startswith("/usr/local/lib/hermes-agent") for p in probed
+    ), (
         f"/usr/local/lib/hermes-agent was not probed; checked: {probed}"
     )
 

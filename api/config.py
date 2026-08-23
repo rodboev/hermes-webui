@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, urlparse
 
 # ── Basic layout ──────────────────────────────────────────────────────────────
 import api.paths as _paths
+from api import startup as _startup
 from api.plugin_providers import (
     effective_provider_display_name as _effective_provider_display_name,
     is_plugin_model_provider as _is_plugin_model_provider,
@@ -131,6 +132,13 @@ def _env_mb_bytes(name: str, default_mb: int) -> int:
 
 # ── Hermes agent directory discovery ─────────────────────────────────────────
 def _discover_agent_dir() -> Path:
+    return _startup.discover_agent_dir(
+        repo_root=REPO_ROOT,
+        hermes_home=Path(os.getenv("HERMES_HOME", str(_DEFAULT_HERMES_HOME))),
+        user_home=HOME,
+        python_exe=os.getenv("HERMES_WEBUI_PYTHON") or sys.executable,
+    )
+    # Legacy implementation retained below only as a compatibility reference.
     """
     Locate the hermes-agent checkout using a multi-strategy search.
 

@@ -1,6 +1,6 @@
 """Hermes Web UI -- startup helpers."""
 from __future__ import annotations
-import os, stat, subprocess, sys
+import os, re, shutil, stat, subprocess, sys
 from pathlib import Path
 
 # Credential files that should never be world-readable
@@ -11,6 +11,130 @@ _SENSITIVE_FILES = (
     '.signing_key',
     'auth.json',
 )
+
+
+def _walk_up_for_run_agent(start: Path) -> Path | None:
+    """Return the first parent containing the legacy Agent entry point."""
+    for parent in start.parents:
+        if (parent / "run_agent.py").exists():
+            return parent.resolve()
+    return None
+
+
+def _agent_dir_from_hermes_cli() -> Path | None:
+    """Resolve an Agent root from an absolute path embedded in ``hermes``."""
+    hermes_path = shutil.which("hermes")
+    if not hermes_path:
+        return None
+    try:
+        with open(hermes_path, "r", encoding="utf-8", errors="replace") as launcher:
+            lines = [launcher.readline() for _ in range(20)]
+    except OSError:
+        return None
+    if not lines or not lines[0].startswith("#!"):
+        return None
+
+    candidates: list[Path] = []
+    shebang = lines[0][2:].strip().split(None, 1)
+    if shebang:
+        interpreter = Path(shebang[0])
+        if interpreter.is_absolute() and interpreter.name != "env":
+            candidates.append(interpreter)
+    for line in lines[1:]:
+        for match in re.findall(r"""['\"]([^'\"]+)['\"]""", line):
+            candidate = Path(match)
+            if candidate.is_absolute():
+                candidates.append(candidate)
+    for candidate in candidates:
+        found = _walk_up_for_run_agent(candidate)
+        if found:
+            return found
+    return None
+
+
+def _agent_dir_from_python(python_exe: str) -> Path | None:
+    """Resolve an Agent root from a selected interpreter without importing it."""
+    script = (
+        "import importlib.util\n"
+        'spec = importlib.util.find_spec("run_agent")\n'
+        'print(spec.origin if spec else "")\n'
+    )
+    try:
+        check = subprocess.run(
+            [python_exe, "-c", script], capture_output=True, text=True
+        )
+    except OSError:
+        return None
+    if check.returncode != 0:
+        return None
+    lines = check.stdout.splitlines()
+    if not lines:
+        return None
+    origin = Path(lines[0].strip())
+    if not origin.is_absolute() or origin.name != "run_agent.py" or not origin.is_file():
+        return None
+    return origin.parent.resolve()
+
+
+def _looks_like_pip_style_agent_source_root(path: Path) -> bool:
+    if not (path / "cron" / "jobs.py").exists():
+        return False
+    if (path / "hermes").exists():
+        return True
+    hermes_cli = path / "hermes_cli"
+    return (hermes_cli / "__init__.py").exists() or (hermes_cli / "main.py").exists()
+
+
+def _looks_like_agent_source_root(path: Path) -> bool:
+    return (path / "run_agent.py").exists() or _looks_like_pip_style_agent_source_root(path)
+
+
+def discover_agent_dir(
+    *,
+    repo_root: Path | None = None,
+    hermes_home: Path | None = None,
+    user_home: Path | None = None,
+    python_exe: str | None = None,
+    launcher_finder=_agent_dir_from_hermes_cli,
+    python_finder=_agent_dir_from_python,
+) -> Path | None:
+    """Observe the first valid Agent identity without authorizing mutation."""
+    repo_root = (repo_root or Path.cwd()).expanduser()
+    user_home = (user_home or Path.home()).expanduser()
+    hermes_home = (
+        hermes_home
+        or Path(os.getenv("HERMES_HOME", str(user_home / ".hermes"))).expanduser()
+    )
+    explicit = os.getenv("HERMES_WEBUI_AGENT_DIR", "").strip()
+    candidates = [
+        Path(explicit).expanduser() if explicit else None,
+        hermes_home / "hermes-agent",
+        repo_root.parent / "hermes-agent",
+        repo_root.parent if _looks_like_agent_source_root(repo_root.parent) else None,
+        user_home / ".hermes" / "hermes-agent",
+        user_home / "hermes-agent",
+        Path(os.getenv("XDG_DATA_HOME", str(user_home / ".local" / "share"))).expanduser()
+        / "hermes-agent",
+        Path("/opt/hermes-agent"),
+        Path("/usr/local/hermes-agent"),
+        Path("/usr/local/share/hermes-agent"),
+        Path("/usr/local/lib/hermes-agent"),
+    ]
+    valid = [candidate for candidate in candidates if candidate is not None]
+    if explicit and valid and _looks_like_agent_source_root(valid[0]):
+        return valid[0].resolve()
+    for marker in ("run_agent.py", "pip"):
+        for candidate in valid[1:]:
+            if marker == "run_agent.py" and (candidate / marker).exists():
+                return candidate.resolve()
+            if marker == "pip" and _looks_like_pip_style_agent_source_root(candidate):
+                return candidate.resolve()
+
+    found = launcher_finder()
+    if found:
+        return found
+    selected_python = python_exe or os.getenv("HERMES_WEBUI_PYTHON") or sys.executable
+    return python_finder(selected_python)
 
 
 def fix_credential_permissions() -> None:

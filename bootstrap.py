@@ -18,6 +18,8 @@ import venv
 import webbrowser
 from pathlib import Path
 
+from api import startup as _startup
+
 
 INSTALLER_URL = "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
 REPO_ROOT = Path(__file__).resolve().parent
@@ -105,6 +107,7 @@ def ensure_supported_platform() -> None:
 
 
 def _walk_up_for_run_agent(start: Path) -> Path | None:
+    return _startup._walk_up_for_run_agent(start)
     """Walk up the parents of ``start`` and return the first dir with run_agent.py."""
     for parent in start.parents:
         if (parent / "run_agent.py").exists():
@@ -113,6 +116,7 @@ def _walk_up_for_run_agent(start: Path) -> Path | None:
 
 
 def _agent_dir_from_hermes_cli() -> Path | None:
+    return _startup._agent_dir_from_hermes_cli()
     """Resolve the agent install root by inspecting the `hermes` CLI launcher.
 
     The Hermes Agent installer drops a `hermes` launcher in the user's PATH.
@@ -183,6 +187,7 @@ def _agent_dir_from_hermes_cli() -> Path | None:
 
 
 def _agent_dir_from_python(python_exe: str) -> Path | None:
+    return _startup._agent_dir_from_python(python_exe)
     script = (
         'import importlib.util\n'
         'spec = importlib.util.find_spec("run_agent")\n'
@@ -208,6 +213,15 @@ def _agent_dir_from_python(python_exe: str) -> Path | None:
 
 
 def discover_agent_dir() -> Path | None:
+    return _startup.discover_agent_dir(
+        repo_root=REPO_ROOT,
+        hermes_home=Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))),
+        user_home=Path.home(),
+        python_exe=discover_launcher_python(None),
+        launcher_finder=_agent_dir_from_hermes_cli,
+        python_finder=_agent_dir_from_python,
+    )
+    # Legacy implementation retained below only as a compatibility reference.
     home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
     candidates = [
         os.getenv("HERMES_WEBUI_AGENT_DIR", ""),
