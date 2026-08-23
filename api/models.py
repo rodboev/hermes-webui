@@ -8198,7 +8198,7 @@ def _state_db_messages_schema_is_readable(profile=None) -> bool:
         with closing(open_state_db_readonly(db_path)) as conn:
             conn.row_factory = sqlite3.Row
             columns = conn.execute("PRAGMA table_info(messages)").fetchall()
-        return {str(row["name"]) for row in columns} >= {"role", "content", "timestamp"}
+        return {str(row["name"]) for row in columns} >= {"session_id", "role", "content", "timestamp"}
     except Exception:
         return False
 

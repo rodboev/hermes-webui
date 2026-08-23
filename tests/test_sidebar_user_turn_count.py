@@ -681,7 +681,7 @@ def test_sidebar_lineage_count_matches_detail_merge_and_fails_closed_for_unknown
     assert "_lineage_user_message_count" not in row
 
 
-@pytest.mark.parametrize("unreadable_shape", ["null_content", "missing_content"])
+@pytest.mark.parametrize("unreadable_shape", ["null_content", "missing_content", "missing_session_id"])
 def test_sidebar_lineage_count_fails_closed_for_unreadable_state_db_rows(
     tmp_path, monkeypatch, unreadable_shape
 ):
@@ -695,10 +695,15 @@ def test_sidebar_lineage_count_fails_closed_for_unreadable_state_db_rows(
         conn.execute(
             "INSERT INTO messages VALUES (1, 'lineage-tip', 'user', NULL, 2)"
         )
-    else:
+    elif unreadable_shape == "missing_content":
         conn.execute(
             "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, "
             "role TEXT, timestamp REAL)"
+        )
+    else:
+        conn.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, role TEXT, "
+            "content TEXT, timestamp REAL)"
         )
     conn.commit()
     conn.close()
