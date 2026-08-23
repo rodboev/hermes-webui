@@ -154,7 +154,7 @@ _WEBUI_GATEWAY_USE_RUNS_API_ENV = "HERMES_WEBUI_GATEWAY_USE_RUNS_API"
 _GATEWAY_CHAT_BACKENDS = {"gateway", "api_server", "api-server"}
 
 
-def _gateway_model_field(model: str | None) -> str:
+def _gateway_model_field(model: str | None, config_obj: dict | None = None) -> str:
     """Return the bare model name to put in a gateway request body.
 
     The picker and ``_resolve_compatible_session_model_state`` intentionally
@@ -170,7 +170,7 @@ def _gateway_model_field(model: str | None) -> str:
     if not model:
         return ""
     value = str(model).strip()
-    parsed = _parse_provider_qualified_model_id(value)
+    parsed = _parse_provider_qualified_model_id(value, config_obj)
     if parsed:
         return str(parsed[0] or "").strip()
     return value
@@ -621,7 +621,7 @@ def _run_gateway_runs_api_streaming(
         if isinstance(run_input, list):
             run_input = [{"role": "user", "content": run_input}]
         run_body = {
-            "model": _gateway_model_field(model) or "default",
+            "model": _gateway_model_field(model, cfg) or "default",
             "input": run_input,
             **body_extras,
             "session_id": session_id,
@@ -991,6 +991,9 @@ def _run_gateway_chat_streaming(
         from api.config import get_config  # imported lazily to avoid config-cycle churn
 
         cfg = get_config()
+        if getattr(s, "profile", None):
+            from api.profiles import resolve_profile_config_context
+            _owner, cfg = resolve_profile_config_context(s.profile)
         reasoning_effort = _gateway_reasoning_effort_for_request(
             cfg,
             model=model,
@@ -1124,7 +1127,7 @@ def _run_gateway_chat_streaming(
                     logger.debug("Failed to build gateway multimodal attachment payload", exc_info=True)
                     message_content = str(msg_text or "")
             body = {
-                "model": _gateway_model_field(model) or "default",
+                "model": _gateway_model_field(model, cfg) or "default",
                 "stream": True,
                 "messages": [*prefill_messages, {"role": "user", "content": message_content}],
             }

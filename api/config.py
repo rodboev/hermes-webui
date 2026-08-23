@@ -1540,7 +1540,10 @@ def _normalize_base_url_for_match(value: object) -> str:
     url = str(value or "").strip().rstrip("/")
     if not url:
         return ""
-    parsed_url = urlparse(url if "://" in url else f"http://{url}")
+    try:
+        parsed_url = urlparse(url if "://" in url else f"http://{url}")
+    except ValueError:
+        return ""
     scheme = (parsed_url.scheme or "http").lower()
     netloc = (parsed_url.netloc or parsed_url.path).lower().rstrip("/")
     path = parsed_url.path.rstrip("/")
@@ -1562,11 +1565,17 @@ def _custom_endpoint_slugs_for_base_url(value: object) -> set[str]:
     url = str(value or "").strip().rstrip("/")
     if not url:
         return set()
-    parsed_url = urlparse(url if "://" in url else f"http://{url}")
+    try:
+        parsed_url = urlparse(url if "://" in url else f"http://{url}")
+    except ValueError:
+        return set()
     host = (parsed_url.hostname or "").strip().lower()
     if not host:
         return set()
-    port = parsed_url.port
+    try:
+        port = parsed_url.port
+    except ValueError:
+        return set()
     if port is None:
         scheme = (parsed_url.scheme or "http").lower()
         port = 443 if scheme == "https" else 80
@@ -2554,11 +2563,16 @@ def _custom_slug_rest_looks_like_host_port(rest: str) -> bool:
     return False
 
 
-def _parse_provider_qualified_model_id(model_id: str) -> tuple[str, str] | None:
+def _parse_provider_qualified_model_id(
+    model_id: str,
+    config_obj: dict | None = None,
+) -> tuple[str, str] | None:
     """Parse WebUI's ``@provider:model`` route hint into ``(model, provider)``.
 
     The provider segment can contain colons for named custom providers, while
     the model segment can also contain colons for tags such as ``:free``.
+    ``config_obj`` supplies the registry and active model identities for the
+    owning profile; omitted callers retain the ambient configuration.
     Keep this parser shared with ``resolve_model_provider`` so any caller that
     compares route-hinted model lanes uses the same grammar.
     """
@@ -2566,16 +2580,65 @@ def _parse_provider_qualified_model_id(model_id: str) -> tuple[str, str] | None:
     if not candidate.startswith("@") or ":" not in candidate:
         return None
     inner = candidate[1:]
+    active_config = config_obj if isinstance(config_obj, dict) else cfg
+    if inner.startswith("custom:"):
+        custom_slugs = _named_custom_provider_slugs(active_config)
+        matching_slugs = [
+            slug for slug in custom_slugs
+            if inner.startswith(f"{slug}:") and len(inner) > len(slug) + 1
+        ]
+        if matching_slugs:
+            provider_hint = max(matching_slugs, key=len)
+            return inner[len(provider_hint) + 1:], provider_hint
+
+        model_config = active_config.get("model", {})
+        endpoint_slugs = _custom_endpoint_slugs_for_base_url(
+            model_config.get("base_url") if isinstance(model_config, dict) else None
+        )
+        matching_endpoints = [
+            slug for slug in endpoint_slugs
+            if inner.startswith(f"{slug}:") and len(inner) > len(slug) + 1
+        ]
+        if matching_endpoints:
+            provider_hint = max(matching_endpoints, key=len)
+            return inner[len(provider_hint) + 1:], provider_hint
+
+        custom_rest = inner[len("custom:"):]
+        custom_parts = custom_rest.split(":")
+        if len(custom_parts) >= 3:
+            endpoint_rest = ":".join(custom_parts[:2])
+            if _custom_slug_rest_looks_like_host_port(endpoint_rest):
+                return ":".join(custom_parts[2:]), f"custom:{endpoint_rest}"
+
+        active_provider = (
+            str(model_config.get("provider") or "").strip().lower()
+            if isinstance(model_config, dict) else ""
+        )
+        active_self_hosted = active_provider == "custom" or _is_local_server_provider(active_provider)
+        active_models = set()
+        if active_self_hosted and isinstance(model_config, dict):
+            active_models.update(_configured_model_ids(model_config.get("models")))
+            if model_config.get("default"):
+                active_models.add(str(model_config["default"]).strip())
+        providers = active_config.get("providers", {})
+        provider_config = providers.get(active_provider) if active_self_hosted and isinstance(providers, dict) else None
+        if isinstance(provider_config, dict):
+            if provider_config.get("model"):
+                active_models.add(str(provider_config["model"]).strip())
+            active_models.update(_configured_model_ids(provider_config.get("models")))
+        if custom_rest in {value for value in active_models if value}:
+            return custom_rest, "custom"
+
     provider_hint, bare_model = inner.rsplit(":", 1)
-    if provider_hint.startswith("custom:") and provider_hint.count(":") >= 2:
-        _slug_rest = provider_hint[len("custom:"):]
-        if not _custom_slug_rest_looks_like_host_port(_slug_rest):
-            provider_hint, extra = provider_hint.rsplit(":", 1)
-            bare_model = f"{extra}:{bare_model}"
-    elif (provider_hint not in _PROVIDER_MODELS
+    if (provider_hint not in _PROVIDER_MODELS
             and provider_hint not in _PROVIDER_DISPLAY
             and not provider_hint.startswith("custom:")):
         provider_hint, bare_model = inner.split(":", 1)
+    elif provider_hint.startswith("custom:") and provider_hint.count(":") >= 2:
+        slug_rest = provider_hint[len("custom:"):]
+        if not _custom_slug_rest_looks_like_host_port(slug_rest):
+            provider_hint, extra = provider_hint.rsplit(":", 1)
+            bare_model = f"{extra}:{bare_model}"
     return bare_model, provider_hint
 
 
@@ -2953,7 +3016,7 @@ def resolve_model_provider(model_id: str, *, explicitly_picked: bool = False) ->
     #
     # Exception: ``custom:<ip-or-host>:<port>`` is a single logical slug derived
     # from OpenAI ``base_url`` authority and contains no eaten model segments.
-    parsed_provider_hint = _parse_provider_qualified_model_id(model_id)
+    parsed_provider_hint = _parse_provider_qualified_model_id(model_id, cfg)
     if parsed_provider_hint is not None:
         bare_model, provider_hint = parsed_provider_hint
         # Session/send/handoff shapes encode the provider as @custom:<slug>:model

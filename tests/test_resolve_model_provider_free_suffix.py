@@ -17,6 +17,23 @@ back to ``split(":", 1)`` so trailing suffixes stay with the model.
 """
 
 from api.config import resolve_model_provider, model_with_provider_context
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _configured_named_custom_provider():
+    import api.config as cfg_mod
+
+    missing = object()
+    old = cfg_mod.cfg.get("custom_providers", missing)
+    cfg_mod.cfg["custom_providers"] = [{"name": "my-key", "models": ["some-model"]}]
+    try:
+        yield
+    finally:
+        if old is missing:
+            cfg_mod.cfg.pop("custom_providers", None)
+        else:
+            cfg_mod.cfg["custom_providers"] = old
 
 
 # ---------------------------------------------------------------------------

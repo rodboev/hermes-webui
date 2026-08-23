@@ -6519,6 +6519,7 @@ def _repair_foreign_session_model_provider(
     resolved_provider: str | None,
     explicit_model_pick: bool,
     profile_provider: str | None,
+    profile_config: dict | None = None,
 ) -> str | None:
     """Repair a stale provider only when the cached catalog names one owner."""
     stored_model = str(getattr(session, "model", "") or "").strip()
@@ -6526,7 +6527,7 @@ def _repair_foreign_session_model_provider(
     requested_provider = _clean_session_model_provider(requested_provider)
     resolved_provider = _clean_session_model_provider(resolved_provider)
     profile_provider = _clean_session_model_provider(profile_provider)
-    _, qualified_provider = _split_provider_qualified_model(requested_model)
+    _, qualified_provider = _split_provider_qualified_model(requested_model, profile_config)
     if (
         explicit_model_pick
         or qualified_provider
@@ -6574,7 +6575,7 @@ def _repair_foreign_session_model_provider(
     return str(owners[0].get("provider_id") or "").strip() or resolved_provider
 
 
-def _clean_session_model_provider(value: str | None) -> str | None:
+def _clean_session_model_provider(value: str | None, config_obj: dict | None = None) -> str | None:
     """Normalize a stored/requested provider value to a bare provider ID.
 
     An ``@``-prefixed value is a provider-qualified *model* hint, so the
@@ -6590,12 +6591,12 @@ def _clean_session_model_provider(value: str | None) -> str | None:
     if not provider or provider == "default":
         return None
     if provider.startswith("@"):
-        parsed = _parse_provider_qualified_model_id(provider)
+        parsed = _parse_provider_qualified_model_id(provider, config_obj)
         provider = parsed[1].strip() if parsed else provider[1:]
     return provider or None
 
 
-def _split_provider_qualified_model(model: str) -> tuple[str, str | None]:
+def _split_provider_qualified_model(model: str, config_obj: dict | None = None) -> tuple[str, str | None]:
     """Split an ``@provider:model`` hint into ``(bare_model, provider)``.
 
     Delegates the grammar to ``config._parse_provider_qualified_model_id()``,
@@ -6606,10 +6607,10 @@ def _split_provider_qualified_model(model: str) -> tuple[str, str | None]:
     the gateway request path resolve the same provider/model pair (#6722).
     """
     model = str(model or "").strip()
-    parsed = _parse_provider_qualified_model_id(model)
+    parsed = _parse_provider_qualified_model_id(model, config_obj)
     if parsed:
         bare_model, provider_hint = parsed
-        provider = _clean_session_model_provider(provider_hint)
+        provider = _clean_session_model_provider(provider_hint, config_obj)
         bare = str(bare_model or "").strip()
         if provider and bare:
             return bare, provider
@@ -6620,6 +6621,7 @@ def _model_matches_configured_default(
     session_model: str | None,
     cfg_default: str | None,
     provider: str | None = None,
+    config_obj: dict | None = None,
 ) -> bool:
     """Return True when ``session_model`` refers to the configured ``model.default``.
 
@@ -6655,7 +6657,7 @@ def _model_matches_configured_default(
         """Return (bare_model, provider_or_None) for any of the 3 shapes."""
         value = str(value or "").strip()
         # @provider:model
-        unq, q_prov = _split_provider_qualified_model(value)
+        unq, q_prov = _split_provider_qualified_model(value, config_obj)
         if q_prov:
             return unq.strip(), str(q_prov).strip().lower()
         # provider/model (single leading slash segment)
@@ -6706,10 +6708,10 @@ def _positive_context_length(value) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _model_lookup_candidates(model: str) -> tuple[str, ...]:
+def _model_lookup_candidates(model: str, config_obj: dict | None = None) -> tuple[str, ...]:
     raw = str(model or "").strip()
     candidates = []
-    for candidate in (raw, _split_provider_qualified_model(raw)[0]):
+    for candidate in (raw, _split_provider_qualified_model(raw, config_obj)[0]):
         if candidate and candidate not in candidates:
             candidates.append(candidate)
         if "/" in candidate:
@@ -6719,8 +6721,10 @@ def _model_lookup_candidates(model: str) -> tuple[str, ...]:
     return tuple(candidates)
 
 
-def _models_config_context_length(models_cfg, model: str) -> int | None:
-    candidates = _model_lookup_candidates(model)
+def _models_config_context_length(
+    models_cfg, model: str, config_obj: dict | None = None
+) -> int | None:
+    candidates = _model_lookup_candidates(model, config_obj)
     if isinstance(models_cfg, dict):
         for candidate in candidates:
             entry = models_cfg.get(candidate)
@@ -6899,7 +6903,7 @@ def _context_length_lookup_inputs_for_model(
             cfg = {}
     cfg = cfg if isinstance(cfg, dict) else {}
 
-    bare_model, explicit_provider = _split_provider_qualified_model(model_for_lookup)
+    bare_model, explicit_provider = _split_provider_qualified_model(model_for_lookup, cfg)
     effective_provider = _canonical_context_provider(provider or explicit_provider)
     effective_base_url = str(base_url or "").strip()
 
@@ -6927,6 +6931,7 @@ def _context_length_lookup_inputs_for_model(
             provider_context_length = _models_config_context_length(
                 provider_cfg.get("models"),
                 bare_model or model_for_lookup,
+                cfg,
             )
             break
 
@@ -6951,7 +6956,7 @@ def _context_length_lookup_inputs_for_model(
                 )
             )
             base_matches = bool(target_base and entry_base_norm and target_base == entry_base_norm)
-            model_matches = bool(model_candidates.intersection(set(_model_lookup_candidates(entry.get("model")))))
+            model_matches = bool(model_candidates.intersection(set(_model_lookup_candidates(entry.get("model"), cfg))))
             models_cfg = entry.get("models")
             if isinstance(models_cfg, dict):
                 model_matches = model_matches or any(candidate in models_cfg for candidate in model_candidates)
@@ -6963,7 +6968,9 @@ def _context_length_lookup_inputs_for_model(
                 effective_base_url = entry_base
             if not effective_api_key:
                 effective_api_key = _custom_provider_api_key_for_context(entry, effective_provider or entry_slug)
-            custom_context_length = _models_config_context_length(models_cfg, bare_model or model_for_lookup)
+            custom_context_length = _models_config_context_length(
+                models_cfg, bare_model or model_for_lookup, cfg
+            )
             break
 
     global_context_length = None
@@ -6976,6 +6983,7 @@ def _context_length_lookup_inputs_for_model(
                 model_for_lookup,
                 cfg_default_model,
                 effective_provider,
+                cfg,
             )
         ):
             global_context_length = _positive_context_length(raw_cfg_ctx)
@@ -7353,7 +7361,7 @@ def _resolve_compatible_session_model_state(
         # Only safe when the model itself does not carry an ``@provider:model``
         # qualifier — qualified strings require the catalog to decide whether
         # the qualifier matches the active provider (see slow path below).
-        bare_model, explicit_provider = _split_provider_qualified_model(model)
+        bare_model, explicit_provider = _split_provider_qualified_model(model, profile_config)
         model_prefix = model.split("/", 1)[0].strip().lower() if "/" in model else ""
         stale_codex_openai_slash_id = (
             requested_provider == "openai-codex"
@@ -7423,7 +7431,9 @@ def _resolve_compatible_session_model_state(
     # active_provider / default_model. This preserves the repair path
     # (stale models still get normalized) but normalizes to the profile's
     # default model under the profile's provider rather than the global default.
-    bare_model, explicit_provider = _split_provider_qualified_model(model) if model else ("", None)
+    bare_model, explicit_provider = (
+        _split_provider_qualified_model(model, profile_config) if model else ("", None)
+    )
     if profile_provider and not explicit_provider:
         _profile_provider_normalized = _normalize_provider_id(profile_provider)
         _profile_default = str(profile_default_model or "").strip()
@@ -7506,10 +7516,10 @@ def _resolve_compatible_session_model_state(
     # is stale relative to this unknown active provider. (#1023)
     raw_active_provider = str(catalog.get("active_provider") or "").strip().lower()
     if not active_provider and not raw_active_provider:
-        bare_model, explicit_provider = _split_provider_qualified_model(model)
+        bare_model, explicit_provider = _split_provider_qualified_model(model, profile_config)
         return model, explicit_provider or requested_provider, False
 
-    bare_for_context, explicit_provider = _split_provider_qualified_model(model)
+    bare_for_context, explicit_provider = _split_provider_qualified_model(model, profile_config)
     if requested_provider and not explicit_provider:
         model_prefix = model.split("/", 1)[0].strip().lower() if "/" in model else ""
         stale_codex_openai_slash_id = (
@@ -7795,6 +7805,7 @@ def _resolve_context_length_for_session_model(
     *,
     base_url: str | None = None,
     api_key: str | None = None,
+    cfg: dict | None = None,
 ) -> int:
     """Best-effort current context window for a session model.
 
@@ -7809,7 +7820,7 @@ def _resolve_context_length_for_session_model(
         from agent.model_metadata import get_model_context_length as _get_cl
         from api.config import get_config as _get_config_for_cl
 
-        _cfg_for_cl = _get_config_for_cl()
+        _cfg_for_cl = cfg if isinstance(cfg, dict) else _get_config_for_cl()
         _ctx_lookup = _context_length_lookup_inputs_for_model(
             model_for_lookup,
             provider,
@@ -7836,6 +7847,7 @@ def _resolve_context_length_for_session_model(
 def _session_context_length_lookup_state(
     model: str | None,
     provider: str | None,
+    config_obj: dict | None = None,
 ) -> tuple[str, str, str, str]:
     """Return model/provider/base_url/api_key inputs for session context lookup.
 
@@ -7849,14 +7861,17 @@ def _session_context_length_lookup_state(
     api_key_for_lookup = ""
     if not model_for_lookup:
         return "", provider_for_lookup, "", ""
+    cfg = config_obj if isinstance(config_obj, dict) else None
     try:
-        from api.config import resolve_model_provider
-
-        model_for_resolution = model_with_provider_context(model_for_lookup, provider_for_lookup or None)
-        resolved_model, resolved_provider, resolved_base_url = resolve_model_provider(model_for_resolution)
-        model_for_lookup = str(resolved_model or model_for_lookup).strip()
-        provider_for_lookup = str(resolved_provider or provider_for_lookup or "").strip()
-        base_url_for_lookup = str(resolved_base_url or "").strip()
+        lookup = _context_length_lookup_inputs_for_model(
+            model_for_lookup,
+            provider_for_lookup or None,
+            cfg=cfg,
+        )
+        model_for_lookup = str(model_for_lookup).strip()
+        provider_for_lookup = str(lookup.provider or provider_for_lookup or "").strip()
+        base_url_for_lookup = str(lookup.base_url or "").strip()
+        api_key_for_lookup = str(lookup.api_key or "").strip()
     except Exception:
         logger.debug("session context-length lookup state resolution failed", exc_info=True)
     if provider_for_lookup.startswith("custom:"):
@@ -7877,6 +7892,7 @@ def _session_model_identity_matches(
     stored_provider: str | None,
     resolved_model: str | None,
     resolved_provider: str | None,
+    config_obj: dict | None = None,
 ) -> bool:
     stored = str(stored_model or "").strip()
     resolved = str(resolved_model or "").strip()
@@ -7890,7 +7906,7 @@ def _session_model_identity_matches(
         # ``@provider:model`` form; without the slash case a reload of a
         # slash-stored model is wrongly treated as a model change, bypassing the
         # #4248 256k-clobber guard (Codex regression gate, v0.51.x).
-        bare, prov = _split_provider_qualified_model(value)
+        bare, prov = _split_provider_qualified_model(value, config_obj)
         if prov is None and "/" in value:
             prefix, rest = value.split("/", 1)
             prefix = prefix.strip()
@@ -7946,7 +7962,7 @@ def _rescale_threshold_tokens_for_context_window(
     return max(1, int(threshold * new_window / old_window))
 
 
-def _worktree_default_from_config(profile: str | None) -> bool:
+def _worktree_default_from_config(profile: str | None, config_obj: dict | None = None) -> bool:
     """Return the agent's config-level ``worktree:`` default for *profile*.
 
     The agent CLI honors ``worktree: true`` in config.yaml for every session
@@ -7962,7 +7978,9 @@ def _worktree_default_from_config(profile: str | None) -> bool:
     profile's config.yaml directly off disk (see #3294).
     """
     try:
-        if profile:
+        if isinstance(config_obj, dict):
+            cfg_dict = config_obj
+        elif profile:
             from api.profiles import get_hermes_home_for_profile
 
             cfg_dict = get_config_for_profile_home(get_hermes_home_for_profile(profile))
@@ -7983,22 +8001,26 @@ def _session_model_state_from_request(
     model: str | None,
     requested_provider: str | None,
     current_provider: str | None = None,
+    profile_config: dict | None = None,
 ) -> tuple[str | None, str | None]:
     model_value = str(model).strip() if model is not None else None
     provider = (
-        _clean_session_model_provider(requested_provider)
+        _clean_session_model_provider(requested_provider, profile_config)
         if requested_provider is not None
         else None
     )
     if model_value:
-        _bare, explicit_provider = _split_provider_qualified_model(model_value)
+        _bare, explicit_provider = _split_provider_qualified_model(model_value, profile_config)
         if explicit_provider:
             provider = explicit_provider
+            if profile_config is not None and provider == "custom":
+                return model_value, provider
         elif requested_provider is None:
-            provider = _clean_session_model_provider(current_provider)
+            provider = _clean_session_model_provider(current_provider, profile_config)
         model_value, provider, _changed = _resolve_compatible_session_model_state(
             model_value,
             provider,
+            profile_config=profile_config,
         )
     return model_value, provider
 
@@ -13726,6 +13748,9 @@ def handle_get(handler, parsed) -> bool:
             if (not _persisted_cl) or resolve_model:
                 _stored_model_for_lookup = getattr(s, "model", "") or ""
                 _stored_provider_for_lookup = getattr(s, "model_provider", None) or ""
+                _session_owner_config = _read_profile_model_config(
+                    s, _stored_provider_for_lookup
+                )[2]
                 _model_for_lookup = (
                     effective_model or _stored_model_for_lookup
                 ).strip()
@@ -13737,12 +13762,14 @@ def handle_get(handler, parsed) -> bool:
                 ) = _session_context_length_lookup_state(
                     _model_for_lookup,
                     effective_provider or getattr(s, "model_provider", None) or "",
+                    _session_owner_config,
                 )
                 _fb_cl = _resolve_context_length_for_session_model(
                     _model_for_lookup,
                     _provider_for_lookup,
                     base_url=_base_url_for_lookup,
                     api_key=_api_key_for_lookup,
+                    cfg=_session_owner_config,
                 )
                 _model_changed_for_context = not _session_model_identity_matches(
                     _stored_model_for_lookup,
@@ -15248,6 +15275,8 @@ def handle_post(handler, parsed) -> bool:
         # isolation for the same repo.  Clients that must never create a
         # worktree (e.g. the boot-time auto-bind) send ``worktree: false``
         # explicitly.
+        from api.profiles import resolve_profile_config_context
+        effective_profile, owner_config = resolve_profile_config_context(body.get("profile"))
         raw_worktree = body.get("worktree")
         # Presence-based, not truthiness-based: a client that sends the key at
         # all (even ``worktree: null``) has spoken explicitly and never falls
@@ -15260,7 +15289,9 @@ def handle_post(handler, parsed) -> bool:
                 or str(raw_worktree).strip().lower() in {"1", "true", "yes", "on"}
             )
         else:
-            worktree_requested = _worktree_default_from_config(body.get("profile") or None)
+            worktree_requested = _worktree_default_from_config(
+                effective_profile, owner_config
+            )
         if worktree_requested:
             try:
                 from api.worktrees import create_worktree_for_workspace
@@ -15285,6 +15316,7 @@ def handle_post(handler, parsed) -> bool:
         model, model_provider = _session_model_state_from_request(
             body.get("model"),
             body.get("model_provider"),
+            profile_config=owner_config,
         )
         try:
             enabled_toolsets = _validate_session_toolsets_shape(body.get("enabled_toolsets"))
@@ -15350,7 +15382,7 @@ def handle_post(handler, parsed) -> bool:
             workspace=workspace,
             model=model,
             model_provider=model_provider,
-            profile=body.get("profile") or None,
+            profile=effective_profile,
             project_id=body.get("project_id") or None,
             worktree_info=worktree_info,
             enabled_toolsets=enabled_toolsets,
@@ -15830,6 +15862,8 @@ def handle_post(handler, parsed) -> bool:
         old_ws = getattr(s, "workspace", "")
         old_model = getattr(s, "model", None)
         old_provider = getattr(s, "model_provider", None)
+        from api.profiles import resolve_profile_config_context
+        _owner, owner_config = resolve_profile_config_context(getattr(s, "profile", None))
         try:
             new_ws = str(resolve_trusted_workspace(body.get("workspace", s.workspace)))
         except ValueError as e:
@@ -15841,6 +15875,7 @@ def handle_post(handler, parsed) -> bool:
                     body.get("model", s.model),
                     body.get("model_provider") if "model_provider" in body else None,
                     getattr(s, "model_provider", None),
+                    profile_config=owner_config,
                 )
                 if model is not None:
                     s.model = model
@@ -15852,6 +15887,7 @@ def handle_post(handler, parsed) -> bool:
                     s.context_length = _resolve_context_length_for_session_model(
                         getattr(s, "model", None),
                         getattr(s, "model_provider", None),
+                        cfg=owner_config,
                     )
                     s.threshold_tokens = 0
                     s.last_prompt_tokens = 0
@@ -24253,6 +24289,7 @@ def _handle_chat_start(handler, body, diag=None):
             resolved_provider=model_provider,
             explicit_model_pick=explicit_model_pick,
             profile_provider=catalog_profile_provider,
+            profile_config=_pp_cfg,
         )
         if model_provider == "moa" and gateway_chat_enabled:
             from api.config import get_effective_default_model

@@ -826,6 +826,20 @@ def get_hermes_home_for_profile(name: str) -> Path:
     return _resolve_profile_home_for_name(name)
 
 
+def resolve_profile_config_context(profile: str | None = None) -> tuple[str, dict]:
+    """Return the effective profile owner and its isolated configuration."""
+    owner = str(profile or get_active_profile_name() or "default").strip() or "default"
+    if _is_isolated_profile_mode():
+        owner = _isolated_profile_name()
+    try:
+        from api.config import get_config_for_profile_home
+        config_obj = get_config_for_profile_home(get_hermes_home_for_profile(owner))
+    except Exception:
+        logger.debug("Failed to load profile configuration for %r", owner, exc_info=True)
+        config_obj = {}
+    return owner, config_obj if isinstance(config_obj, dict) else {}
+
+
 _TERMINAL_ENV_MAPPINGS = {
     'backend': 'TERMINAL_ENV',
     'env_type': 'TERMINAL_ENV',
@@ -2392,7 +2406,11 @@ def _clean_profile_config_value(value: Optional[str], field: str) -> Optional[st
     return cleaned
 
 
-def _split_webui_provider_model_value(default_model: Optional[str], model_provider: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+def _split_webui_provider_model_value(
+    default_model: Optional[str],
+    model_provider: Optional[str],
+    config_obj: dict | None = None,
+) -> tuple[Optional[str], Optional[str]]:
     """Normalize WebUI-internal @provider:model picker values for config.yaml.
 
     Parsing is delegated to ``config._parse_provider_qualified_model_id()`` so
@@ -2407,7 +2425,7 @@ def _split_webui_provider_model_value(default_model: Optional[str], model_provid
     if model and model.startswith("@") and ":" in model:
         from api.config import _parse_provider_qualified_model_id
 
-        parsed = _parse_provider_qualified_model_id(model)
+        parsed = _parse_provider_qualified_model_id(model, config_obj)
         if parsed:
             model_part, provider_part = parsed
             provider = provider or _clean_profile_config_value(provider_part, "model_provider")
@@ -2415,7 +2433,7 @@ def _split_webui_provider_model_value(default_model: Optional[str], model_provid
     return model, provider
 
 
-def _strip_webui_provider_prefix(model_id: object) -> str:
+def _strip_webui_provider_prefix(model_id: object, config_obj: dict | None = None) -> str:
     """Return the bare model name from a WebUI ``@provider:model`` value.
 
     Uses the same shared grammar as ``_split_webui_provider_model_value()`` so a
@@ -2425,7 +2443,7 @@ def _strip_webui_provider_prefix(model_id: object) -> str:
     if value.startswith("@") and ":" in value:
         from api.config import _parse_provider_qualified_model_id
 
-        parsed = _parse_provider_qualified_model_id(value)
+        parsed = _parse_provider_qualified_model_id(value, config_obj)
         if parsed:
             return str(parsed[0] or "").strip()
     return value
@@ -2435,6 +2453,7 @@ def _profile_model_selection_exists(
     available_models: object,
     default_model: Optional[str],
     model_provider: Optional[str],
+    config_obj: dict | None = None,
 ) -> bool:
     """Return True when a profile default model/provider exists in /api/models."""
     if not default_model and not model_provider:
@@ -2461,7 +2480,7 @@ def _profile_model_selection_exists(
                 continue
             if default_model and (
                 model_id == default_model
-                or _strip_webui_provider_prefix(model_id) == default_model
+                or _strip_webui_provider_prefix(model_id, config_obj) == default_model
             ):
                 model_seen = True
                 if model_provider:
@@ -2474,7 +2493,35 @@ def _profile_model_selection_exists(
     return bool(model_seen)
 
 
-def _get_available_models_for_profile_validation() -> dict:
+def _get_available_models_for_profile_validation(config_obj: dict | None = None) -> dict:
+    if isinstance(config_obj, dict):
+        groups = []
+        model_cfg = config_obj.get("model")
+        if isinstance(model_cfg, dict):
+            provider = str(model_cfg.get("provider") or "").strip()
+            models = []
+            for value in [model_cfg.get("default"), *(model_cfg.get("models") or [])]:
+                if value:
+                    models.append({"id": str(value)})
+            if provider or models:
+                groups.append({"provider_id": provider, "models": models, "extra_models": []})
+        providers = config_obj.get("providers")
+        if isinstance(providers, dict):
+            for provider, provider_cfg in providers.items():
+                if not isinstance(provider_cfg, dict):
+                    continue
+                models = provider_cfg.get("models") or []
+                if isinstance(models, dict):
+                    models = [{"id": str(value)} for value in models]
+                elif isinstance(models, list):
+                    models = [
+                        value if isinstance(value, dict) else {"id": str(value)}
+                        for value in models
+                    ]
+                else:
+                    models = []
+                groups.append({"provider_id": str(provider), "models": models, "extra_models": []})
+        return {"groups": groups}
     from api.config import get_available_models
 
     return get_available_models()
@@ -2484,16 +2531,21 @@ def _validate_profile_model_selection(
     default_model: Optional[str],
     model_provider: Optional[str],
     available_models: Optional[dict] = None,
+    config_obj: dict | None = None,
 ) -> None:
     """Reject profile model defaults that do not exist in the server catalog."""
     if not default_model and not model_provider:
         return
-    catalog = (
-        available_models
-        if available_models is not None
-        else _get_available_models_for_profile_validation()
-    )
-    if _profile_model_selection_exists(catalog, default_model, model_provider):
+    if available_models is not None:
+        catalog = available_models
+    else:
+        try:
+            catalog = _get_available_models_for_profile_validation(config_obj)
+        except TypeError:
+            # Preserve compatibility with older test and plugin seams that
+            # provide the catalog helper as a zero-argument callable.
+            catalog = _get_available_models_for_profile_validation()
+    if _profile_model_selection_exists(catalog, default_model, model_provider, config_obj):
         return
     if default_model and model_provider:
         raise ValueError(
@@ -2511,7 +2563,6 @@ def _write_model_defaults_to_config(
     model_provider: Optional[str] = None,
 ) -> None:
     """Write model default/provider fields into config.yaml for a profile."""
-    default_model, model_provider = _split_webui_provider_model_value(default_model, model_provider)
     if not default_model and not model_provider:
         return
     config_path = profile_dir / 'config.yaml'
@@ -2527,6 +2578,9 @@ def _write_model_defaults_to_config(
                 cfg = loaded
         except Exception:
             logger.debug("Failed to load config from %s", config_path)
+    default_model, model_provider = _split_webui_provider_model_value(
+        default_model, model_provider, cfg
+    )
     model_section = cfg.get('model', {})
     if not isinstance(model_section, dict):
         model_section = {}
@@ -2555,8 +2609,18 @@ def create_profile_api(name: str, clone_from: str = None,
     # also validates it. Any caller that bypasses the HTTP layer gets protection.
     if clone_from is not None and not _is_root_profile(clone_from):
         _validate_profile_name(clone_from)
-    default_model, model_provider = _split_webui_provider_model_value(default_model, model_provider)
-    _validate_profile_model_selection(default_model, model_provider)
+    try:
+        from api.config import get_config_for_profile_home
+        source_home = _resolve_profile_home_for_name(clone_from) if clone_from and clone_config else get_active_hermes_home()
+        model_config = get_config_for_profile_home(source_home)
+    except Exception:
+        model_config = {}
+    default_model, model_provider = _split_webui_provider_model_value(
+        default_model, model_provider, model_config
+    )
+    _validate_profile_model_selection(
+        default_model, model_provider, config_obj=model_config
+    )
 
     try:
         from hermes_cli.profiles import create_profile

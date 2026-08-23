@@ -25,12 +25,39 @@ guessing either way breaks the other. These tests pin both shapes so a future
 
 from collections import OrderedDict
 import json
+import pytest
 
 import api.gateway_chat as gateway_chat
 import api.models as models
 import api.streaming as streaming
 from api.config import STREAMS, create_stream_channel
 from api.models import new_session
+
+
+@pytest.fixture(autouse=True)
+def _configured_custom_provider_registry():
+    import api.config as cfg_mod
+
+    missing = object()
+    old_custom = cfg_mod.cfg.get("custom_providers", missing)
+    old_model = cfg_mod.cfg.get("model", missing)
+    cfg_mod.cfg["custom_providers"] = [{"name": "backup"}]
+    cfg_mod.cfg["model"] = {
+        "provider": "ollama",
+        "default": "hermes-reasoner:latest",
+        "base_url": "http://127.0.0.1:11434/v1",
+    }
+    try:
+        yield
+    finally:
+        if old_custom is missing:
+            cfg_mod.cfg.pop("custom_providers", None)
+        else:
+            cfg_mod.cfg["custom_providers"] = old_custom
+        if old_model is missing:
+            cfg_mod.cfg.pop("model", None)
+        else:
+            cfg_mod.cfg["model"] = old_model
 
 
 # (qualified value, expected bare model, expected provider)
