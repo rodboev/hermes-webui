@@ -75,6 +75,7 @@ def _isolate_discover_agent_dir(monkeypatch, tmp_path, hermes_path):
     """Point `which("hermes")` at our fake CLI and clear all standard candidates."""
     monkeypatch.setattr(bootstrap.shutil, "which", lambda name: str(hermes_path) if name == "hermes" else None)
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "no-such-hermes-home"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     monkeypatch.delenv("HERMES_WEBUI_AGENT_DIR", raising=False)
     monkeypatch.delenv("HERMES_WEBUI_PYTHON", raising=False)
     monkeypatch.setattr(bootstrap, "_agent_dir_from_python", lambda _python: None)
@@ -170,6 +171,7 @@ def test_root_fhs_layout_is_in_candidate_list(monkeypatch, tmp_path):
     stubbing Path.exists to record probed paths."""
     monkeypatch.setattr(bootstrap.shutil, "which", lambda name: None)
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "root-dot-hermes"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     monkeypatch.delenv("HERMES_WEBUI_AGENT_DIR", raising=False)
     monkeypatch.setattr(bootstrap, "REPO_ROOT", tmp_path / "isolated-repo-root")
     monkeypatch.setattr(bootstrap.Path, "home", classmethod(lambda cls: tmp_path / "isolated-home"))

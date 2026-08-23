@@ -3,6 +3,8 @@ from __future__ import annotations
 import os, re, shutil, stat, subprocess, sys
 from pathlib import Path
 
+from api.paths import _platform_default_hermes_home
+
 # Credential files that should never be world-readable
 _SENSITIVE_FILES = (
     '.env',
@@ -114,10 +116,7 @@ def discover_agent_dir(
         hermes_home or os.getenv("HERMES_HOME", str(user_home / ".hermes"))
     ).expanduser()
     if default_hermes_home is None:
-        if os.name == "nt" and os.getenv("LOCALAPPDATA"):
-            default_hermes_home = Path(os.environ["LOCALAPPDATA"])
-        else:
-            default_hermes_home = user_home / ".hermes"
+        default_hermes_home = _platform_default_hermes_home()
     default_hermes_home = Path(default_hermes_home).expanduser()
     explicit = os.getenv("HERMES_WEBUI_AGENT_DIR", "").strip()
     candidates = [

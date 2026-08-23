@@ -116,6 +116,7 @@ def discover_agent_dir() -> Path | None:
     return _startup.discover_agent_dir(
         repo_root=REPO_ROOT,
         hermes_home=Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))),
+        default_hermes_home=_startup._platform_default_hermes_home(),
         user_home=Path.home(),
         python_exe=discover_launcher_python(None),
         launcher_finder=_agent_dir_from_hermes_cli,
