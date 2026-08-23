@@ -7368,6 +7368,12 @@ def _resolve_compatible_session_model_state(
             )
         except Exception:
             providers_cfg = {}
+        if not isinstance(providers_cfg, dict) and profile_config is None:
+            providers_cfg = {}
+        if profile_config is None:
+            live_cfg = getattr(api_config, "cfg", {})
+            if isinstance(live_cfg, dict) and isinstance(live_cfg.get("providers"), dict):
+                providers_cfg = live_cfg["providers"]
         if isinstance(providers_cfg, dict) and requested_provider in providers_cfg:
             return model, requested_provider, False
     if model and requested_provider:
