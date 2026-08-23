@@ -7355,10 +7355,15 @@ def _resolve_compatible_session_model_state(
     if model and requested_provider == "moa":
         return _moa_fast_path_model_state(model)
     if model and requested_provider and model.startswith(f"@{requested_provider}:"):
+        routing_config = (
+            profile_config
+            if isinstance(profile_config, dict)
+            else get_config_snapshot()
+        )
         try:
             providers_cfg = (
-                profile_config.get("providers")
-                if isinstance(profile_config, dict)
+                routing_config.get("providers")
+                if isinstance(routing_config, dict)
                 else {}
             )
         except Exception:
@@ -7375,6 +7380,8 @@ def _resolve_compatible_session_model_state(
             requested_provider == "openai-codex"
             and model_prefix == "openai"
         )
+        if explicit_provider and isinstance(profile_config, dict):
+            return model, requested_provider, False
         if not explicit_provider and not stale_codex_openai_slash_id:
             _profile_default = str(profile_default_model or "").strip()
             _profile_prov = _clean_session_model_provider(profile_provider, profile_config)
