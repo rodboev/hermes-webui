@@ -828,7 +828,11 @@ def get_hermes_home_for_profile(name: str) -> Path:
 
 def resolve_profile_config_context(profile: str | None = None) -> tuple[str, dict]:
     """Return the effective profile owner and its isolated configuration."""
-    owner = str(profile or get_active_profile_name() or "default").strip() or "default"
+    requested = str(profile or "").strip()
+    if requested and (_PROFILE_ID_RE.fullmatch(requested) or _is_root_profile(requested)):
+        owner = requested
+    else:
+        owner = str(get_active_profile_name() or "default").strip() or "default"
     if _is_isolated_profile_mode():
         owner = _isolated_profile_name()
     try:
@@ -2494,34 +2498,6 @@ def _profile_model_selection_exists(
 
 
 def _get_available_models_for_profile_validation(config_obj: dict | None = None) -> dict:
-    if isinstance(config_obj, dict):
-        groups = []
-        model_cfg = config_obj.get("model")
-        if isinstance(model_cfg, dict):
-            provider = str(model_cfg.get("provider") or "").strip()
-            models = []
-            for value in [model_cfg.get("default"), *(model_cfg.get("models") or [])]:
-                if value:
-                    models.append({"id": str(value)})
-            if provider or models:
-                groups.append({"provider_id": provider, "models": models, "extra_models": []})
-        providers = config_obj.get("providers")
-        if isinstance(providers, dict):
-            for provider, provider_cfg in providers.items():
-                if not isinstance(provider_cfg, dict):
-                    continue
-                models = provider_cfg.get("models") or []
-                if isinstance(models, dict):
-                    models = [{"id": str(value)} for value in models]
-                elif isinstance(models, list):
-                    models = [
-                        value if isinstance(value, dict) else {"id": str(value)}
-                        for value in models
-                    ]
-                else:
-                    models = []
-                groups.append({"provider_id": str(provider), "models": models, "extra_models": []})
-        return {"groups": groups}
     from api.config import get_available_models
 
     return get_available_models()

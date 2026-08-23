@@ -6523,10 +6523,12 @@ def _repair_foreign_session_model_provider(
 ) -> str | None:
     """Repair a stale provider only when the cached catalog names one owner."""
     stored_model = str(getattr(session, "model", "") or "").strip()
-    stored_provider = _clean_session_model_provider(getattr(session, "model_provider", None))
-    requested_provider = _clean_session_model_provider(requested_provider)
-    resolved_provider = _clean_session_model_provider(resolved_provider)
-    profile_provider = _clean_session_model_provider(profile_provider)
+    stored_provider = _clean_session_model_provider(
+        getattr(session, "model_provider", None), profile_config
+    )
+    requested_provider = _clean_session_model_provider(requested_provider, profile_config)
+    resolved_provider = _clean_session_model_provider(resolved_provider, profile_config)
+    profile_provider = _clean_session_model_provider(profile_provider, profile_config)
     _, qualified_provider = _split_provider_qualified_model(requested_model, profile_config)
     if (
         explicit_model_pick
@@ -6744,8 +6746,10 @@ def _models_config_context_length(
     return None
 
 
-def _canonical_context_provider(value: str | None) -> str:
-    provider = _clean_session_model_provider(value) or ""
+def _canonical_context_provider(
+    value: str | None, config_obj: dict | None = None
+) -> str:
+    provider = _clean_session_model_provider(value, config_obj) or ""
     if not provider:
         return ""
     try:
@@ -6773,12 +6777,14 @@ def _custom_provider_slug_for_context(name: object) -> str:
         return f"custom:{slug}" if slug else ""
 
 
-def _providers_match_for_context(config_key: object, requested_provider: str) -> bool:
+def _providers_match_for_context(
+    config_key: object, requested_provider: str, config_obj: dict | None = None
+) -> bool:
     if not requested_provider:
         return False
     raw_key = str(config_key or "").strip().lower()
-    key = _canonical_context_provider(raw_key)
-    requested = _canonical_context_provider(requested_provider)
+    key = _canonical_context_provider(raw_key, config_obj)
+    requested = _canonical_context_provider(requested_provider, config_obj)
     return bool(
         requested
         and (
@@ -6833,7 +6839,7 @@ def _context_length_config_api_key_for_provider(
 ) -> str:
     """Return a config/env API key usable for context-window metadata lookup."""
     cfg = cfg if isinstance(cfg, dict) else {}
-    provider = _canonical_context_provider(provider)
+    provider = _canonical_context_provider(provider, cfg)
 
     def _resolve_key(raw_api_key, raw_key_env=None) -> str:
         api_key_text = str(raw_api_key or "").strip()
@@ -6859,7 +6865,7 @@ def _context_length_config_api_key_for_provider(
         for provider_key, provider_cfg in providers_cfg.items():
             if not isinstance(provider_cfg, dict):
                 continue
-            if not _providers_match_for_context(provider_key, provider):
+            if not _providers_match_for_context(provider_key, provider, cfg):
                 continue
             api_key = _resolve_key(provider_cfg.get("api_key"), provider_cfg.get("key_env"))
             if api_key:
@@ -6904,13 +6910,13 @@ def _context_length_lookup_inputs_for_model(
     cfg = cfg if isinstance(cfg, dict) else {}
 
     bare_model, explicit_provider = _split_provider_qualified_model(model_for_lookup, cfg)
-    effective_provider = _canonical_context_provider(provider or explicit_provider)
+    effective_provider = _canonical_context_provider(provider or explicit_provider, cfg)
     effective_base_url = str(base_url or "").strip()
 
     model_cfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
     if isinstance(model_cfg, dict):
         if not effective_provider:
-            effective_provider = _canonical_context_provider(model_cfg.get("provider"))
+            effective_provider = _canonical_context_provider(model_cfg.get("provider"), cfg)
         if not effective_base_url:
             effective_base_url = str(model_cfg.get("base_url") or "").strip()
 
@@ -7032,8 +7038,8 @@ def _read_profile_model_config(
 
     Returns (profile_provider, profile_default_model, profile_config_dict).
     The first two are None when the session has no profile or the profile config
-    is unreadable; profile_config_dict is None in the same cases so callers only
-    pay for one YAML parse.
+    is unreadable; a named profile's unreadable config is returned as ``{}`` so
+    callers never fall through to another profile's process-global config.
 
     When the session already has an explicit ``requested_provider``, the profile
     ``model.provider`` is not returned (first tuple element is None) so profile
@@ -7060,10 +7066,10 @@ def _read_profile_model_config(
         _profile_home = get_hermes_home_for_profile(_profile_name)
         _profile_cfg_path = os.path.join(str(_profile_home), "config.yaml")
         if not os.path.isfile(_profile_cfg_path):
-            return None, None, None
+            return None, None, {}
         _pcfg = _read_profile_config_cached(_profile_name, _profile_cfg_path)
         if _pcfg is None:
-            return None, None, None
+            return None, None, {}
         _model_cfg = _pcfg.get("model") or {}
         if not isinstance(_model_cfg, dict):
             return None, None, _pcfg
@@ -7075,11 +7081,11 @@ def _read_profile_model_config(
             getattr(session, "profile", None),
             exc_info=True,
         )
-        return None, None, None
+        return None, None, {}
 
-    _requested = _clean_session_model_provider(requested_provider)
+    _requested = _clean_session_model_provider(requested_provider, _pcfg)
     if _requested:
-        _profile_prov = _clean_session_model_provider(_provider)
+        _profile_prov = _clean_session_model_provider(_provider, _pcfg)
         if _profile_prov != _requested:
             return None, None, _pcfg
         return None, _default, _pcfg
@@ -7244,7 +7250,7 @@ def _repair_bare_custom_provider_model(
     """
     try:
         model = str(bare_model or "").strip()
-        prov = _clean_session_model_provider(provider)
+        prov = _clean_session_model_provider(provider, config_obj)
         if not model or "/" in model or not prov:
             return None
         if prov != "custom" and not str(prov).startswith("custom:"):
@@ -7345,14 +7351,16 @@ def _resolve_compatible_session_model_state(
     for the default-model backstop.
     """
     model = str(model_id or "").strip()
-    requested_provider = _clean_session_model_provider(model_provider)
+    requested_provider = _clean_session_model_provider(model_provider, profile_config)
     if model and requested_provider == "moa":
         return _moa_fast_path_model_state(model)
     if model and requested_provider and model.startswith(f"@{requested_provider}:"):
         try:
-            from api.config import cfg as _active_cfg
-
-            providers_cfg = _active_cfg.get("providers") if isinstance(_active_cfg, dict) else {}
+            providers_cfg = (
+                profile_config.get("providers")
+                if isinstance(profile_config, dict)
+                else {}
+            )
         except Exception:
             providers_cfg = {}
         if isinstance(providers_cfg, dict) and requested_provider in providers_cfg:
@@ -7369,7 +7377,7 @@ def _resolve_compatible_session_model_state(
         )
         if not explicit_provider and not stale_codex_openai_slash_id:
             _profile_default = str(profile_default_model or "").strip()
-            _profile_prov = _clean_session_model_provider(profile_provider)
+            _profile_prov = _clean_session_model_provider(profile_provider, profile_config)
             _providers_match_for_repair = (
                 _profile_prov is None or _profile_prov == requested_provider
             )
@@ -7863,18 +7871,29 @@ def _session_context_length_lookup_state(
         return "", provider_for_lookup, "", ""
     cfg = config_obj if isinstance(config_obj, dict) else None
     try:
+        from api.config import model_with_provider_context, resolve_model_provider
+
+        model_for_resolution = model_with_provider_context(
+            model_for_lookup, provider_for_lookup or None
+        )
+        resolved_model, resolved_provider, resolved_base_url = resolve_model_provider(
+            model_for_resolution
+        )
+        model_for_lookup = str(resolved_model or model_for_lookup).strip()
+        provider_for_lookup = str(resolved_provider or provider_for_lookup or "").strip()
+        base_url_for_lookup = str(resolved_base_url or "").strip()
         lookup = _context_length_lookup_inputs_for_model(
             model_for_lookup,
             provider_for_lookup or None,
+            base_url=base_url_for_lookup,
             cfg=cfg,
         )
-        model_for_lookup = str(model_for_lookup).strip()
         provider_for_lookup = str(lookup.provider or provider_for_lookup or "").strip()
-        base_url_for_lookup = str(lookup.base_url or "").strip()
+        base_url_for_lookup = str(lookup.base_url or base_url_for_lookup).strip()
         api_key_for_lookup = str(lookup.api_key or "").strip()
     except Exception:
         logger.debug("session context-length lookup state resolution failed", exc_info=True)
-    if provider_for_lookup.startswith("custom:"):
+    if provider_for_lookup.startswith("custom:") and cfg is None:
         try:
             from api.config import resolve_custom_provider_connection
 
@@ -8013,8 +8032,6 @@ def _session_model_state_from_request(
         _bare, explicit_provider = _split_provider_qualified_model(model_value, profile_config)
         if explicit_provider:
             provider = explicit_provider
-            if profile_config is not None and provider == "custom":
-                return model_value, provider
         elif requested_provider is None:
             provider = _clean_session_model_provider(current_provider, profile_config)
         model_value, provider, _changed = _resolve_compatible_session_model_state(
@@ -13776,6 +13793,7 @@ def handle_get(handler, parsed) -> bool:
                     _stored_provider_for_lookup,
                     _model_for_lookup,
                     _provider_for_lookup,
+                    _session_owner_config,
                 )
                 if _should_accept_session_context_length_refresh(
                     _persisted_cl,
@@ -15290,7 +15308,7 @@ def handle_post(handler, parsed) -> bool:
             )
         else:
             worktree_requested = _worktree_default_from_config(
-                effective_profile, owner_config
+                effective_profile, config_obj=owner_config
             )
         if worktree_requested:
             try:

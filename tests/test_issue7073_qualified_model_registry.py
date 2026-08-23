@@ -56,6 +56,32 @@ def test_missing_owner_config_is_empty_and_never_ambient(monkeypatch):
     assert profiles.resolve_profile_config_context() == ("missing", {})
 
 
+def test_profile_validation_uses_live_catalog_with_source_config_for_parsing(monkeypatch):
+    catalog = {
+        "groups": [{
+            "provider_id": "openai-codex",
+            "models": [{"id": "gpt-5.5"}],
+            "extra_models": [],
+        }]
+    }
+    monkeypatch.setattr(profiles, "_get_available_models_for_profile_validation", lambda: catalog)
+    profiles._validate_profile_model_selection(
+        "gpt-5.5",
+        "openai-codex",
+        config_obj={"model": {"provider": "other", "default": "not-in-catalog"}},
+    )
+
+
+def test_invalid_body_profile_binds_persisted_owner_to_active_config(monkeypatch):
+    monkeypatch.setattr(profiles, "get_active_profile_name", lambda: "live-owner")
+    monkeypatch.setattr(profiles, "get_hermes_home_for_profile", lambda name: f"/{name}")
+    monkeypatch.setattr(config, "get_config_for_profile_home", lambda home: OLLAMA_CONFIG)
+    assert profiles.resolve_profile_config_context("../../other") == (
+        "live-owner",
+        OLLAMA_CONFIG,
+    )
+
+
 def test_isolated_context_persists_pinned_owner_with_pinned_config(monkeypatch):
     monkeypatch.setattr(profiles, "_is_isolated_profile_mode", lambda: True)
     monkeypatch.setattr(profiles, "_isolated_profile_name", lambda: "pinned")
@@ -66,12 +92,16 @@ def test_isolated_context_persists_pinned_owner_with_pinned_config(monkeypatch):
 
 
 def test_session_model_state_uses_explicit_owner_config(monkeypatch):
-    poison = {"model": {"provider": "openrouter", "default": "latest"}}
-    monkeypatch.setattr(config, "cfg", poison)
-    model, provider = routes._session_model_state_from_request(
+    captured = {}
+    monkeypatch.setattr(
+        routes,
+        "_resolve_compatible_session_model_state",
+        lambda model, provider, **kwargs: captured.update(kwargs) or (model, provider, False),
+    )
+    routes._session_model_state_from_request(
         "@custom:hermes-reasoner:latest", None, profile_config=OLLAMA_CONFIG
     )
-    assert (model, provider) == ("@custom:hermes-reasoner:latest", "custom")
+    assert captured["profile_config"] is OLLAMA_CONFIG
 
 
 def test_gateway_boundary_uses_the_same_owner_config():
@@ -83,11 +113,21 @@ def test_gateway_boundary_uses_the_same_owner_config():
 def test_context_length_lookup_keeps_persisted_owner_config(monkeypatch):
     captured = {}
 
-    def lookup(model, provider, *, cfg):
+    def lookup(model, provider, *, base_url=None, cfg):
         captured["cfg"] = cfg
         return SimpleNamespace(provider=provider, base_url="", api_key="")
 
     monkeypatch.setattr(routes, "_context_length_lookup_inputs_for_model", lookup)
+    monkeypatch.setattr(
+        config,
+        "resolve_model_provider",
+        lambda model: ("hermes-reasoner:latest", "custom", ""),
+    )
+    monkeypatch.setattr(
+        config,
+        "model_with_provider_context",
+        lambda model, provider=None: model,
+    )
     routes._session_context_length_lookup_state(
         "@custom:hermes-reasoner:latest", "custom", OLLAMA_CONFIG
     )
