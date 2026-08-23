@@ -681,6 +681,46 @@ def test_sidebar_lineage_count_matches_detail_merge_and_fails_closed_for_unknown
     assert "_lineage_user_message_count" not in row
 
 
+@pytest.mark.parametrize("unreadable_shape", ["null_content", "missing_content"])
+def test_sidebar_lineage_count_fails_closed_for_unreadable_state_db_rows(
+    tmp_path, monkeypatch, unreadable_shape
+):
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(db)
+    if unreadable_shape == "null_content":
+        conn.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, "
+            "role TEXT, content TEXT, timestamp REAL)"
+        )
+        conn.execute(
+            "INSERT INTO messages VALUES (1, 'lineage-tip', 'user', NULL, 2)"
+        )
+    else:
+        conn.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, "
+            "role TEXT, timestamp REAL)"
+        )
+    conn.commit()
+    conn.close()
+
+    tip = SimpleNamespace(
+        session_id="lineage-tip",
+        parent_session_id=None,
+        profile=None,
+        session_source="webui",
+        messages=[{"role": "user", "content": "sidecar turn", "timestamp": 1.0}],
+        truncation_watermark=None,
+        truncation_boundary=None,
+    )
+    monkeypatch.setattr(models, "_active_state_db_path", lambda: db)
+    monkeypatch.setattr(routes.Session, "load", lambda sid: tip if sid == tip.session_id else None)
+    row = {"session_id": tip.session_id, "_lineage_tip_id": tip.session_id}
+
+    routes._project_sidebar_lineage_user_counts([row])
+
+    assert "_lineage_user_message_count" not in row
+
+
 def test_partial_incomplete_sidecar_lineage_preserves_collected_ancestors(monkeypatch):
     child = SimpleNamespace(
         session_id="a" * 32,

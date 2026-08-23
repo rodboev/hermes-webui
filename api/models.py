@@ -8184,6 +8184,25 @@ def _state_db_session_messages_result(messages, revision, *, with_revision):
     return list(messages or [])
 
 
+def _state_db_messages_schema_is_readable(profile=None) -> bool:
+    """Return whether the selected state.db can classify message rows."""
+    try:
+        import sqlite3
+
+        if isinstance(profile, str) and profile:
+            db_path = _get_profile_home(profile) / "state.db"
+        else:
+            db_path = _active_state_db_path()
+        if not db_path.exists():
+            return True
+        with closing(open_state_db_readonly(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = conn.execute("PRAGMA table_info(messages)").fetchall()
+        return {str(row["name"]) for row in columns} >= {"role", "content", "timestamp"}
+    except Exception:
+        return False
+
+
 def _state_db_active_rows_digest(rows) -> str:
     """Match the Agent fence for model-facing fields mutable in place."""
     digest = hashlib.sha256()

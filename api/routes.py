@@ -9720,8 +9720,23 @@ def _project_sidebar_lineage_user_counts(rows: list[dict]) -> None:
             stitch_continuations=True,
             profile=getattr(tip, "profile", None) or None,
         )
+        if not state_db_messages and not _state_db_messages_schema_is_readable(
+            profile=getattr(tip, "profile", None) or None
+        ):
+            count_cache[sid] = None
+            row.pop("_lineage_user_message_count", None)
+            continue
         if state_db_messages and not all(
             isinstance(message, dict) and {"role", "content"}.issubset(message)
+            for message in state_db_messages
+        ):
+            count_cache[sid] = None
+            row.pop("_lineage_user_message_count", None)
+            continue
+        if any(
+            isinstance(message, dict)
+            and message.get("role") == "user"
+            and not isinstance(message.get("content"), str)
             for message in state_db_messages
         ):
             count_cache[sid] = None
@@ -10443,6 +10458,7 @@ from api.models import (
     get_cli_sessions,
     get_cli_session_messages,
     get_state_db_session_messages,
+    _state_db_messages_schema_is_readable,
     get_state_db_session_message_prefix_summary,
     get_state_db_session_message_keys_before_timestamp,
     get_state_db_session_summary,
