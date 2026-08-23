@@ -11402,7 +11402,10 @@ function _buildProviderCard(p){
     ? t('providers_status_oauth')
     : p.key_source==='config_yaml'
       ? t('providers_status_configured')||'Configured'
-      : (p.has_key ? t('providers_status_api_key') : t('providers_status_not_configured_label'));
+      : p.is_self_hosted && p.configured!==undefined
+        ? (p.configured ? t('providers_status_configured_label')||'Configured' : t('providers_status_not_configured_label'))
+        : (p.has_key ? t('providers_status_api_key') : t('providers_status_not_configured_label'));
+  const isConfigured=p.configured===undefined?p.has_key:p.configured;
   const metaParts=[];
   if(modelCount>0) metaParts.push(modelCount+(modelCount===1?' model':' models'));
   metaParts.push(sourceLabel);
@@ -11417,7 +11420,7 @@ function _buildProviderCard(p){
       <div class="provider-card-name">${esc(p.display_name)}</div>
       <div class="provider-card-meta">${esc(metaText)}</div>
     </div>
-    ${p.has_key?`<span class="provider-card-badge">${esc(t('providers_status_configured'))}</span>`:''}
+    ${isConfigured?`<span class="provider-card-badge">${esc(t(p.is_self_hosted?'providers_status_configured_label':'providers_status_configured'))}</span>`:''}
     <svg class="provider-card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="16" height="16"><path d="M6 9l6 6 6-6"/></svg>
   `;
   card.appendChild(header);
@@ -11520,6 +11523,7 @@ function _buildProviderCard(p){
     };
     const initialModelChoices=Array.isArray(p.models)?p.models:[];
     setModelChoices(initialModelChoices);
+    modelInput.value=(p.configured_model||'').trim();
 
     const saveRow=document.createElement('div');
     saveRow.className='provider-card-row';

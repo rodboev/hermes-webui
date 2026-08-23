@@ -139,6 +139,61 @@ eval(fnSource);
 """
 
 
+_CARD_DRIVER = r"""
+const fs = require('fs');
+const scenario = JSON.parse(process.argv[2] || '{}');
+const fnSource = fs.readFileSync(process.argv[3], 'utf8');
+
+class Element {
+  constructor(tag) {
+    this.tagName = tag;
+    this.children = [];
+    this.className = '';
+    this.dataset = {};
+    this.style = {};
+    this.attributes = {};
+    this.textContent = '';
+    this.value = '';
+    this.disabled = false;
+    this.classList = { toggle() {}, contains() { return false; } };
+  }
+  appendChild(child) { this.children.push(child); return child; }
+  addEventListener() {}
+  setAttribute(name, value) { this.attributes[name] = value; }
+  set innerHTML(value) {
+    this._innerHTML = value;
+    this.textContent = String(value).replace(/<[^>]*>/g, '');
+  }
+  get innerHTML() { return this._innerHTML || ''; }
+}
+
+globalThis.document = { createElement: (tag) => new Element(tag) };
+globalThis._providerCardEls = new Map();
+globalThis._SELF_HOSTED_DEFAULT_BASE_URLS = { ollama: 'http://localhost:11434/v1' };
+globalThis.esc = (value) => String(value);
+globalThis.t = (key) => ({
+  providers_status_configured: 'API key configured',
+  providers_status_configured_label: 'Configured',
+  providers_status_not_configured_label: 'Not configured',
+  providers_status_api_key: 'API key',
+  providers_status_model: 'Model',
+  providers_save: 'Save',
+  providers_remove: 'Remove',
+}[key] || key);
+
+eval(fnSource);
+const card = _buildProviderCard(scenario.provider);
+const header = card.children[0];
+const fields = _providerCardEls.get(scenario.provider.id);
+process.stdout.write(JSON.stringify({
+  headerText: header.textContent,
+  headerHtml: header.innerHTML,
+  modelValue: fields && fields.modelInput ? fields.modelInput.value : null,
+  saveDisabled: fields && fields.saveBtn ? fields.saveBtn.disabled : null,
+}));
+"""
+
+
 @pytest.fixture
 def isolated_self_hosted_env(monkeypatch, tmp_path):
     _install_fake_hermes_cli(monkeypatch)
@@ -196,6 +251,7 @@ def test_apply_self_hosted_provider_setup_persists_ollama_base_url_and_active_mo
     assert body["provider"] == "ollama"
     cfg = onboarding._load_yaml_config(fake_config_path)
     assert cfg["providers"]["ollama"]["base_url"] == "http://127.0.0.1:11434/v1"
+    assert cfg["providers"]["ollama"]["model"] == onboarding._normalize_model_for_provider("ollama", "qwen3:8b")
     assert cfg["model"]["provider"] == "ollama"
     assert cfg["model"]["base_url"] == "http://127.0.0.1:11434/v1"
     assert cfg["model"]["default"] == onboarding._normalize_model_for_provider("ollama", "qwen3:8b")
@@ -251,6 +307,7 @@ def test_apply_self_hosted_provider_setup_persists_base_url_without_switching_ac
     assert "model" not in body
     cfg = onboarding._load_yaml_config(fake_config_path)
     assert cfg["providers"]["ollama"]["base_url"] == "http://127.0.0.1:11434/v1"
+    assert cfg["providers"]["ollama"]["model"] == onboarding._normalize_model_for_provider("ollama", "qwen3:8b")
     assert cfg["model"] == {**original_model_cfg, "custom_flag": "preserve-me"}
     assert calls == ["invalidate"]
 
@@ -314,7 +371,7 @@ def test_get_providers_exposes_self_hosted_flags_and_base_url(monkeypatch, tmp_p
     config.cfg.clear()
     config.cfg["model"] = {}
     config.cfg["providers"] = {
-        "ollama": {"base_url": "http://127.0.0.1:11434/v1"},
+        "ollama": {"base_url": "http://127.0.0.1:11434/v1", "model": "qwen3:8b"},
         "lmstudio": {"base_url": "http://127.0.0.1:1234/v1"},
     }
     try:
@@ -325,6 +382,10 @@ def test_get_providers_exposes_self_hosted_flags_and_base_url(monkeypatch, tmp_p
         by_id = {p["id"]: p for p in result["providers"]}
         assert by_id["ollama"]["is_self_hosted"] is True
         assert by_id["ollama"]["base_url"] == "http://127.0.0.1:11434/v1"
+        assert by_id["ollama"]["configured"] is True
+        assert by_id["ollama"]["configured_model"] == "qwen3:8b"
+        assert by_id["lmstudio"]["configured"] is False
+        assert by_id["lmstudio"]["configured_model"] is None
         assert by_id["ollama"]["configurable"] is False
         assert by_id["lmstudio"]["is_self_hosted"] is True
         assert by_id["lmstudio"]["base_url"] == "http://127.0.0.1:1234/v1"
@@ -333,6 +394,79 @@ def test_get_providers_exposes_self_hosted_flags_and_base_url(monkeypatch, tmp_p
         config.cfg.clear()
         config.cfg.update(old_cfg)
         config._cfg_mtime = old_mtime
+
+
+def test_get_providers_uses_matching_legacy_active_model_and_rejects_incomplete_states(monkeypatch, tmp_path):
+    _install_fake_hermes_cli(monkeypatch)
+    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    config.cfg.clear()
+    config.cfg["model"] = {
+        "provider": "ollama",
+        "default": "legacy-model",
+        "base_url": "http://127.0.0.1:11434/v1",
+    }
+    config.cfg["providers"] = {
+        "lmstudio": {"base_url": "http://127.0.0.1:1234/v1", "model": ""},
+        "ollama-cloud": {"base_url": "http://127.0.0.1:9999/v1", "model": "ignored"},
+    }
+    try:
+        config._cfg_mtime = 0.0
+        from api.providers import get_providers, invalidate_providers_cache
+
+        invalidate_providers_cache()
+        by_id = {p["id"]: p for p in get_providers()["providers"]}
+        assert by_id["ollama"]["configured"] is True
+        assert by_id["ollama"]["configured_model"] == "legacy-model"
+        assert by_id["lmstudio"]["configured"] is False
+        assert by_id["ollama-cloud"]["is_self_hosted"] is False
+        assert "configured" not in by_id["ollama-cloud"]
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+
+def test_provider_card_renders_authoritative_status_and_model_prefill(tmp_path):
+    if NODE is None:
+        pytest.skip("node is required to execute the self-hosted provider card harness")
+
+    fn_path = tmp_path / "buildProviderCard.js"
+    fn_path.write_text(extract_function(PANELS_JS, "_buildProviderCard", prefix="function"), encoding="utf-8")
+    driver_path = tmp_path / "card-driver.js"
+    driver_path.write_text(_CARD_DRIVER, encoding="utf-8")
+    scenarios = [
+        ({
+            "id": "ollama", "display_name": "Ollama", "is_self_hosted": True,
+            "configured": True, "configured_model": "qwen3:8b", "has_key": False,
+            "models": [{"id": "catalog-only"}], "models_total": 1,
+        }, "Configured", True, "qwen3:8b"),
+        ({
+            "id": "ollama", "display_name": "Ollama", "is_self_hosted": True,
+            "configured": False, "configured_model": None, "has_key": False,
+            "models": [{"id": "catalog-only"}], "models_total": 1,
+        }, "Not configured", False, ""),
+        ({
+            "id": "openai", "display_name": "OpenAI", "has_key": True,
+            "configurable": True, "models": [], "models_total": 0,
+        }, "API key configured", True, None),
+    ]
+    for provider, expected_status, expected_badge, expected_model in scenarios:
+        result = subprocess.run(
+            [NODE, str(driver_path), json.dumps({"provider": provider}), str(fn_path)],
+            capture_output=True, text=True, check=True,
+        )
+        payload = json.loads(result.stdout)
+        assert expected_status in payload["headerText"]
+        assert ("provider-card-badge" in payload["headerHtml"]) is expected_badge
+        if expected_model is not None:
+            assert payload["modelValue"] == expected_model
+
+
+def test_configured_status_key_is_present_once_in_all_locale_blocks():
+    i18n = (ROOT / "static" / "i18n.js").read_text(encoding="utf-8")
+    assert i18n.count("providers_status_configured_label:") == 15
 
 
 def test_save_self_hosted_provider_posts_expected_payload(tmp_path):
