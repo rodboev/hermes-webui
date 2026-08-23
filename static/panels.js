@@ -11403,7 +11403,9 @@ function _buildProviderCard(p){
     : p.key_source==='config_yaml'
       ? t('providers_status_configured')||'Configured'
       : p.is_self_hosted && p.configured!==undefined
-        ? (p.configured ? t('providers_status_configured_label')||'Configured' : t('providers_status_not_configured_label'))
+        ? (p.configured
+          ? t('providers_status_configured_label')||'Configured'
+          : (p.has_key ? t('providers_status_api_key') : t('providers_status_not_configured_label')))
         : (p.has_key ? t('providers_status_api_key') : t('providers_status_not_configured_label'));
   const isConfigured=p.configured===undefined?p.has_key:p.configured;
   const metaParts=[];

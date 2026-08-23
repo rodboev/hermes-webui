@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -466,7 +467,9 @@ def test_provider_card_renders_authoritative_status_and_model_prefill(tmp_path):
 
 def test_configured_status_key_is_present_once_in_all_locale_blocks():
     i18n = (ROOT / "static" / "i18n.js").read_text(encoding="utf-8")
-    assert i18n.count("providers_status_configured_label:") == 15
+    blocks = re.findall(r"(?ms)^  (?:'[^']+'|[A-Za-z-]+): \{.*?(?=^  (?:'[^']+'|[A-Za-z-]+): \{|\Z)", i18n)
+    assert len(blocks) == 15
+    assert all(block.count("providers_status_configured_label:") == 1 for block in blocks)
 
 
 def test_save_self_hosted_provider_posts_expected_payload(tmp_path):

@@ -219,8 +219,8 @@ class TestBuildProviderCardJs:
         badge_idx = fn.find("provider-card-badge")
         assert badge_idx != -1, "provider-card-badge not found in _buildProviderCard"
         badge_ctx = fn[max(0, badge_idx - 50) : badge_idx + 80]
-        assert "p.has_key" in badge_ctx or "has_key" in badge_ctx, (
-            "Configured badge is not conditional on p.has_key"
+        assert "isConfigured" in badge_ctx, (
+            "Configured badge is not conditional on the authoritative configured state"
         )
 
 
