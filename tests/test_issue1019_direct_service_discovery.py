@@ -123,3 +123,19 @@ def test_interpreter_only_identity_does_not_authorize_auto_install(monkeypatch, 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "empty-home"))
     monkeypatch.setenv("HERMES_WEBUI_PYTHON", str(tmp_path / "agent-python"))
     assert startup._agent_dir() is None
+
+
+def test_discovery_checks_hermes_home_without_explicit_override(monkeypatch, tmp_path):
+    from api import startup
+
+    monkeypatch.delenv("HERMES_WEBUI_AGENT_DIR", raising=False)
+    agent_root = tmp_path / "hermes-home" / "hermes-agent"
+    agent_root.mkdir(parents=True)
+    (agent_root / "run_agent.py").write_text("", encoding="utf-8")
+    assert startup.discover_agent_dir(
+        repo_root=tmp_path / "webui",
+        hermes_home=tmp_path / "hermes-home",
+        user_home=tmp_path / "home",
+        launcher_finder=lambda: None,
+        python_finder=lambda _python: None,
+    ) == agent_root.resolve()

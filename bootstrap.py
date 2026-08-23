@@ -108,110 +108,10 @@ def ensure_supported_platform() -> None:
 
 def _walk_up_for_run_agent(start: Path) -> Path | None:
     return _startup._walk_up_for_run_agent(start)
-    """Walk up the parents of ``start`` and return the first dir with run_agent.py."""
-    for parent in start.parents:
-        if (parent / "run_agent.py").exists():
-            return parent.resolve()
-    return None
-
-
 def _agent_dir_from_hermes_cli() -> Path | None:
     return _startup._agent_dir_from_hermes_cli()
-    """Resolve the agent install root by inspecting the `hermes` CLI launcher.
-
-    The Hermes Agent installer drops a `hermes` launcher in the user's PATH.
-    It comes in two shapes depending on installer version:
-
-    1. A Python console-script whose shebang points at the agent's venv::
-
-           #!/path/to/hermes-agent/venv/bin/python3
-
-    2. A small POSIX shell wrapper that ``exec``s the real venv entrypoint
-       (the current installer shape — clears PYTHONPATH/PYTHONHOME first)::
-
-           #!/usr/bin/env bash
-           exec "/path/to/hermes-agent/venv/bin/hermes" "$@"
-
-    In both cases an absolute path inside the launcher points into the agent's
-    venv. Walking up its parents until we find a directory containing
-    `run_agent.py` recovers the install root regardless of where the agent
-    lives — e.g. the root-on-Linux FHS layout (`/usr/local/lib/hermes-agent`)
-    or a custom clone (`~/Projects/GitHub/hermes-agent`) — neither of which the
-    hard-coded candidate list in :func:`discover_agent_dir` can know about.
-
-    Last-resort only: this is invoked after every explicit candidate
-    (`HERMES_WEBUI_AGENT_DIR`, `$HERMES_HOME/hermes-agent`, etc.) has missed.
-    A stale clone in a known location still wins over the live `hermes` CLI
-    — that's intentional, since the candidate list is treated as
-    authoritative when present, and matches existing behavior.
-    """
-    hermes_path = shutil.which("hermes")
-    if not hermes_path:
-        return None
-    try:
-        # The launcher is tiny; read a bounded prefix so we never slurp a huge
-        # file if `hermes` resolves to something unexpected.
-        with open(hermes_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = [f.readline() for _ in range(20)]
-    except OSError:
-        return None
-    if not lines or not lines[0].startswith("#!"):
-        return None
-
-    # Collect every absolute path the launcher references — the shebang
-    # interpreter (Python-console-script shape) plus any quoted path in an
-    # `exec`/wrapper line (shell-wrapper shape). A `#!/usr/bin/env bash`
-    # shebang yields a useless `/usr/bin/env`, so the wrapper's exec target is
-    # what actually points at the agent venv.
-    candidate_paths: list[Path] = []
-
-    shebang_field = lines[0][2:].strip().split(None, 1)
-    if shebang_field:
-        interp = Path(shebang_field[0])
-        # Skip env-style indirection (`/usr/bin/env bash`) — env itself is not
-        # in the agent tree; the real target is the wrapped exec line below.
-        if interp.is_absolute() and interp.name != "env":
-            candidate_paths.append(interp)
-
-    for line in lines[1:]:
-        for match in re.findall(r"""['"](/[^'"]+)['"]""", line):
-            candidate_paths.append(Path(match))
-
-    for candidate in candidate_paths:
-        if not candidate.is_absolute():
-            continue
-        found = _walk_up_for_run_agent(candidate)
-        if found:
-            return found
-    return None
-
-
 def _agent_dir_from_python(python_exe: str) -> Path | None:
     return _startup._agent_dir_from_python(python_exe)
-    script = (
-        'import importlib.util\n'
-        'spec = importlib.util.find_spec("run_agent")\n'
-        'print(spec.origin if spec else "")\n'
-    )
-    try:
-        check = subprocess.run(
-            [python_exe, "-c", script],
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
-    if check.returncode != 0:
-        return None
-    lines = check.stdout.splitlines()
-    if not lines:
-        return None
-    origin = Path(lines[0].strip())
-    if not origin.is_absolute() or origin.name != "run_agent.py" or not origin.is_file():
-        return None
-    return origin.parent.resolve()
-
-
 def discover_agent_dir() -> Path | None:
     return _startup.discover_agent_dir(
         repo_root=REPO_ROOT,
@@ -221,32 +121,6 @@ def discover_agent_dir() -> Path | None:
         launcher_finder=_agent_dir_from_hermes_cli,
         python_finder=_agent_dir_from_python,
     )
-    # Legacy implementation retained below only as a compatibility reference.
-    home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
-    candidates = [
-        os.getenv("HERMES_WEBUI_AGENT_DIR", ""),
-        str(home / "hermes-agent"),
-        str(REPO_ROOT.parent / "hermes-agent"),
-        str(Path.home() / ".hermes" / "hermes-agent"),
-        str(Path.home() / "hermes-agent"),
-        # Root-on-Linux FHS layout: the installer puts agent code under
-        # /usr/local/lib and links the CLI into /usr/local/bin (matches
-        # Claude Code / Codex). HERMES_HOME stays at /root/.hermes, so the
-        # `home / "hermes-agent"` candidate above does NOT cover this case.
-        "/usr/local/lib/hermes-agent",
-    ]
-    for raw in candidates:
-        if not raw:
-            continue
-        candidate = Path(raw).expanduser().resolve()
-        if candidate.exists() and (candidate / "run_agent.py").exists():
-            return candidate
-    agent_dir = _agent_dir_from_hermes_cli()
-    if agent_dir:
-        return agent_dir
-    return _agent_dir_from_python(discover_launcher_python(None))
-
-
 def discover_launcher_python(agent_dir: Path | None) -> str:
     env_python = os.getenv("HERMES_WEBUI_PYTHON")
     if env_python:

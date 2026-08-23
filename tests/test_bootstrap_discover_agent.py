@@ -220,7 +220,12 @@ def test_discovers_installed_agent_dir_from_configured_python(monkeypatch, tmp_p
     assert argv[:2] == [python_exe, "-c"]
     assert 'find_spec("run_agent")' in argv[2]
     assert "import run_agent" not in argv[2]
-    assert kwargs == {"capture_output": True, "text": True}
+    assert kwargs == {
+        "capture_output": True,
+        "text": True,
+        "timeout": 30,
+        "creationflags": getattr(bootstrap.subprocess, "CREATE_NO_WINDOW", 0),
+    }
 
 
 def test_python_probe_returns_none_when_run_agent_spec_is_missing(monkeypatch, tmp_path):

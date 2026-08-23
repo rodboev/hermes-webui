@@ -61,9 +61,17 @@ def _agent_dir_from_python(python_exe: str) -> Path | None:
     )
     try:
         check = subprocess.run(
-            [python_exe, "-c", script], capture_output=True, text=True
+            [python_exe, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if sys.platform == "win32"
+                else 0
+            ),
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if check.returncode != 0:
         return None
@@ -93,6 +101,7 @@ def discover_agent_dir(
     *,
     repo_root: Path | None = None,
     hermes_home: Path | None = None,
+    default_hermes_home: Path | None = None,
     user_home: Path | None = None,
     python_exe: str | None = None,
     launcher_finder=_agent_dir_from_hermes_cli,
@@ -101,16 +110,22 @@ def discover_agent_dir(
     """Observe the first valid Agent identity without authorizing mutation."""
     repo_root = (repo_root or Path.cwd()).expanduser()
     user_home = (user_home or Path.home()).expanduser()
-    hermes_home = (
-        hermes_home
-        or Path(os.getenv("HERMES_HOME", str(user_home / ".hermes"))).expanduser()
-    )
+    hermes_home = Path(
+        hermes_home or os.getenv("HERMES_HOME", str(user_home / ".hermes"))
+    ).expanduser()
+    if default_hermes_home is None:
+        if os.name == "nt" and os.getenv("LOCALAPPDATA"):
+            default_hermes_home = Path(os.environ["LOCALAPPDATA"])
+        else:
+            default_hermes_home = user_home / ".hermes"
+    default_hermes_home = Path(default_hermes_home).expanduser()
     explicit = os.getenv("HERMES_WEBUI_AGENT_DIR", "").strip()
     candidates = [
         Path(explicit).expanduser() if explicit else None,
         hermes_home / "hermes-agent",
         repo_root.parent / "hermes-agent",
         repo_root.parent if _looks_like_agent_source_root(repo_root.parent) else None,
+        default_hermes_home / "hermes-agent",
         user_home / ".hermes" / "hermes-agent",
         user_home / "hermes-agent",
         Path(os.getenv("XDG_DATA_HOME", str(user_home / ".local" / "share"))).expanduser()
@@ -124,7 +139,9 @@ def discover_agent_dir(
     if explicit and valid and _looks_like_agent_source_root(valid[0]):
         return valid[0].resolve()
     for marker in ("run_agent.py", "pip"):
-        for candidate in valid[1:]:
+        for index, candidate in enumerate(candidates):
+            if candidate is None or (explicit and index == 0):
+                continue
             if marker == "run_agent.py" and (candidate / marker).exists():
                 return candidate.resolve()
             if marker == "pip" and _looks_like_pip_style_agent_source_root(candidate):
