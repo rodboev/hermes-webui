@@ -214,16 +214,69 @@ def test_owner_connection_collision_still_fails_closed():
 def test_reported_ollama_tagged_model_routes_with_owner(monkeypatch):
     """The reporter's tagged Ollama model stays whole and keeps its owner."""
     monkeypatch.setattr(config, "cfg", OLLAMA_CONFIG)
-    resolved = config.resolve_owner_model_state(
+    resolved = routes._resolve_compatible_session_model_state(
         "@custom:hermes-reasoner:latest",
-        stored_provider="custom",
-        config_obj=OLLAMA_CONFIG,
+        "custom",
+        profile_config=OLLAMA_CONFIG,
     )
-    assert (resolved.outbound_model, resolved.provider, resolved.base_url) == (
-        "hermes-reasoner:latest",
+    assert resolved == (
+        "@custom:hermes-reasoner:latest",
         "ollama",
-        "http://ollama-owner:11434/v1",
+        False,
     )
+
+
+def test_owner_compatibility_preserves_moa_fast_path(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "get_available_models",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("MoA compatibility must not build the catalog")
+        ),
+    )
+    assert routes._resolve_compatible_session_model_state(
+        "@moa:gpt-5.5",
+        "moa",
+        profile_config=OLLAMA_CONFIG,
+    ) == ("gpt-5.5", "moa", True)
+
+
+def test_session_lineage_owner_resolution_matrix(monkeypatch):
+    monkeypatch.setattr(profiles, "resolve_profile_config_context", lambda _name: ("owner", OLLAMA_CONFIG))
+    monkeypatch.setattr(profiles, "get_hermes_home_for_profile", lambda _name: "/owner")
+    monkeypatch.setattr(profiles, "get_profile_runtime_env", lambda _home: {})
+    sessions = [
+        SimpleNamespace(profile=None, model="gpt-5.5", model_provider="openai-codex"),
+        SimpleNamespace(profile="owner", model="hermes-reasoner:latest", model_provider="ollama"),
+    ]
+    states = [routes._resolve_persisted_session_owner_state(s)[0] for s in sessions]
+    assert (states[0].model, states[0].provider) == ("gpt-5.5", "openai-codex")
+    assert (states[1].model, states[1].provider) == ("hermes-reasoner:latest", "ollama")
+
+
+def test_persisted_session_runtime_consumers_route_through_config_authority(monkeypatch):
+    owner = {**CUSTOM_OWNER_CONFIG, "_env": {"BACKUP_KEY": "owner-secret"}}
+    monkeypatch.setattr(profiles, "resolve_profile_config_context", lambda _name: ("owner", owner))
+    monkeypatch.setattr(profiles, "get_hermes_home_for_profile", lambda _name: "/owner")
+    monkeypatch.setattr(profiles, "get_profile_runtime_env", lambda _home: {"BACKUP_KEY": "owner-secret"})
+    monkeypatch.setattr(config, "get_config_for_profile_home", lambda _home: owner)
+    session = SimpleNamespace(profile="owner", model="org/model", model_provider="custom:backup")
+    route_state, route_cfg = routes._resolve_persisted_session_owner_state(session)
+    stream_state = streaming._resolve_stream_owner_model_state(
+        "owner", "/owner", session.model, session.model_provider
+    )
+    assert route_cfg is owner
+    assert route_state.api_key == stream_state.api_key == "owner-secret"
+    assert route_state.base_url == stream_state.base_url == "https://backup.example/v1"
+
+
+def test_session_gateway_and_clone_consumers_route_through_config_authority(monkeypatch):
+    owner = {
+        "model": {"provider": "openai-codex", "default": "gpt-5.5"},
+        "providers": {"openai-codex": {"models": ["gpt-5.5"]}},
+    }
+    profiles._validate_profile_model_selection("gpt-5.5", "openai-codex", config_obj=owner)
+    assert gateway_chat._gateway_model_field("@openai-codex:gpt-5.5", owner) == "gpt-5.5"
 
 
 def test_issue_model_is_one_built_in_custom_value_in_owning_registry():
@@ -270,7 +323,11 @@ def test_profile_validation_uses_live_catalog_with_source_config_for_parsing(mon
             "extra_models": [],
         }]
     }
-    monkeypatch.setattr(profiles, "_get_available_models_for_profile_validation", lambda: catalog)
+    monkeypatch.setattr(
+        profiles,
+        "_get_available_models_for_profile_validation",
+        lambda _config_obj=None: catalog,
+    )
     profiles._validate_profile_model_selection(
         "gpt-5.5",
         "openai-codex",

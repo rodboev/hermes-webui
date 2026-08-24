@@ -627,8 +627,6 @@ def _run_gateway_runs_api_streaming(
             **body_extras,
             "session_id": session_id,
         }
-        if active_provider:
-            run_body["provider"] = active_provider
         if instructions_parts:
             run_body["instructions"] = "\n\n".join(part for part in instructions_parts if part)
         if conversation_history:

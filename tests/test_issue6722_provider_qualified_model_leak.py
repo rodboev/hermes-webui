@@ -40,30 +40,27 @@ OWNER = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _configured_custom_provider_registry():
+@pytest.fixture
+def configured_named_custom_provider(monkeypatch):
     import api.config as cfg_mod
 
-    missing = object()
-    old_custom = cfg_mod.cfg.get("custom_providers", missing)
-    old_model = cfg_mod.cfg.get("model", missing)
+    old_custom = cfg_mod.cfg.get("custom_providers")
+    old_model = cfg_mod.cfg.get("model")
     cfg_mod.cfg["custom_providers"] = [{"name": "backup"}]
     cfg_mod.cfg["model"] = {
         "provider": "ollama",
         "default": "hermes-reasoner:latest",
         "base_url": "http://127.0.0.1:11434/v1",
     }
-    try:
-        yield
-    finally:
-        if old_custom is missing:
-            cfg_mod.cfg.pop("custom_providers", None)
-        else:
-            cfg_mod.cfg["custom_providers"] = old_custom
-        if old_model is missing:
-            cfg_mod.cfg.pop("model", None)
-        else:
-            cfg_mod.cfg["model"] = old_model
+    yield
+    if old_custom is None:
+        cfg_mod.cfg.pop("custom_providers", None)
+    else:
+        cfg_mod.cfg["custom_providers"] = old_custom
+    if old_model is None:
+        cfg_mod.cfg.pop("model", None)
+    else:
+        cfg_mod.cfg["model"] = old_model
 
 
 # (qualified value, expected bare model, expected provider)
@@ -297,20 +294,20 @@ class TestGatewayRequestBodiesCarryBareModel:
         assert payload["model"] == "deepseek-v4-flash"
         assert not payload["model"].startswith("@")
 
-    def test_legacy_body_keeps_named_custom_provider_model_intact(self, tmp_path, monkeypatch):
+    def test_legacy_body_keeps_named_custom_provider_model_intact(self, tmp_path, monkeypatch, configured_named_custom_provider):
         """The multi-segment case a positional split would truncate."""
         payload = _run_legacy_gateway_chat(
             tmp_path, monkeypatch, "@custom:backup:model-a:free"
         )
         assert payload["model"] == "model-a:free"
 
-    def test_legacy_body_keeps_host_port_custom_provider_model_intact(self, tmp_path, monkeypatch):
+    def test_legacy_body_keeps_host_port_custom_provider_model_intact(self, tmp_path, monkeypatch, configured_named_custom_provider):
         payload = _run_legacy_gateway_chat(
             tmp_path, monkeypatch, "@custom:192.168.1.5:11434:llama4"
         )
         assert payload["model"] == "llama4"
 
-    def test_runs_api_body_has_bare_model(self, monkeypatch):
+    def test_runs_api_body_has_bare_model(self, monkeypatch, configured_named_custom_provider):
         """The runs API builder is the second gateway request site."""
         captured = {}
 
@@ -343,7 +340,7 @@ class TestGatewayRequestBodiesCarryBareModel:
         assert payload["model"] == "model-a:free"
         assert not payload["model"].startswith("@")
 
-    def test_runs_api_body_forwards_canonical_provider_pair(self, monkeypatch):
+    def test_runs_api_body_uses_canonical_model_without_unsupported_provider_field(self, monkeypatch):
         captured = {}
 
         def fake_urlopen(req, timeout=0):
@@ -373,4 +370,4 @@ class TestGatewayRequestBodiesCarryBareModel:
 
         payload = json.loads(captured["body"])
         assert payload["model"] == "org/model"
-        assert payload["provider"] == "custom:backup"
+        assert "provider" not in payload

@@ -7099,11 +7099,16 @@ def _resolve_persisted_session_owner_state(
     provider: str | None = None,
 ):
     """Resolve a persisted session through its owner snapshot and env."""
-    from api.config import resolve_owner_model_state
+    from api.config import resolve_owner_model_state, resolve_owner_runtime_state
 
+    if model is None:
+        model = getattr(session, "model", None)
+    if provider is None:
+        provider = getattr(session, "model_provider", None)
     profile = getattr(session, "profile", None)
     if not profile:
-        return resolve_owner_model_state(model, provider, config_obj=None), None
+        state = resolve_owner_model_state(model, provider, config_obj=None)
+        return resolve_owner_runtime_state(state, config_obj=None), None
     from api.profiles import (
         get_hermes_home_for_profile,
         get_profile_runtime_env,
@@ -7112,15 +7117,17 @@ def _resolve_persisted_session_owner_state(
 
     _owner, owner_cfg = resolve_profile_config_context(profile)
     owner_env = get_profile_runtime_env(get_hermes_home_for_profile(profile))
-    return (
-        resolve_owner_model_state(
-            model,
-            provider,
-            config_obj=owner_cfg,
-            owner_env=owner_env,
-        ),
-        owner_cfg,
+    state = resolve_owner_model_state(
+        model,
+        provider,
+        config_obj=owner_cfg,
+        owner_env=owner_env,
     )
+    return resolve_owner_runtime_state(
+        state,
+        config_obj=owner_cfg,
+        owner_env=owner_env,
+    ), owner_cfg
 
 
 # perf(webui/session-load-latency) tier2a: process-wide cache for parsed
@@ -7388,10 +7395,13 @@ def _resolve_compatible_session_model_state(
         explicitly_picked=explicit_model_pick,
     )
     if isinstance(profile_config, dict):
-        return owner_state.model, owner_state.provider, owner_state.repaired
-
-    model = str(model_id or "").strip()
-    requested_provider = _clean_session_model_provider(model_provider, profile_config)
+        model = owner_state.outbound_model if owner_state.repaired else owner_state.model
+        requested_provider = owner_state.provider
+        owner_repaired = owner_state.repaired
+    else:
+        model = str(model_id or "").strip()
+        requested_provider = _clean_session_model_provider(model_provider, profile_config)
+        owner_repaired = False
     if model and requested_provider == "moa":
         return _moa_fast_path_model_state(model)
     if model and requested_provider and model.startswith(f"@{requested_provider}:"):
@@ -17493,6 +17503,7 @@ def handle_post(handler, parsed) -> bool:
                 from api.config import (
                     get_effective_default_model,
                     resolve_owner_model_state,
+                    resolve_owner_runtime_state,
                 )
 
                 messages = [
@@ -17509,27 +17520,15 @@ def handle_post(handler, parsed) -> bool:
                     config_obj=_owner_cfg,
                     owner_env=_owner_env,
                 )
+                _main_state = resolve_owner_runtime_state(
+                    _main_state,
+                    config_obj=_owner_cfg,
+                    owner_env=_owner_env,
+                )
                 _main_model = _main_state.outbound_model
                 _main_provider = _main_state.provider
                 _main_base_url = _main_state.base_url
                 _main_api_key = _main_state.api_key
-                try:
-                    if _owner_cfg is not None:
-                        raise LookupError("owner-scoped runtime fallback disabled")
-                    from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
-                    from hermes_cli.runtime_provider import resolve_runtime_provider
-
-                    _rt = resolve_runtime_provider_with_anthropic_env_lock(
-                        resolve_runtime_provider,
-                        requested=_main_provider,
-                    )
-                    _main_api_key = _rt.get("api_key")
-                    if not _main_provider:
-                        _main_provider = _rt.get("provider")
-                    if not _main_base_url:
-                        _main_base_url = _rt.get("base_url")
-                except Exception as _e:
-                    logger.debug("update summary runtime provider resolution failed: %s", _e)
                 main_runtime = {
                     "provider": _main_provider,
                     "model": _main_model,
@@ -24596,29 +24595,7 @@ def _handle_chat_sync(handler, body):
             _model = _owner_state.outbound_model
             _provider = _owner_state.provider
             _base_url = _owner_state.base_url
-            # Resolve API key via Hermes runtime provider (matches gateway behaviour)
             _api_key = _owner_state.api_key
-            try:
-                if _owner_cfg is not None:
-                    raise LookupError("owner-scoped runtime fallback disabled")
-                from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
-                from hermes_cli.runtime_provider import resolve_runtime_provider
-
-                _rt = resolve_runtime_provider_with_anthropic_env_lock(
-                    resolve_runtime_provider,
-                    requested=_provider,
-                )
-                _api_key = _rt.get("api_key")
-                # Also use runtime provider/base_url if the webui config didn't resolve them
-                if not _provider:
-                    _provider = _rt.get("provider")
-                if not _base_url:
-                    _base_url = _rt.get("base_url")
-            except Exception as _e:
-                print(
-                    f"[webui] WARNING: resolve_runtime_provider failed: {_e}",
-                    flush=True,
-                )
             agent = AIAgent(
                 model=_model,
                 provider=_provider,
@@ -25182,23 +25159,6 @@ def _llm_git_commit_message(system_prompt: str, user_prompt: str, session=None) 
         _main_provider = _main_state.provider
         _main_base_url = _main_state.base_url
         _main_api_key = _main_state.api_key
-        try:
-            if _owner_cfg is not None:
-                raise LookupError("owner-scoped runtime fallback disabled")
-            from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
-            from hermes_cli.runtime_provider import resolve_runtime_provider
-
-            _rt = resolve_runtime_provider_with_anthropic_env_lock(
-                resolve_runtime_provider,
-                requested=_main_provider,
-            )
-            _main_api_key = _rt.get("api_key")
-            if not _main_provider:
-                _main_provider = _rt.get("provider")
-            if not _main_base_url:
-                _main_base_url = _rt.get("base_url")
-        except Exception as _e:
-            logger.debug("git commit message runtime provider resolution failed: %s", _e)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -27214,8 +27174,6 @@ def _handle_session_compress(handler, body):
 
         ensure_agent_runtime_current()
         import api.config as _cfg
-        from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
-        import hermes_cli.runtime_provider as _runtime_provider
         AIAgent = require_ai_agent_class()
 
         _owner_state, _owner_cfg = _resolve_persisted_session_owner_state(
@@ -27228,21 +27186,6 @@ def _handle_session_compress(handler, body):
         resolved_base_url = _owner_state.base_url
 
         resolved_api_key = _owner_state.api_key
-        try:
-            if _owner_cfg is not None:
-                raise LookupError("owner-scoped runtime fallback disabled")
-            _rt = resolve_runtime_provider_with_anthropic_env_lock(
-                _runtime_provider.resolve_runtime_provider,
-                requested=resolved_provider,
-            )
-            resolved_api_key = _rt.get("api_key")
-            if not resolved_provider:
-                resolved_provider = _rt.get("provider")
-            if not resolved_base_url:
-                resolved_base_url = _rt.get("base_url")
-        except Exception as _e:
-            logger.warning("resolve_runtime_provider failed for compression: %s", _e)
-
 
         if not resolved_api_key:
             return bad(handler, "No provider configured -- cannot compress.")
@@ -27882,8 +27825,6 @@ def _handle_handoff_summary(handler, body):
     try:
         ensure_agent_runtime_current()
         import api.config as _cfg
-        from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
-        import hermes_cli.runtime_provider as _runtime_provider
         AIAgent = require_ai_agent_class()
 
         # Try to resolve model from an existing session, fall back to default.
@@ -27918,21 +27859,6 @@ def _handle_handoff_summary(handler, body):
         resolved_base_url = _owner_state.base_url
 
         resolved_api_key = _owner_state.api_key
-        try:
-            if _owner_cfg is not None:
-                raise LookupError("owner-scoped runtime fallback disabled")
-            _rt = resolve_runtime_provider_with_anthropic_env_lock(
-                _runtime_provider.resolve_runtime_provider,
-                requested=resolved_provider,
-            )
-            resolved_api_key = _rt.get("api_key")
-            if not resolved_provider:
-                resolved_provider = _rt.get("provider")
-            if not resolved_base_url:
-                resolved_base_url = _rt.get("base_url")
-        except Exception as _e:
-            logger.warning("resolve_runtime_provider failed for handoff summary: %s", _e)
-
         if not resolved_api_key:
             summary_text = _fallback_handoff_summary(msgs)
             try:

@@ -27,7 +27,7 @@ import urllib.error
 import urllib.request
 import uuid
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -3379,6 +3379,59 @@ class OwnerModelState:
     base_url: str | None
     api_key: str | None
     repaired: bool = False
+    runtime_fallback_allowed: bool = True
+
+
+def _owner_runtime_fallback_allowed(
+    config_obj: dict | None,
+    provider: str | None,
+) -> bool:
+    """Allow runtime credential lookup only for ambient or real owner lanes."""
+    if config_obj is None:
+        return True
+    return bool(provider and not str(provider).startswith("custom:"))
+
+
+def resolve_owner_runtime_state(
+    state: OwnerModelState,
+    *,
+    config_obj: dict | None = None,
+    owner_env: dict[str, str] | None = None,
+) -> OwnerModelState:
+    """Fill runtime credentials under the owner policy, never ambiently."""
+    if not state.runtime_fallback_allowed:
+        return state
+    try:
+        from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+
+        previous_env = getattr(_thread_ctx, "env", None)
+        previous_block = getattr(_thread_ctx, "block_process_env_fallback", False)
+        if owner_env is not None:
+            _thread_ctx.env = dict(owner_env)
+            _thread_ctx.block_process_env_fallback = True
+        try:
+            runtime = resolve_runtime_provider_with_anthropic_env_lock(
+                resolve_runtime_provider,
+                requested=state.provider,
+                target_model=state.outbound_model,
+            )
+        finally:
+            if owner_env is not None:
+                if previous_env is None:
+                    delattr(_thread_ctx, "env")
+                else:
+                    _thread_ctx.env = previous_env
+                _thread_ctx.block_process_env_fallback = previous_block
+        return replace(
+            state,
+            provider=state.provider or runtime.get("provider"),
+            base_url=state.base_url or runtime.get("base_url"),
+            api_key=runtime.get("api_key") or state.api_key,
+        )
+    except Exception:
+        logger.debug("owner runtime credential resolution failed", exc_info=True)
+        return state
 
 
 def resolve_owner_model_state(
@@ -3440,6 +3493,9 @@ def resolve_owner_model_state(
                 base_url=resolved_base,
                 api_key=key if resolved_provider.startswith("custom:") else None,
                 repaired=False,
+                runtime_fallback_allowed=_owner_runtime_fallback_allowed(
+                    config_obj, resolved_provider
+                ),
             )
 
     if not repaired and requested and stored_provider:
@@ -3452,7 +3508,15 @@ def resolve_owner_model_state(
                     stored, owner_cfg, env=owner_env
                 )
                 base = base or entry_base
-            return OwnerModelState(requested, requested, stored, base, key, False)
+            return OwnerModelState(
+                requested,
+                requested,
+                stored,
+                base,
+                key,
+                False,
+                _owner_runtime_fallback_allowed(config_obj, stored),
+            )
 
     resolved_model, resolved_provider, resolved_base = resolve_model_provider(
         requested,
@@ -3478,6 +3542,9 @@ def resolve_owner_model_state(
         base_url=str(resolved_base).strip() if resolved_base else None,
         api_key=key,
         repaired=repaired,
+        runtime_fallback_allowed=_owner_runtime_fallback_allowed(
+            config_obj, str(resolved_provider) if resolved_provider else None
+        ),
     )
 
 

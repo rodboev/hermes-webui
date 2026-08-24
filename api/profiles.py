@@ -2518,12 +2518,7 @@ def _validate_profile_model_selection(
     if available_models is not None:
         catalog = available_models
     else:
-        try:
-            catalog = _get_available_models_for_profile_validation(config_obj)
-        except TypeError:
-            # Preserve compatibility with older test and plugin seams that
-            # provide the catalog helper as a zero-argument callable.
-            catalog = _get_available_models_for_profile_validation()
+        catalog = _get_available_models_for_profile_validation(config_obj)
     if _profile_model_selection_exists(catalog, default_model, model_provider, config_obj):
         return
     if default_model and model_provider:

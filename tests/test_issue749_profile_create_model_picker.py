@@ -206,7 +206,7 @@ def test_profile_create_rejects_unknown_model_before_creating_profile(monkeypatc
     monkeypatch.setattr(
         profiles,
         "_get_available_models_for_profile_validation",
-        lambda: {
+        lambda _config_obj=None: {
             "groups": [
                 {
                     "provider": "OpenAI Codex",

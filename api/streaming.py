@@ -8675,11 +8675,17 @@ def _resolve_stream_owner_model_state(
 
     owner_cfg = get_config_for_profile_home(profile_home) if profile_name else None
     owner_env = get_profile_runtime_env(profile_home) if owner_cfg is not None else None
-    return resolve_owner_model_state(
+    state = resolve_owner_model_state(
         model,
         provider,
         config_obj=owner_cfg,
         explicitly_picked=explicitly_picked,
+        owner_env=owner_env,
+    )
+    from api.config import resolve_owner_runtime_state
+    return resolve_owner_runtime_state(
+        state,
+        config_obj=owner_cfg,
         owner_env=owner_env,
     )
 
@@ -10045,32 +10051,13 @@ def _run_agent_streaming(
                     provider_context,
                     explicitly_picked=_explicitly_picked,
                 )
-                _owner_cfg = {"owner": _resolved_profile_name} if _resolved_profile_name else None
+                _owner_scoped = bool(_resolved_profile_name)
                 resolved_model = _owner_state.outbound_model
                 resolved_provider = _owner_state.provider
                 configured_base_url = _owner_state.base_url
 
-                # Resolve API key via Hermes runtime provider (matches gateway behaviour).
-                # Pass the resolved provider so non-default providers get their own credentials.
                 resolved_api_key = _owner_state.api_key
-                try:
-                    if _owner_cfg is not None:
-                        raise LookupError("owner-scoped runtime fallback disabled")
-                    from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
-                    from hermes_cli.runtime_provider import resolve_runtime_provider
-                    _rt = resolve_runtime_provider_with_anthropic_env_lock(
-                        resolve_runtime_provider,
-                        requested=resolved_provider,
-                        target_model=resolved_model,
-                    )
-                    resolved_api_key = _rt.get("api_key")
-                    if not resolved_provider:
-                        resolved_provider = _rt.get("provider")
-                    resolved_base_url = _runtime_preferred_base_url(
-                        _rt, resolved_provider, configured_base_url
-                    )
-                except Exception as _e:
-                    print(f"[webui] WARNING: resolve_runtime_provider failed: {_e}", flush=True)
+                resolved_base_url = configured_base_url
 
                 # Named custom providers (custom:slug) may not be resolvable by
                 # hermes_cli.runtime_provider directly. Fall back to config.yaml
@@ -10079,7 +10066,7 @@ def _run_agent_streaming(
                 # still select the exact custom_providers entry after the rewrite
                 # to "custom" below.
                 _session_requested_provider = resolved_provider
-                if _owner_cfg is None:
+                if not _owner_scoped:
                     resolved_provider, resolved_api_key, resolved_base_url = _resolve_custom_provider_runtime_overrides(
                         resolved_provider, resolved_api_key, resolved_base_url,
                         profile_name=_resolved_profile_name,
