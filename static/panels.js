@@ -12943,9 +12943,17 @@ async function disableAuth(){
 
 let _cronPollSince=Date.now()/1000;  // track from page load
 let _cronPollTimer=null;
+let _cronPollInFlight=false;
 let _cronUnreadCount=0;
 let _cronPollGeneration=0;
 const _cronNewJobIds=new Set();  // track which job IDs had new completions (unread)
+
+function _cronBrowserNotificationsDeliverable(){
+  return typeof sendBrowserNotification==='function' &&
+    typeof Notification!=='undefined' &&
+    window._notificationsEnabled===true &&
+    Notification.permission==='granted';
+}
 
 function _resetCronUnreadForProfileSwitch(){
   _cronPollGeneration++;
@@ -12969,7 +12977,11 @@ window.addEventListener('hermes:cron_created', () => {
 function startCronPolling(){
   if(_cronPollTimer) return;
   _cronPollTimer=setInterval(async()=>{
-    if(document.hidden) return;  // don't poll when tab is in background
+    const hidden=document.hidden;
+    if(hidden&&!_cronBrowserNotificationsDeliverable()) return;
+    if(typeof _cronPollInFlight==='undefined') _cronPollInFlight=false;
+    if(_cronPollInFlight) return;
+    _cronPollInFlight=true;
     try{
       const pollGeneration=_cronPollGeneration;
       const data=await api(`/api/crons/recent?since=${_cronPollSince}`);
@@ -12977,7 +12989,9 @@ function startCronPolling(){
       if(data.completions&&data.completions.length>0){
         for(const c of data.completions){
           if(c.toast_notifications !== false){
-            showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
+            const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
+            if(hidden) sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id});
+            else showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
           }
           _cronPollSince=Math.max(_cronPollSince,c.completed_at);
           if(c.job_id) _cronNewJobIds.add(String(c.job_id));
@@ -12992,7 +13006,9 @@ function startCronPolling(){
         // _cronUnreadCount is derived from _cronNewJobIds.size in updateCronBadge.
         updateCronBadge();
       }
-    }catch(e){}
+    }catch(e){}finally{
+      _cronPollInFlight=false;
+    }
   },30000);
 }
 
