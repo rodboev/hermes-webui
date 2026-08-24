@@ -12943,7 +12943,6 @@ async function disableAuth(){
 
 let _cronPollSince=Date.now()/1000;  // track from page load
 let _cronPollTimer=null;
-let _cronPollInFlight=false;
 let _cronUnreadCount=0;
 let _cronPollGeneration=0;
 const _cronNewJobIds=new Set();  // track which job IDs had new completions (unread)
@@ -12979,19 +12978,22 @@ function startCronPolling(){
   _cronPollTimer=setInterval(async()=>{
     const hidden=document.hidden;
     if(hidden&&!_cronBrowserNotificationsDeliverable()) return;
-    if(typeof _cronPollInFlight==='undefined') _cronPollInFlight=false;
-    if(_cronPollInFlight) return;
-    _cronPollInFlight=true;
+    if(startCronPolling._inFlight) return;
+    startCronPolling._inFlight=true;
     try{
       const pollGeneration=_cronPollGeneration;
       const data=await api(`/api/crons/recent?since=${_cronPollSince}`);
       if(pollGeneration!==_cronPollGeneration) return;
+      const completionHidden=document.hidden;
+      if(completionHidden&&!_cronBrowserNotificationsDeliverable()) return;
       if(data.completions&&data.completions.length>0){
         for(const c of data.completions){
           if(c.toast_notifications !== false){
-            if(hidden){
+            if(completionHidden){
               const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
-              sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id});
+              if(c.session_id){
+                sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id});
+              }
             }
             else showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
           }
@@ -13009,7 +13011,7 @@ function startCronPolling(){
         updateCronBadge();
       }
     }catch(e){}finally{
-      _cronPollInFlight=false;
+      startCronPolling._inFlight=false;
     }
   },30000);
 }

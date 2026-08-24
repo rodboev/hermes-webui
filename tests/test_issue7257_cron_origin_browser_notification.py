@@ -44,7 +44,6 @@ const pollerSource = {json.dumps(poller)};
 async function runCase() {{
   let _cronPollSince = 0;
   let _cronPollTimer = null;
-  let _cronPollInFlight = false;
   let _cronPollGeneration = 0;
   const _cronNewJobIds = new Set();
   const toasts = [];
@@ -59,25 +58,47 @@ async function runCase() {{
       style: {{}},
     }}),
   }};
-  const window = {{_notificationsEnabled: caseName !== 'unavailable'}};
-  globalThis.Notification = {{permission: caseName === 'unavailable' ? 'default' : 'granted'}};
+  const unavailableCases = new Set(['unavailable', 'setting-off', 'permission-denied', 'permission-default', 'missing-api']);
+  const window = {{_notificationsEnabled: !['unavailable', 'setting-off'].includes(caseName)}};
+  if(caseName !== 'missing-api') {{
+    const permission = caseName === 'permission-denied' ? 'denied' : caseName === 'permission-default' ? 'default' : 'granted';
+    globalThis.Notification = {{permission}};
+  }} else delete globalThis.Notification;
   const t = (key, ...args) => key + ':' + args.join('|');
   const showToast = (message) => toasts.push(message);
   const sendBrowserNotification = (title, body, options) => notifications.push({{title, body, options}});
   const updateCronBadge = () => {{}};
   const _markSessionCompletionUnreadIfBackground = () => {{}};
-  const completions = [{{name: 'Nightly', status: 'success', completed_at: 42, job_id: 'job-1', session_id: 'sid-1', message_count: 7, toast_notifications: caseName !== 'muted'}}];
+  const completions = [{{name: 'Nightly', status: 'success', completed_at: 42, job_id: 'job-1', session_id: caseName === 'no-session' ? '' : 'sid-1', message_count: 7, toast_notifications: caseName !== 'muted'}}];
+  let rejectApi;
   const api = () => {{
     apiCalls += 1;
-    return new Promise(resolve => {{ resolveApi = () => resolve({{completions}}); }});
+    return new Promise((resolve, reject) => {{
+      if(caseName === 'reject' && apiCalls === 1) rejectApi = () => reject(new Error('poll failed'));
+      else resolveApi = () => resolve({{completions}});
+    }});
   }};
   const setInterval = callback => {{ _cronPollTimer = {{callback}}; return _cronPollTimer; }};
   const clearInterval = () => {{}};
   eval(helperSource);
   eval(pollerSource);
   startCronPolling();
-  if (caseName === 'unavailable') {{
+  if (unavailableCases.has(caseName)) {{
     await _cronPollTimer.callback();
+  }} else if (caseName === 'transition') {{
+    const pending = _cronPollTimer.callback();
+    await Promise.resolve();
+    window._notificationsEnabled = false;
+    resolveApi();
+    await pending;
+  }} else if (caseName === 'reject') {{
+    const failed = _cronPollTimer.callback();
+    await Promise.resolve();
+    rejectApi();
+    await failed;
+    const recovered = _cronPollTimer.callback();
+    resolveApi();
+    await recovered;
   }} else if (caseName === 'stale') {{
     const pending = _cronPollTimer.callback();
     await Promise.resolve();
@@ -137,6 +158,31 @@ def test_muted_completion_keeps_unread_without_alert():
 def test_hidden_without_permission_or_setting_preserves_backlog():
     result = _run_node("unavailable")
     assert result == {"apiCalls": 0, "toasts": [], "notifications": [], "since": 0, "ids": []}
+
+
+@pytest.mark.parametrize("case", ["setting-off", "permission-denied", "permission-default", "missing-api"])
+def test_hidden_unavailable_delivery_modes_preserve_backlog(case):
+    result = _run_node(case)
+    assert result == {"apiCalls": 0, "toasts": [], "notifications": [], "since": 0, "ids": []}
+
+
+def test_hidden_transition_to_unavailable_preserves_backlog():
+    result = _run_node("transition")
+    assert result == {"apiCalls": 1, "toasts": [], "notifications": [], "since": 0, "ids": []}
+
+
+def test_rejected_poll_clears_in_flight_guard():
+    result = _run_node("reject")
+    assert result["apiCalls"] == 2
+    assert len(result["notifications"]) == 1
+    assert result["since"] == 42
+
+
+def test_hidden_completion_without_session_id_skips_origin_notification():
+    result = _run_node("no-session")
+    assert result["notifications"] == []
+    assert result["since"] == 42
+    assert result["ids"] == ["job-1"]
 
 
 def test_stale_generation_drops_completion():
