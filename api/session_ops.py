@@ -12,10 +12,12 @@ import uuid
 import copy
 import hashlib
 import math
+import os
 import threading
 from dataclasses import dataclass
 from contextlib import ExitStack, nullcontext
 from bisect import bisect_left
+from pathlib import Path
 from typing import Any
 
 from api.config import LOCK, _get_session_agent_lock
@@ -166,11 +168,25 @@ def _provider_error_session_is_idle(session) -> bool:
     return True
 
 
+def _provider_error_sidecar_is_available(session) -> bool:
+    try:
+        sidecar_path = getattr(session, "path")
+    except AttributeError:
+        return True
+    return bool(
+        not getattr(session, "_loaded_metadata_only", False)
+        and sidecar_path.exists()
+        and isinstance(getattr(session, "messages", None), list)
+    )
+
+
 def _provider_error_lineage_sessions(session) -> list:
     """Resolve the durable sidecar owners for a viewed compression continuation."""
     if getattr(session, "read_only", False) or getattr(session, "is_cli_session", False):
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
     source = _provider_error_session_source(session)
+    if not _provider_error_sidecar_is_available(session):
+        raise ProviderErrorDismissalUnavailable("owner_unavailable", 409)
     if source not in {"webui", "fork"} or getattr(session, "pre_compression_snapshot", False):
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
     if not _provider_error_session_is_idle(session):
@@ -192,6 +208,14 @@ def _provider_error_lineage_sessions(session) -> list:
             raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
         if not getattr(parent, "pre_compression_snapshot", False):
             break
+        if (
+            getattr(parent, "read_only", False)
+            or getattr(parent, "is_cli_session", False)
+            or str(getattr(parent, "profile", None) or "default")
+            != str(getattr(session, "profile", None) or "default")
+            or not _provider_error_sidecar_is_available(parent)
+        ):
+            raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
         parent_source = _provider_error_session_source(parent)
         if parent_source not in {"webui", "fork"}:
             raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
@@ -208,6 +232,9 @@ def _provider_error_lineage_sessions(session) -> list:
 def _provider_error_owner_entries(session, *, projection_cache: bool = False) -> tuple[list[dict], str]:
     owners = _provider_error_lineage_sessions(session)
     cache_key = None
+    cache_requires_signature = projection_cache and any(
+        hasattr(owner, "path") for owner in owners
+    )
     if projection_cache:
         try:
             from api.models import _sidecar_stat_signature
@@ -233,7 +260,9 @@ def _provider_error_owner_entries(session, *, projection_cache: bool = False) ->
                 cached = _PROVIDER_ERROR_PROJECTION_CACHE.get(cache_key)
             if cached is not None:
                 return list(cached[0]), cached[1]
-        except (AttributeError, OSError, TypeError, ValueError):
+        except (AttributeError, OSError, TypeError, ValueError) as exc:
+            if cache_requires_signature:
+                raise ProviderErrorDismissalUnavailable("owner_unavailable", 409) from exc
             cache_key = None
     entries = []
     for owner in owners:
@@ -267,8 +296,12 @@ def _provider_error_owner_entries(session, *, projection_cache: bool = False) ->
         }
     )
     if cache_key is not None:
+        cached_entries = [
+            dict(entry, row=copy.deepcopy(entry["row"]))
+            for entry in entries
+        ]
         with _PROVIDER_ERROR_PROJECTION_CACHE_LOCK:
-            _PROVIDER_ERROR_PROJECTION_CACHE[cache_key] = (list(entries), revision)
+            _PROVIDER_ERROR_PROJECTION_CACHE[cache_key] = (cached_entries, revision)
             while len(_PROVIDER_ERROR_PROJECTION_CACHE) > _PROVIDER_ERROR_PROJECTION_CACHE_MAX:
                 _PROVIDER_ERROR_PROJECTION_CACHE.pop(next(iter(_PROVIDER_ERROR_PROJECTION_CACHE)))
     return entries, revision
@@ -407,6 +440,10 @@ def project_provider_error_dismissal_capabilities(session, projected: dict) -> d
     messages = result.get("messages")
     if not isinstance(messages, list):
         return result
+    for message in messages:
+        if isinstance(message, dict):
+            message.pop("_provider_error_dismiss_ref", None)
+            message.pop("_provider_error_dismissed", None)
     try:
         entries, revision = _provider_error_owner_entries(session, projection_cache=True)
     except ProviderErrorDismissalUnavailable:
@@ -416,8 +453,6 @@ def project_provider_error_dismissal_capabilities(session, projected: dict) -> d
     for message in messages:
         if not isinstance(message, dict):
             continue
-        message.pop("_provider_error_dismiss_ref", None)
-        message.pop("_provider_error_dismissed", None)
         stable_id = _provider_error_stable_id(message)
         digest = _provider_error_reference_digest(message)
         candidates = [
@@ -433,11 +468,8 @@ def project_provider_error_dismissal_capabilities(session, projected: dict) -> d
         if stable_id is None and len(candidates) != 1:
             continue
         if stable_id is not None:
-            owner_ids = {(entry["session_id"], entry["index"]) for entry in candidates}
-            same_owner = {entry["session_id"] for entry in candidates}
-            if len(same_owner) != len(owner_ids):
+            if len(candidates) != 1:
                 continue
-            candidates = [candidates[0]]
         entry = candidates[0]
         used.add((entry["session_id"], entry["index"]))
         source_row = entry["row"]
@@ -459,6 +491,7 @@ def settle_provider_error_session(session, error_message: dict, *, save=True, sn
     in-memory transcript after the sidecar write fails.
     """
     snapshot = copy.deepcopy(session.__dict__) if snapshot is None else copy.deepcopy(snapshot)
+    sidecar_snapshot = _provider_error_sidecar_snapshot(session) if save else None
     try:
         row = copy.deepcopy(error_message)
         if isinstance(row, dict) and not _provider_error_stable_id(row):
@@ -479,6 +512,7 @@ def settle_provider_error_session(session, error_message: dict, *, save=True, sn
             session.save()
         return True
     except Exception:
+        _restore_provider_error_sidecar(sidecar_snapshot)
         restore_regeneration_state(session, snapshot)
         return False
 
@@ -636,6 +670,42 @@ def snapshot_regeneration_state(session):
 def restore_regeneration_state(session, snapshot):
     session.__dict__.clear()
     session.__dict__.update(copy.deepcopy(snapshot))
+
+
+def _provider_error_sidecar_snapshot(session):
+    try:
+        path = Path(session.path)
+    except (AttributeError, TypeError, ValueError, OSError):
+        return None
+    try:
+        return path, path.read_bytes() if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _restore_provider_error_sidecar(snapshot) -> None:
+    if snapshot is None:
+        return
+    path, contents = snapshot
+    tmp = path.with_suffix(
+        f".rollback.tmp.{os.getpid()}.{threading.current_thread().ident}"
+    )
+    try:
+        if contents is None:
+            path.unlink(missing_ok=True)
+            return
+        with open(tmp, "wb") as handle:
+            handle.write(contents)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        logger.debug("Failed to restore provider-error sidecar", exc_info=True)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def regeneration_revision_for(rows, *, session=None, context=None) -> str:

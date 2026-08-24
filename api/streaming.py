@@ -9142,6 +9142,7 @@ def _run_agent_streaming(
     _checkpoint_stop = None
     _ckpt_thread = None
     _agent_lock = None
+    _settlement_failed = False
     try:
         # Register this stream with the global streaming meter and start the 1 Hz
         # metering ticker. Kept INSIDE the outer try so the outer `finally`'s
@@ -11426,11 +11427,7 @@ def _run_agent_streaming(
                             snapshot=_settlement_snapshot,
                         )
                         if not _terminal_session_persisted:
-                            s.active_stream_id = None
-                            s.pending_user_message = None
-                            s.pending_attachments = []
-                            s.pending_started_at = None
-                            s.pending_user_source = None
+                            _settlement_failed = True
                             _error_payload['hint'] = _base_error_hint
                             _error_payload.pop('compression_recovery', None)
                             _error_payload.pop('recommended_recovery_action', None)
@@ -12772,11 +12769,7 @@ def _run_agent_streaming(
                     snapshot=_settlement_snapshot,
                 )
                 if not _terminal_session_persisted:
-                    s.active_stream_id = None
-                    s.pending_user_message = None
-                    s.pending_attachments = []
-                    s.pending_started_at = None
-                    s.pending_user_source = None
+                    _settlement_failed = True
                     _error_payload['hint'] = _base_exception_hint
                     _error_payload.pop('compression_recovery', None)
                     _error_payload.pop('recommended_recovery_action', None)
@@ -12828,7 +12821,8 @@ def _run_agent_streaming(
             _ckpt_thread.join(timeout=15)
         if (s is not None
                 and getattr(s, 'active_stream_id', None) == stream_id
-                and getattr(s, 'pending_user_message', None)):
+                and getattr(s, 'pending_user_message', None)
+                and not _settlement_failed):
             update_active_run(stream_id, phase="finalizing")
             _last_resort_sync_from_core(s, stream_id, _agent_lock)
         _clear_thread_env()  # TD1: always clear thread-local context

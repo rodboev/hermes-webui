@@ -209,6 +209,24 @@ def test_settlement_helper_rolls_back_failed_producer_and_stamps_successful_rows
     assert settle_provider_error_session(session, _message()) is True and isinstance(session.messages[0].get("id"), int)
 
 
+def test_settlement_rolls_back_sidecar_when_index_write_fails(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import settle_provider_error_session
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-producer-index",
+        workspace=tmp_path,
+        messages=[{"role": "user", "content": "prompt"}],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    with patch.object(models, "_write_session_index", side_effect=OSError("index unavailable")):
+        assert settle_provider_error_session(loaded, _message()) is False
+    assert models.Session.load(session.session_id).messages == [{"role": "user", "content": "prompt"}]
+
+
 def test_route_accepts_only_capability_reference():
     import api.routes as routes
     session = _FakeSession([_message()])
