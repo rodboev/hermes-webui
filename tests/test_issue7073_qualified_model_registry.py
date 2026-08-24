@@ -156,6 +156,12 @@ def test_owner_endpoint_slug_keeps_local_provider_identity():
     assert state.provider == "ollama"
     assert state.base_url == "http://ollama.internal:11434/v1"
     assert state.api_key is None
+    uppercase = config.resolve_owner_model_state(
+        "@custom:OLLAMA.INTERNAL:11434:llama3.2",
+        "custom:OLLAMA.INTERNAL:11434",
+        config_obj=owner,
+    )
+    assert uppercase.provider == "ollama"
 
 
 def test_persisted_session_runtime_consumers_use_owner_state_and_connection(monkeypatch):

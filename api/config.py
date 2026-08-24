@@ -3494,7 +3494,7 @@ def resolve_owner_model_state(
                 default_provider
                 and _is_local_server_provider(default_provider)
                 and explicit_provider.startswith("custom:")
-                and explicit_provider in _custom_endpoint_slugs_for_base_url(
+                and explicit_provider.lower() in _custom_endpoint_slugs_for_base_url(
                     _get_provider_base_url(default_provider, owner_cfg)
                 )
             ):
