@@ -2498,36 +2498,11 @@ def _profile_model_selection_exists(
 
 
 def _get_available_models_for_profile_validation(config_obj: dict | None = None) -> dict:
-    """Build the validation catalog for the profile whose config is supplied.
-
-    A clone may source its config from a profile other than the active one, so
-    validation must not fall back to the process-wide model catalog in that
-    case. The config contains the models advertised by custom providers and
-    the source profile's selected model.
-    """
-    from api.config import _configured_model_ids, get_available_models
+    """Return the shared network-free catalog for the requested owner."""
+    from api.config import _static_models_catalog_without_live_probes, get_available_models
 
     if isinstance(config_obj, dict):
-        groups = []
-        model_cfg = config_obj.get("model")
-        if isinstance(model_cfg, dict):
-            provider = str(model_cfg.get("provider") or "").strip()
-            configured_models = model_cfg.get("models") or []
-            model_ids = [model_cfg.get("default"), *_configured_model_ids(configured_models)]
-            models = [{"id": str(model_id)} for model_id in model_ids if model_id]
-            if provider or models:
-                groups.append({"provider_id": provider, "models": models, "extra_models": []})
-        providers = config_obj.get("providers")
-        if isinstance(providers, dict):
-            for provider, provider_cfg in providers.items():
-                if not isinstance(provider_cfg, dict):
-                    continue
-                models = [
-                    {"id": str(model_id)}
-                    for model_id in _configured_model_ids(provider_cfg.get("models"))
-                ]
-                groups.append({"provider_id": str(provider), "models": models, "extra_models": []})
-        return {"groups": groups}
+        return _static_models_catalog_without_live_probes(config_obj)
     return get_available_models()
 
 

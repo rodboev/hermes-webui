@@ -43,6 +43,7 @@ from api.config import (
     clear_session_writeback_owner_if_owned,
     SESSION_AGENT_LOCKS, SESSION_AGENT_LOCKS_LOCK,
     resolve_model_provider,
+    resolve_owner_model_state,
     resolve_custom_provider_connection,
     model_with_provider_context,
     warm_models_catalog_provenance_if_cold,
@@ -10014,15 +10015,24 @@ def _run_agent_streaming(
                 _resolved_profile_name, "model + credential resolution", logger_override=logger
             ):
                 warm_models_catalog_provenance_if_cold()
-                resolved_model, resolved_provider, resolved_base_url = resolve_model_provider(
-                    model_with_provider_context(model, provider_context),
+                from api.config import get_config_for_profile_home as _get_owner_config
+                try:
+                    _owner_cfg = _get_owner_config(_profile_home)
+                except Exception:
+                    _owner_cfg = {}
+                _owner_state = resolve_owner_model_state(
+                    model,
+                    provider_context,
+                    config_obj=_owner_cfg,
                     explicitly_picked=_explicitly_picked,
                 )
-                configured_base_url = resolved_base_url
+                resolved_model = _owner_state.outbound_model
+                resolved_provider = _owner_state.provider
+                configured_base_url = _owner_state.base_url
 
                 # Resolve API key via Hermes runtime provider (matches gateway behaviour).
                 # Pass the resolved provider so non-default providers get their own credentials.
-                resolved_api_key = None
+                resolved_api_key = _owner_state.api_key
                 try:
                     from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
                     from hermes_cli.runtime_provider import resolve_runtime_provider

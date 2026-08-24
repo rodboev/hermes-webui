@@ -25,6 +25,7 @@ from api.config import (
     STREAM_REASONING_TEXT,
     _get_session_agent_lock,
     _parse_provider_qualified_model_id,
+    resolve_owner_model_state,
     clear_session_writeback_owner_if_owned,
     coerce_reasoning_effort_for_model,
     gateway_approval_unavailable_reason,
@@ -626,6 +627,8 @@ def _run_gateway_runs_api_streaming(
             **body_extras,
             "session_id": session_id,
         }
+        if active_provider:
+            run_body["provider"] = active_provider
         if instructions_parts:
             run_body["instructions"] = "\n\n".join(part for part in instructions_parts if part)
         if conversation_history:
@@ -994,13 +997,20 @@ def _run_gateway_chat_streaming(
         if getattr(s, "profile", None):
             from api.profiles import resolve_profile_config_context
             _owner, cfg = resolve_profile_config_context(s.profile)
+        owner_state = resolve_owner_model_state(
+            model,
+            model_provider,
+            config_obj=cfg,
+        )
+        model = owner_state.outbound_model
+        model_provider = owner_state.provider
         reasoning_effort = _gateway_reasoning_effort_for_request(
             cfg,
             model=model,
             model_provider=model_provider,
         )
         base_url = _gateway_base_url(cfg)
-        api_key = _gateway_api_key()
+        api_key = owner_state.api_key or _gateway_api_key()
         try:
             from api.config import _main_model_request_overrides
             _gw_overrides = _main_model_request_overrides(

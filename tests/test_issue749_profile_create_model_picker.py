@@ -230,3 +230,33 @@ def test_profile_create_rejects_unknown_model_before_creating_profile(monkeypatc
         )
 
     assert calls == []
+
+
+def test_clone_validation_accepts_full_builtin_owner_catalog(monkeypatch):
+    owner = {"model": {"provider": "openai", "default": "gpt-5.4"}}
+    monkeypatch.setattr(profiles, "_get_available_models_for_profile_validation", lambda cfg: {
+        "groups": [{"provider_id": "openai", "models": [{"id": "gpt-5.5"}]}]
+    })
+    profiles._validate_profile_model_selection("gpt-5.5", "openai", config_obj=owner)
+
+
+def test_clone_validation_accepts_custom_provider_model_shapes():
+    owner = {
+        "custom_providers": [{
+            "name": "backup",
+            "model": "single-model",
+            "models": ["list-model", {"id": "id-model"}, {"model": "model-model"}, {"name": "name-model"}],
+        }]
+    }
+    catalog = profiles._get_available_models_for_profile_validation(owner)
+    ids = {
+        model["id"]
+        for group in catalog["groups"]
+        for model in group.get("models", [])
+    }
+    assert {"single-model", "list-model", "id-model", "model-model", "name-model"} <= ids
+
+
+def test_clone_validation_accepts_custom_provider_models_scalar_string():
+    owner = {"custom_providers": [{"name": "backup", "models": "org/model"}]}
+    profiles._validate_profile_model_selection("org/model", "custom:backup", config_obj=owner)

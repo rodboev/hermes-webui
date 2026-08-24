@@ -19,6 +19,119 @@ OLLAMA_CONFIG = {
     "providers": {"ollama": {"models": ["hermes-reasoner:latest"]}},
 }
 
+CUSTOM_OWNER_CONFIG = {
+    "model": {
+        "provider": "custom:backup",
+        "default": "org/model",
+        "base_url": "https://backup.example/v1",
+    },
+    "custom_providers": [
+        {
+            "name": "backup",
+            "base_url": "https://backup.example/v1",
+            "key_env": "BACKUP_KEY",
+            "models": "org/model",
+        }
+    ],
+}
+
+
+def test_owner_reconciliation_matrix():
+    valid = config.resolve_owner_model_state(
+        "@custom:backup:org/model", "stale", config_obj=CUSTOM_OWNER_CONFIG
+    )
+    repaired = config.resolve_owner_model_state(
+        "@removed:mistral-large", "removed", config_obj=CUSTOM_OWNER_CONFIG
+    )
+    matching = config.resolve_owner_model_state(
+        "org/model", "custom:backup", config_obj=CUSTOM_OWNER_CONFIG
+    )
+    assert (valid.outbound_model, valid.provider) == ("org/model", "custom:backup")
+    assert repaired.repaired is True
+    assert (repaired.outbound_model, repaired.provider) == ("org/model", "custom:backup")
+    assert (matching.outbound_model, matching.provider) == ("org/model", "custom:backup")
+
+
+def test_explicit_pick_unknown_qualifier_repairs_to_owner_default():
+    state = config.resolve_owner_model_state(
+        "@removed:mistral-large",
+        "removed",
+        config_obj=CUSTOM_OWNER_CONFIG,
+        explicitly_picked=True,
+    )
+    assert state.repaired is True
+    assert state.provider != "removed"
+
+
+def test_session_reload_prefers_qualified_owner_connection(monkeypatch):
+    monkeypatch.setenv("BACKUP_KEY", "owner-secret")
+    state = config.resolve_owner_model_state(
+        "@custom:backup:org/model", "custom", config_obj=CUSTOM_OWNER_CONFIG
+    )
+    assert (state.provider, state.base_url, state.api_key) == (
+        "custom:backup",
+        "https://backup.example/v1",
+        "owner-secret",
+    )
+
+
+def test_owner_connection_uses_env_backed_key_from_same_entry(monkeypatch):
+    monkeypatch.setenv("BACKUP_KEY", "env-secret")
+    assert config.resolve_custom_provider_connection(
+        "custom:backup", CUSTOM_OWNER_CONFIG
+    ) == ("env-secret", "https://backup.example/v1")
+
+
+def test_known_unconfigured_qualifier_is_not_removed():
+    state = config.resolve_owner_model_state(
+        "@openrouter:some/model", "openrouter", config_obj={}
+    )
+    assert state.provider == "openrouter"
+
+
+def test_explicit_empty_owner_never_falls_back_to_ambient_config(monkeypatch):
+    monkeypatch.setattr(config, "cfg", CUSTOM_OWNER_CONFIG)
+    state = config.resolve_owner_model_state("org/model", config_obj={})
+    catalog = config._static_models_catalog_without_live_probes({})
+    assert state.provider is None
+    assert state.base_url is None
+    assert not catalog.get("groups")
+
+
+def test_omitted_owner_config_preserves_ambient_resolver_contract(monkeypatch):
+    monkeypatch.setattr(config, "cfg", CUSTOM_OWNER_CONFIG)
+    resolved = config.resolve_model_provider("org/model")
+    assert resolved[1] == "custom:backup"
+
+
+def test_owner_connection_collision_still_fails_closed():
+    owner = {
+        "custom_providers": [
+            {"name": "Backup", "base_url": "https://one.example"},
+            {"name": "backup", "base_url": "https://two.example"},
+        ]
+    }
+    try:
+        config.resolve_custom_provider_connection("custom:backup", owner)
+    except config.AmbiguousCustomProviderError:
+        return
+    raise AssertionError("colliding custom provider slugs must fail closed")
+
+
+def test_reported_ollama_tagged_model_routes_with_owner(monkeypatch):
+    """The reporter's tagged Ollama model stays whole and keeps its owner."""
+    monkeypatch.setattr(config, "cfg", OLLAMA_CONFIG)
+    resolved = config.resolve_owner_model_state(
+        "@custom:hermes-reasoner:latest",
+        stored_provider="custom",
+        config_obj=OLLAMA_CONFIG,
+    )
+    assert (resolved.outbound_model, resolved.provider, resolved.base_url) == (
+        "hermes-reasoner:latest",
+        "ollama",
+        "http://ollama-owner:11434/v1",
+    )
+
 
 def test_issue_model_is_one_built_in_custom_value_in_owning_registry():
     assert config._parse_provider_qualified_model_id(
@@ -180,7 +293,7 @@ def test_session_new_route_uses_owner_config_when_body_profile_is_omitted(monkey
     session = captured["payload"]["session"]
     assert session["profile"] == "tls-owner"
     assert session["model"] == "@custom:hermes-reasoner:latest"
-    assert session["model_provider"] == "custom"
+    assert session["model_provider"] == "ollama"
 
 
 def test_gateway_route_composes_bare_issue_model_from_session_owner(monkeypatch, tmp_path):

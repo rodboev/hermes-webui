@@ -2919,6 +2919,7 @@ from api.config import (
     _cfg_lock,
     PENDING_BG_TASK_COMPLETIONS,
     _parse_provider_qualified_model_id,
+    resolve_owner_model_state,
 )
 from api import config as api_config
 from api.helpers import (
@@ -7350,6 +7351,15 @@ def _resolve_compatible_session_model_state(
     persisted model wins over the catalog and the catalog is only consulted
     for the default-model backstop.
     """
+    owner_state = resolve_owner_model_state(
+        model_id,
+        model_provider,
+        config_obj=profile_config,
+        explicitly_picked=explicit_model_pick,
+    )
+    if isinstance(profile_config, dict):
+        return owner_state.model, owner_state.provider, owner_state.repaired
+
     model = str(model_id or "").strip()
     requested_provider = _clean_session_model_provider(model_provider, profile_config)
     if model and requested_provider == "moa":
@@ -7884,20 +7894,20 @@ def _session_context_length_lookup_state(
         return "", provider_for_lookup, "", ""
     cfg = config_obj if isinstance(config_obj, dict) else None
     if cfg is not None:
-        # An owner-scoped reload must not pass through the process-global
-        # resolver; the lookup helper already carries the complete owner config.
-        bare_model, explicit_provider = _split_provider_qualified_model(model_for_lookup, cfg)
-        owner_provider = provider_for_lookup or explicit_provider or ""
+        owner_state = resolve_owner_model_state(
+            model_for_lookup, provider_for_lookup, config_obj=cfg
+        )
         owner_lookup = _context_length_lookup_inputs_for_model(
-            bare_model or model_for_lookup,
-            owner_provider or None,
+            owner_state.outbound_model,
+            owner_state.provider,
+            base_url=owner_state.base_url or "",
             cfg=cfg,
         )
         return (
-            str(bare_model or model_for_lookup).strip(),
-            str(owner_lookup.provider or owner_provider).strip(),
-            str(owner_lookup.base_url or "").strip(),
-            str(owner_lookup.api_key or "").strip(),
+            str(owner_state.outbound_model).strip(),
+            str(owner_state.provider or owner_lookup.provider or provider_for_lookup).strip(),
+            str(owner_state.base_url or owner_lookup.base_url or "").strip(),
+            str(owner_state.api_key or owner_lookup.api_key or "").strip(),
         )
     try:
         from api.config import model_with_provider_context, resolve_model_provider
@@ -17441,8 +17451,7 @@ def handle_post(handler, parsed) -> bool:
             ):
                 from api.config import (
                     get_effective_default_model,
-                    resolve_model_provider,
-                    resolve_custom_provider_connection,
+                    resolve_owner_model_state,
                 )
 
                 messages = [
@@ -17450,8 +17459,14 @@ def handle_post(handler, parsed) -> bool:
                     {"role": "user", "content": user_prompt},
                 ]
 
-                _main_model, _main_provider, _main_base_url = resolve_model_provider(get_effective_default_model())
-                _main_api_key = None
+                _owner, _owner_cfg = profiles_api.resolve_profile_config_context(active_profile)
+                _main_state = resolve_owner_model_state(
+                    get_effective_default_model(), config_obj=_owner_cfg
+                )
+                _main_model = _main_state.outbound_model
+                _main_provider = _main_state.provider
+                _main_base_url = _main_state.base_url
+                _main_api_key = _main_state.api_key
                 try:
                     from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
                     from hermes_cli.runtime_provider import resolve_runtime_provider
@@ -17467,13 +17482,6 @@ def handle_post(handler, parsed) -> bool:
                         _main_base_url = _rt.get("base_url")
                 except Exception as _e:
                     logger.debug("update summary runtime provider resolution failed: %s", _e)
-                if isinstance(_main_provider, str) and _main_provider.startswith("custom:"):
-                    _cp_key, _cp_base = resolve_custom_provider_connection(_main_provider)
-                    if not _main_api_key and _cp_key:
-                        _main_api_key = _cp_key
-                    if not _main_base_url and _cp_base:
-                        _main_base_url = _cp_base
-
                 main_runtime = {
                     "provider": _main_provider,
                     "model": _main_model,
@@ -24533,15 +24541,18 @@ def _handle_chat_sync(handler, body):
 
         with CHAT_LOCK:
             from api.config import (
-                resolve_model_provider,
-                resolve_custom_provider_connection,
+                resolve_owner_model_state,
             )
-
-            _model, _provider, _base_url = resolve_model_provider(
-                model_with_provider_context(s.model, getattr(s, "model_provider", None))
+            _owner_state = resolve_owner_model_state(
+                s.model,
+                getattr(s, "model_provider", None),
+                config_obj=_pp_cfg,
             )
+            _model = _owner_state.outbound_model
+            _provider = _owner_state.provider
+            _base_url = _owner_state.base_url
             # Resolve API key via Hermes runtime provider (matches gateway behaviour)
-            _api_key = None
+            _api_key = _owner_state.api_key
             try:
                 from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
                 from hermes_cli.runtime_provider import resolve_runtime_provider
@@ -24561,12 +24572,6 @@ def _handle_chat_sync(handler, body):
                     f"[webui] WARNING: resolve_runtime_provider failed: {_e}",
                     flush=True,
                 )
-            if isinstance(_provider, str) and _provider.startswith("custom:"):
-                _cp_key, _cp_base = resolve_custom_provider_connection(_provider)
-                if not _api_key and _cp_key:
-                    _api_key = _cp_key
-                if not _base_url and _cp_base:
-                    _base_url = _cp_base
             agent = AIAgent(
                 model=_model,
                 provider=_provider,
@@ -25116,20 +25121,26 @@ def _llm_git_commit_message(system_prompt: str, user_prompt: str, session=None) 
     ):
         from api.config import (
             get_effective_default_model,
-            model_with_provider_context,
-            resolve_custom_provider_connection,
-            resolve_model_provider,
+            resolve_owner_model_state,
         )
 
         session_model = str(getattr(session, "model", "") or "").strip()
         session_provider = str(getattr(session, "model_provider", "") or "").strip() or None
-        model_for_resolution = (
-            model_with_provider_context(session_model, session_provider)
-            if session_model
-            else get_effective_default_model()
+        try:
+            _owner, _owner_cfg = profiles_api.resolve_profile_config_context(
+                getattr(session, "profile", None)
+            )
+        except Exception:
+            _owner_cfg = None
+        _main_state = resolve_owner_model_state(
+            session_model or get_effective_default_model(),
+            session_provider,
+            config_obj=_owner_cfg,
         )
-        _main_model, _main_provider, _main_base_url = resolve_model_provider(model_for_resolution)
-        _main_api_key = None
+        _main_model = _main_state.outbound_model
+        _main_provider = _main_state.provider
+        _main_base_url = _main_state.base_url
+        _main_api_key = _main_state.api_key
         try:
             from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
             from hermes_cli.runtime_provider import resolve_runtime_provider
@@ -25145,13 +25156,6 @@ def _llm_git_commit_message(system_prompt: str, user_prompt: str, session=None) 
                 _main_base_url = _rt.get("base_url")
         except Exception as _e:
             logger.debug("git commit message runtime provider resolution failed: %s", _e)
-        if isinstance(_main_provider, str) and _main_provider.startswith("custom:"):
-            _cp_key, _cp_base = resolve_custom_provider_connection(_main_provider)
-            if not _main_api_key and _cp_key:
-                _main_api_key = _cp_key
-            if not _main_base_url and _cp_base:
-                _main_base_url = _cp_base
-
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -27171,11 +27175,21 @@ def _handle_session_compress(handler, body):
         import hermes_cli.runtime_provider as _runtime_provider
         AIAgent = require_ai_agent_class()
 
-        resolved_model, resolved_provider, resolved_base_url = _cfg.resolve_model_provider(
-            _cfg.model_with_provider_context(s.model, getattr(s, "model_provider", None))
+        try:
+            from api.profiles import resolve_profile_config_context
+            _owner_name, _owner_cfg = resolve_profile_config_context(getattr(s, "profile", None))
+        except Exception:
+            _owner_cfg = None
+        _owner_state = _cfg.resolve_owner_model_state(
+            s.model,
+            getattr(s, "model_provider", None),
+            config_obj=_owner_cfg,
         )
+        resolved_model = _owner_state.outbound_model
+        resolved_provider = _owner_state.provider
+        resolved_base_url = _owner_state.base_url
 
-        resolved_api_key = None
+        resolved_api_key = _owner_state.api_key
         try:
             _rt = resolve_runtime_provider_with_anthropic_env_lock(
                 _runtime_provider.resolve_runtime_provider,
@@ -27189,12 +27203,6 @@ def _handle_session_compress(handler, body):
         except Exception as _e:
             logger.warning("resolve_runtime_provider failed for compression: %s", _e)
 
-        if isinstance(resolved_provider, str) and resolved_provider.startswith("custom:"):
-            _cp_key, _cp_base = _cfg.resolve_custom_provider_connection(resolved_provider)
-            if not resolved_api_key and _cp_key:
-                resolved_api_key = _cp_key
-            if not resolved_base_url and _cp_base:
-                resolved_base_url = _cp_base
 
         if not resolved_api_key:
             return bad(handler, "No provider configured -- cannot compress.")
@@ -27860,12 +27868,23 @@ def _handle_handoff_summary(handler, body):
         except Exception:
             pass
 
-        model_for_resolution = _cfg.model_with_provider_context(
-            resolved_model, session_model_provider
+        try:
+            from api.profiles import resolve_profile_config_context
+            _owner_name, _owner_cfg = resolve_profile_config_context(
+                getattr(s_obj, "profile", None)
+            )
+        except Exception:
+            _owner_cfg = None
+        _owner_state = _cfg.resolve_owner_model_state(
+            resolved_model,
+            session_model_provider,
+            config_obj=_owner_cfg,
         )
-        resolved_model, resolved_provider, resolved_base_url = _cfg.resolve_model_provider(model_for_resolution)
+        resolved_model = _owner_state.outbound_model
+        resolved_provider = _owner_state.provider
+        resolved_base_url = _owner_state.base_url
 
-        resolved_api_key = None
+        resolved_api_key = _owner_state.api_key
         try:
             _rt = resolve_runtime_provider_with_anthropic_env_lock(
                 _runtime_provider.resolve_runtime_provider,
@@ -27878,13 +27897,6 @@ def _handle_handoff_summary(handler, body):
                 resolved_base_url = _rt.get("base_url")
         except Exception as _e:
             logger.warning("resolve_runtime_provider failed for handoff summary: %s", _e)
-
-        if isinstance(resolved_provider, str) and resolved_provider.startswith("custom:"):
-            _cp_key, _cp_base = _cfg.resolve_custom_provider_connection(resolved_provider)
-            if not resolved_api_key and _cp_key:
-                resolved_api_key = _cp_key
-            if not resolved_base_url and _cp_base:
-                resolved_base_url = _cp_base
 
         if not resolved_api_key:
             summary_text = _fallback_handoff_summary(msgs)
