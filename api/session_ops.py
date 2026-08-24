@@ -136,6 +136,16 @@ def _provider_error_session_source(session) -> str:
         raise ProviderErrorDismissalUnavailable("ambiguous_source", 403)
     if values:
         return next(iter(values))
+    try:
+        from api.routes import _state_db_session_source
+
+        state_source = _regeneration_source_class(
+            _state_db_session_source(str(getattr(session, "session_id", "") or ""))
+        )
+    except Exception:
+        state_source = ""
+    if state_source:
+        return state_source
     raise ProviderErrorDismissalUnavailable("unknown_source", 403)
 
 
@@ -503,6 +513,7 @@ def settle_provider_error_session(session, error_message: dict, *, save=True, sn
     snapshot = copy.deepcopy(session.__dict__) if snapshot is None else copy.deepcopy(snapshot)
     sidecar_snapshot = _provider_error_sidecar_snapshot(session) if save else None
     if sidecar_snapshot is not None and not sidecar_snapshot[2]:
+        restore_regeneration_state(session, snapshot)
         return False
     row = None
     try:

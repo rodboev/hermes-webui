@@ -3970,7 +3970,10 @@ def _dismiss_error_source_rejection(sid: str, handler):
     if existing is not None:
         if not _session_visible_to_active_profile(getattr(existing, "profile", None), handler):
             return "Session not found", 404
-        if cli_meta or state_source not in {"", "webui", "fork"}:
+        if (
+            (cli_meta and not _session_source_is_webui(cli_meta))
+            or state_source not in {"", "webui", "fork"}
+        ):
             return "Read-only imported sessions cannot be modified", 403
         if _session_is_subagent_view_only(sid):
             return "Subagent sessions are view-only and cannot be modified from WebUI", 400
@@ -3986,7 +3989,10 @@ def _dismiss_error_source_rejection(sid: str, handler):
         return "Session not found", 404
     if _session_is_subagent_view_only(sid):
         return "Subagent sessions are view-only and cannot be modified from WebUI", 400
-    if cli_meta or state_source not in {"", "webui", "fork"}:
+    if (
+        (cli_meta and not _session_source_is_webui(cli_meta))
+        or state_source not in {"", "webui", "fork"}
+    ):
         return "Read-only imported sessions cannot be modified", 403
     return None
 

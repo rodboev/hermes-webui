@@ -7908,6 +7908,22 @@ def _materialize_pending_user_turn_before_error(
     return True
 
 
+def _clear_failed_provider_error_lifecycle(session, *, active_turn_identity=None) -> None:
+    """Leave a failed terminal write retryable without retaining stream state."""
+    try:
+        _materialize_pending_user_turn_before_error(
+            session,
+            active_turn_identity=active_turn_identity,
+        )
+    except Exception:
+        logger.debug("Failed to recover pending user turn after provider-error write failure", exc_info=True)
+    session.active_stream_id = None
+    session.pending_user_message = None
+    session.pending_attachments = []
+    session.pending_started_at = None
+    session.pending_user_source = None
+
+
 def _terminal_turn_duration(session, *, now: float | None = None) -> float | None:
     """Freeze a valid turn timer before terminal cleanup clears its origin."""
     started_at = getattr(session, 'pending_started_at', None)
@@ -11427,6 +11443,10 @@ def _run_agent_streaming(
                             snapshot=_settlement_snapshot,
                         )
                         if not _terminal_session_persisted:
+                            _clear_failed_provider_error_lifecycle(
+                                s,
+                                active_turn_identity=_active_turn_identity,
+                            )
                             _settlement_failed = True
                             _error_payload['hint'] = _base_error_hint
                             _error_payload.pop('compression_recovery', None)
@@ -12769,6 +12789,10 @@ def _run_agent_streaming(
                     snapshot=_settlement_snapshot,
                 )
                 if not _terminal_session_persisted:
+                    _clear_failed_provider_error_lifecycle(
+                        s,
+                        active_turn_identity=_active_turn_identity,
+                    )
                     _settlement_failed = True
                     _error_payload['hint'] = _base_exception_hint
                     _error_payload.pop('compression_recovery', None)

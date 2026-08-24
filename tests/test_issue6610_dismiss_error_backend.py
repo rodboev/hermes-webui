@@ -111,6 +111,15 @@ def test_control_imported_busy_and_ambiguous_rows_have_no_capability():
     assert provider_error_dismissal_ref(unknown, 0) is None
 
 
+def test_blank_sidecar_source_uses_state_db_webui_authority():
+    from api.session_ops import provider_error_dismissal_ref
+
+    session = _FakeSession([_message()])
+    session.session_source = session.raw_source = session.source_tag = None
+    with patch("api.routes._state_db_session_source", return_value="webui"):
+        assert provider_error_dismissal_ref(session, 0)
+
+
 def test_repeated_reference_is_idempotent_after_the_row_is_dismissed():
     from api.session_ops import apply_provider_error_dismissal
 
@@ -217,6 +226,22 @@ def test_settlement_restores_producer_snapshot_before_a_later_unrelated_save():
     assert session.messages == producer_snapshot["messages"] + [{"role": "user", "content": "later"}]
 
 
+def test_unreadable_settlement_snapshot_restores_caller_state(tmp_path):
+    from api.session_ops import settle_provider_error_session
+
+    session = _FakeSession(
+        [{"role": "user", "content": "prompt"}],
+        active_stream_id="run",
+        pending_user_message="draft",
+    )
+    session.path = tmp_path / "unreadable.json"
+    session.path.write_text("{}", encoding="utf-8")
+    before = copy.deepcopy(session.__dict__)
+    with patch("api.session_ops.Path.read_bytes", side_effect=OSError("unreadable")):
+        assert settle_provider_error_session(session, _message()) is False
+    assert session.__dict__ == before
+
+
 def test_real_sidecar_reload_stays_clean_after_failed_dismissal_then_unrelated_save(tmp_path, monkeypatch):
     from api import models
     from api.session_ops import ProviderErrorDismissalUnavailable, apply_provider_error_dismissal, provider_error_dismissal_plan
@@ -287,6 +312,24 @@ def test_settlement_keeps_committed_sidecar_when_rollback_is_unavailable(tmp_pat
          patch("api.session_ops._restore_provider_error_sidecar", return_value=False):
         assert settle_provider_error_session(loaded, _message()) is True
     assert models.Session.load(session.session_id).messages[-1]["_error"] is True
+
+
+def test_failed_terminal_cleanup_materializes_pending_prompt_and_clears_runtime_state():
+    from api.streaming import _clear_failed_provider_error_lifecycle
+
+    session = _FakeSession(
+        [],
+        active_stream_id="run",
+        pending_user_message="draft",
+        pending_started_at=100.0,
+        pending_user_source="webui",
+    )
+    _clear_failed_provider_error_lifecycle(session)
+    assert session.messages[0]["role"] == "user"
+    assert session.messages[0]["content"] == "draft"
+    assert session.active_stream_id is None
+    assert session.pending_user_message is None
+    assert session.pending_started_at is None
 
 
 def test_projection_cache_returns_detached_rows(tmp_path, monkeypatch):
