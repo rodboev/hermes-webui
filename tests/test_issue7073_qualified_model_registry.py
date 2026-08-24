@@ -1,6 +1,7 @@
 """Regression coverage for profile-owned qualified model parsing (#7073)."""
 
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -105,6 +106,56 @@ def test_owner_env_mapping_wins_over_foreign_process_environment(monkeypatch):
         "owner-secret",
         "https://backup.example/v1",
     )
+
+
+def test_owner_runtime_builtin_uses_profile_scope_for_credentials(monkeypatch):
+    owner = {
+        "model": {"provider": "openai-codex", "default": "gpt-5.5"},
+        "providers": {"openai-codex": {"models": ["gpt-5.5"]}},
+    }
+    observed = {}
+
+    @contextmanager
+    def fake_scope(profile, purpose):
+        observed["scope"] = (profile, purpose)
+        yield
+
+    monkeypatch.setattr(profiles, "profile_scope_for_detached_worker", fake_scope)
+    def fake_runtime(_resolver, **kwargs):
+        observed["runtime"] = kwargs
+        return {"provider": "openai-codex", "api_key": "owner-auth-store-key"}
+
+    monkeypatch.setattr(
+        "api.oauth.resolve_runtime_provider_with_anthropic_env_lock", fake_runtime
+    )
+    state = config.resolve_owner_model_state(
+        "gpt-5.5", "openai-codex", config_obj=owner
+    )
+    resolved = config.resolve_owner_runtime_state(
+        state, config_obj=owner, owner_profile="owner"
+    )
+    assert observed["scope"][0] == "owner"
+    assert observed["runtime"]["requested"] == "openai-codex"
+    assert resolved.api_key == "owner-auth-store-key"
+
+
+def test_owner_endpoint_slug_keeps_local_provider_identity():
+    owner = {
+        "model": {
+            "provider": "ollama",
+            "default": "llama3.2",
+            "base_url": "http://ollama.internal:11434/v1",
+        },
+        "providers": {"ollama": {"models": ["llama3.2"]}},
+    }
+    state = config.resolve_owner_model_state(
+        "@custom:ollama.internal:11434:llama3.2",
+        "custom:ollama.internal:11434",
+        config_obj=owner,
+    )
+    assert state.provider == "ollama"
+    assert state.base_url == "http://ollama.internal:11434/v1"
+    assert state.api_key is None
 
 
 def test_persisted_session_runtime_consumers_use_owner_state_and_connection(monkeypatch):

@@ -8687,6 +8687,7 @@ def _resolve_stream_owner_model_state(
         state,
         config_obj=owner_cfg,
         owner_env=owner_env,
+        owner_profile=profile_name,
     )
 
 

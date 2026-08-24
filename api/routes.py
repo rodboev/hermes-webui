@@ -7127,6 +7127,7 @@ def _resolve_persisted_session_owner_state(
         state,
         config_obj=owner_cfg,
         owner_env=owner_env,
+        owner_profile=profile,
     ), owner_cfg
 
 

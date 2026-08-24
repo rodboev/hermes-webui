@@ -3397,32 +3397,44 @@ def resolve_owner_runtime_state(
     *,
     config_obj: dict | None = None,
     owner_env: dict[str, str] | None = None,
+    owner_profile: str | None = None,
 ) -> OwnerModelState:
     """Fill runtime credentials under the owner policy, never ambiently."""
     if not state.runtime_fallback_allowed:
         return state
     try:
+        from contextlib import nullcontext
+
         from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
         from hermes_cli.runtime_provider import resolve_runtime_provider
 
-        previous_env = getattr(_thread_ctx, "env", None)
-        previous_block = getattr(_thread_ctx, "block_process_env_fallback", False)
-        if owner_env is not None:
-            _thread_ctx.env = dict(owner_env)
-            _thread_ctx.block_process_env_fallback = True
-        try:
-            runtime = resolve_runtime_provider_with_anthropic_env_lock(
-                resolve_runtime_provider,
-                requested=state.provider,
-                target_model=state.outbound_model,
+        scope = nullcontext()
+        if owner_profile and config_obj is not None:
+            from api.profiles import profile_scope_for_detached_worker
+
+            scope = profile_scope_for_detached_worker(
+                owner_profile,
+                "owner runtime provider resolution",
             )
-        finally:
-            if owner_env is not None:
-                if previous_env is None:
-                    delattr(_thread_ctx, "env")
-                else:
-                    _thread_ctx.env = previous_env
-                _thread_ctx.block_process_env_fallback = previous_block
+        with scope:
+            previous_env = getattr(_thread_ctx, "env", None)
+            previous_block = getattr(_thread_ctx, "block_process_env_fallback", False)
+            if owner_env is not None and not owner_profile:
+                _thread_ctx.env = dict(owner_env)
+                _thread_ctx.block_process_env_fallback = True
+            try:
+                runtime = resolve_runtime_provider_with_anthropic_env_lock(
+                    resolve_runtime_provider,
+                    requested=state.provider,
+                    target_model=state.outbound_model,
+                )
+            finally:
+                if owner_env is not None and not owner_profile:
+                    if previous_env is None:
+                        delattr(_thread_ctx, "env")
+                    else:
+                        _thread_ctx.env = previous_env
+                    _thread_ctx.block_process_env_fallback = previous_block
         return replace(
             state,
             provider=state.provider or runtime.get("provider"),
@@ -3478,6 +3490,15 @@ def resolve_owner_model_state(
         else:
             requested = str(bare_model or requested).strip()
             resolved_provider = explicit_provider
+            if (
+                default_provider
+                and _is_local_server_provider(default_provider)
+                and explicit_provider.startswith("custom:")
+                and explicit_provider in _custom_endpoint_slugs_for_base_url(
+                    _get_provider_base_url(default_provider, owner_cfg)
+                )
+            ):
+                resolved_provider = default_provider
             resolved_model = requested
             resolved_base = _get_provider_base_url(resolved_provider, owner_cfg)
             key = None

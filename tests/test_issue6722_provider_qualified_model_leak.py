@@ -360,7 +360,7 @@ class TestGatewayRequestBodiesCarryBareModel:
                 "http://gateway.local",
                 "owner-key",
                 [],
-                {},
+                {"provider": "custom:backup"},
                 put_gateway_event=lambda *a, **k: None,
                 cancel_event=None,
                 active_provider="custom:backup",
