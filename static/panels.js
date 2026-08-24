@@ -12991,9 +12991,7 @@ function startCronPolling(){
           if(c.toast_notifications !== false){
             if(completionHidden){
               const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
-              if(c.session_id){
-                sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id});
-              }
+              sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id});
             }
             else showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
           }

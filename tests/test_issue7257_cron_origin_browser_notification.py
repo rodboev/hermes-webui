@@ -48,6 +48,7 @@ async function runCase() {{
   const _cronNewJobIds = new Set();
   const toasts = [];
   const notifications = [];
+  const markCalls = [];
   let apiCalls = 0;
   let resolveApi;
   const document = {{
@@ -68,7 +69,7 @@ async function runCase() {{
   const showToast = (message) => toasts.push(message);
   const sendBrowserNotification = (title, body, options) => notifications.push({{title, body, options}});
   const updateCronBadge = () => {{}};
-  const _markSessionCompletionUnreadIfBackground = () => {{}};
+  const _markSessionCompletionUnreadIfBackground = (...args) => markCalls.push(args);
   const completions = [{{name: 'Nightly', status: 'success', completed_at: 42, job_id: 'job-1', session_id: caseName === 'no-session' ? '' : 'sid-1', message_count: 7, toast_notifications: caseName !== 'muted'}}];
   let rejectApi;
   const api = () => {{
@@ -116,7 +117,7 @@ async function runCase() {{
     resolveApi();
     await pending;
   }}
-  process.stdout.write(JSON.stringify({{apiCalls, toasts, notifications, since: _cronPollSince, ids: [..._cronNewJobIds]}}));
+  process.stdout.write(JSON.stringify({{apiCalls, toasts, notifications, markCalls, since: _cronPollSince, ids: [..._cronNewJobIds]}}));
 }}
 runCase().catch(error => {{ console.error(error); process.exit(1); }});
 """
@@ -157,18 +158,18 @@ def test_muted_completion_keeps_unread_without_alert():
 
 def test_hidden_without_permission_or_setting_preserves_backlog():
     result = _run_node("unavailable")
-    assert result == {"apiCalls": 0, "toasts": [], "notifications": [], "since": 0, "ids": []}
+    assert result == {"apiCalls": 0, "toasts": [], "notifications": [], "markCalls": [], "since": 0, "ids": []}
 
 
 @pytest.mark.parametrize("case", ["setting-off", "permission-denied", "permission-default", "missing-api"])
 def test_hidden_unavailable_delivery_modes_preserve_backlog(case):
     result = _run_node(case)
-    assert result == {"apiCalls": 0, "toasts": [], "notifications": [], "since": 0, "ids": []}
+    assert result == {"apiCalls": 0, "toasts": [], "notifications": [], "markCalls": [], "since": 0, "ids": []}
 
 
 def test_hidden_transition_to_unavailable_preserves_backlog():
     result = _run_node("transition")
-    assert result == {"apiCalls": 1, "toasts": [], "notifications": [], "since": 0, "ids": []}
+    assert result == {"apiCalls": 1, "toasts": [], "notifications": [], "markCalls": [], "since": 0, "ids": []}
 
 
 def test_rejected_poll_clears_in_flight_guard():
@@ -178,11 +179,24 @@ def test_rejected_poll_clears_in_flight_guard():
     assert result["since"] == 42
 
 
-def test_hidden_completion_without_session_id_skips_origin_notification():
+def test_hidden_sessionless_completion_hands_off_without_session_unread_mark():
     result = _run_node("no-session")
-    assert result["notifications"] == []
+    assert result["notifications"] == [{
+        "title": "Nightly",
+        "body": "cron_completion_status:Nightly|status_completed:",
+        "options": {"forceHidden": True, "sid": ""},
+    }]
+    assert result["markCalls"] == []
     assert result["since"] == 42
     assert result["ids"] == ["job-1"]
+
+
+def test_hidden_session_bound_completion_marks_session_unread():
+    result = _run_node("hidden")
+    assert result["markCalls"] == [["sid-1", 7, {
+        "source": "cron",
+        "profile": "default",
+    }]]
 
 
 def test_stale_generation_drops_completion():
