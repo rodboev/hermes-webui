@@ -158,6 +158,49 @@ def test_compression_lineage_projects_and_mutates_the_physical_owner():
     assert child.messages[0].get("_dismissed") is None
 
 
+def test_cumulative_compression_child_owns_rows_replayed_from_parent():
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    parent = _FakeSession([_message("same")], session_id="parent-cumulative")
+    parent.pre_compression_snapshot = True
+    child = _FakeSession(
+        [copy.deepcopy(parent.messages[0]), _message("later")],
+        session_id="child-cumulative",
+        parent_session_id=parent.session_id,
+    )
+    with patch("api.session_ops.get_session", return_value=parent):
+        projected = project_provider_error_dismissal_capabilities(
+            child,
+            {"messages": copy.deepcopy(child.messages)},
+        )
+    assert projected["messages"][0]["_provider_error_dismiss_ref"]
+    assert projected["messages"][1]["_provider_error_dismiss_ref"]
+
+
+def test_compression_lineage_deduplicates_aliased_agent_locks():
+    from api import config
+    from api.session_ops import apply_provider_error_dismissal, project_provider_error_dismissal_capabilities
+
+    parent = _FakeSession([_message("parent")], session_id="parent-lock")
+    parent.pre_compression_snapshot = True
+    child = _FakeSession([_message("child")], session_id="child-lock", parent_session_id=parent.session_id)
+    with patch("api.session_ops.get_session", side_effect=lambda sid: parent if sid == parent.session_id else child):
+        projected = project_provider_error_dismissal_capabilities(
+            child,
+            {"messages": copy.deepcopy(parent.messages + child.messages)},
+        )
+        ref = projected["messages"][0]["_provider_error_dismiss_ref"]
+        lock = config._get_session_agent_lock(parent.session_id)
+        config._alias_session_agent_lock(parent.session_id, child.session_id, lock)
+        try:
+            plan = apply_provider_error_dismissal(child, ref)
+        finally:
+            with config.SESSION_AGENT_LOCKS_LOCK:
+                config.SESSION_AGENT_LOCKS.pop(parent.session_id, None)
+                config.SESSION_AGENT_LOCKS.pop(child.session_id, None)
+    assert plan.owner_session_id == parent.session_id
+
+
 def test_settlement_restores_producer_snapshot_before_a_later_unrelated_save():
     from api.session_ops import settle_provider_error_session
 
@@ -225,6 +268,43 @@ def test_settlement_rolls_back_sidecar_when_index_write_fails(tmp_path, monkeypa
     with patch.object(models, "_write_session_index", side_effect=OSError("index unavailable")):
         assert settle_provider_error_session(loaded, _message()) is False
     assert models.Session.load(session.session_id).messages == [{"role": "user", "content": "prompt"}]
+
+
+def test_settlement_keeps_committed_sidecar_when_rollback_is_unavailable(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import settle_provider_error_session
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-producer-rollback",
+        workspace=tmp_path,
+        messages=[{"role": "user", "content": "prompt"}],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    with patch.object(models, "_write_session_index", side_effect=OSError("index unavailable")), \
+         patch("api.session_ops._restore_provider_error_sidecar", return_value=False):
+        assert settle_provider_error_session(loaded, _message()) is True
+    assert models.Session.load(session.session_id).messages[-1]["_error"] is True
+
+
+def test_projection_cache_returns_detached_rows(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import _provider_error_owner_entries
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-projection-cache",
+        workspace=tmp_path,
+        messages=[_message()],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    first, _ = _provider_error_owner_entries(session, projection_cache=True)
+    first[0]["row"]["content"] = "mutated"
+    second, _ = _provider_error_owner_entries(session, projection_cache=True)
+    assert second[0]["row"]["content"] == "provider failed"
 
 
 def test_route_accepts_only_capability_reference():

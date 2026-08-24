@@ -3961,6 +3961,8 @@ def _assistant_anchor_scene_message_ref(message) -> str:
 
 def _dismiss_error_source_rejection(sid: str, handler):
     """Reject foreign sessions before any missing-sidecar materialization."""
+    cli_meta = _lookup_cli_session_metadata(sid, all_profiles=True) or {}
+    state_source = _state_db_session_source(sid)
     try:
         existing = get_session(sid, metadata_only=True)
     except KeyError:
@@ -3968,6 +3970,8 @@ def _dismiss_error_source_rejection(sid: str, handler):
     if existing is not None:
         if not _session_visible_to_active_profile(getattr(existing, "profile", None), handler):
             return "Session not found", 404
+        if cli_meta or state_source not in {"", "webui", "fork"}:
+            return "Read-only imported sessions cannot be modified", 403
         if _session_is_subagent_view_only(sid):
             return "Subagent sessions are view-only and cannot be modified from WebUI", 400
         if (
@@ -3978,8 +3982,6 @@ def _dismiss_error_source_rejection(sid: str, handler):
             return "Read-only imported sessions cannot be modified", 403
         return None
 
-    cli_meta = _lookup_cli_session_metadata(sid, all_profiles=True) or {}
-    state_source = _state_db_session_source(sid)
     if cli_meta and not _session_visible_to_active_profile(cli_meta.get("profile"), handler):
         return "Session not found", 404
     if _session_is_subagent_view_only(sid):

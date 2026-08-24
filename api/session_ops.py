@@ -136,17 +136,7 @@ def _provider_error_session_source(session) -> str:
         raise ProviderErrorDismissalUnavailable("ambiguous_source", 403)
     if values:
         return next(iter(values))
-    try:
-        sidecar_path = getattr(session, "path")
-        if (
-            getattr(session, "_loaded_metadata_only", False)
-            or not sidecar_path.exists()
-            or not isinstance(getattr(session, "messages", None), list)
-        ):
-            raise ProviderErrorDismissalUnavailable("unknown_source", 403)
-    except AttributeError as exc:
-        raise ProviderErrorDismissalUnavailable("unknown_source", 403) from exc
-    return "webui"
+    raise ProviderErrorDismissalUnavailable("unknown_source", 403)
 
 
 def _provider_error_session_is_idle(session) -> bool:
@@ -221,6 +211,20 @@ def _provider_error_lineage_sessions(session) -> list:
             raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
         if not _provider_error_session_is_idle(parent):
             raise ProviderErrorDismissalUnavailable("session_active", 409)
+        if len(sessions) == 1:
+            try:
+                from api.models import _session_message_visible_key
+
+                child_rows = getattr(session, "messages", None) or []
+                parent_rows = getattr(parent, "messages", None) or []
+                if len(child_rows) >= len(parent_rows) and all(
+                    _session_message_visible_key(child_rows[index])
+                    == _session_message_visible_key(parent_rows[index])
+                    for index in range(len(parent_rows))
+                ):
+                    return [session]
+            except Exception:
+                raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
         sessions.append(parent)
         seen.add(parent_id)
         current = parent
@@ -259,7 +263,7 @@ def _provider_error_owner_entries(session, *, projection_cache: bool = False) ->
             with _PROVIDER_ERROR_PROJECTION_CACHE_LOCK:
                 cached = _PROVIDER_ERROR_PROJECTION_CACHE.get(cache_key)
             if cached is not None:
-                return list(cached[0]), cached[1]
+                return copy.deepcopy(cached[0]), cached[1]
         except (AttributeError, OSError, TypeError, ValueError) as exc:
             if cache_requires_signature:
                 raise ProviderErrorDismissalUnavailable("owner_unavailable", 409) from exc
@@ -370,8 +374,14 @@ def apply_provider_error_dismissal(session, dismiss_ref: str, *, lock_held: bool
     lock_ids = sorted(set(initial_owner_ids))
     if not lock_held:
         with ExitStack() as stack:
+            acquired_locks = set()
             for lock_id in lock_ids:
-                stack.enter_context(_get_session_agent_lock(lock_id))
+                lock = _get_session_agent_lock(lock_id)
+                lock_key = id(lock)
+                if lock_key in acquired_locks:
+                    continue
+                acquired_locks.add(lock_key)
+                stack.enter_context(lock)
             fresh_owner_ids = [
                 str(getattr(owner, "session_id", "") or "")
                 for owner in _provider_error_lineage_sessions(session)
@@ -492,6 +502,9 @@ def settle_provider_error_session(session, error_message: dict, *, save=True, sn
     """
     snapshot = copy.deepcopy(session.__dict__) if snapshot is None else copy.deepcopy(snapshot)
     sidecar_snapshot = _provider_error_sidecar_snapshot(session) if save else None
+    if sidecar_snapshot is not None and not sidecar_snapshot[2]:
+        return False
+    row = None
     try:
         row = copy.deepcopy(error_message)
         if isinstance(row, dict) and not _provider_error_stable_id(row):
@@ -512,7 +525,9 @@ def settle_provider_error_session(session, error_message: dict, *, save=True, sn
             session.save()
         return True
     except Exception:
-        _restore_provider_error_sidecar(sidecar_snapshot)
+        restored = _restore_provider_error_sidecar(sidecar_snapshot)
+        if not restored and _provider_error_sidecar_contains_row(sidecar_snapshot, row):
+            return True
         restore_regeneration_state(session, snapshot)
         return False
 
@@ -678,34 +693,60 @@ def _provider_error_sidecar_snapshot(session):
     except (AttributeError, TypeError, ValueError, OSError):
         return None
     try:
-        return path, path.read_bytes() if path.is_file() else None
+        if not path.exists():
+            return path, None, True
+        return path, path.read_bytes(), True
     except OSError:
-        return None
+        return path, None, False
 
 
-def _restore_provider_error_sidecar(snapshot) -> None:
+def _restore_provider_error_sidecar(snapshot) -> bool:
     if snapshot is None:
-        return
-    path, contents = snapshot
+        return True
+    path, contents, readable = snapshot
+    if not readable:
+        return False
     tmp = path.with_suffix(
         f".rollback.tmp.{os.getpid()}.{threading.current_thread().ident}"
     )
     try:
         if contents is None:
             path.unlink(missing_ok=True)
-            return
+            return True
         with open(tmp, "wb") as handle:
             handle.write(contents)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
+        return True
     except Exception:
         logger.debug("Failed to restore provider-error sidecar", exc_info=True)
+        return False
     finally:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _provider_error_sidecar_contains_row(snapshot, row) -> bool:
+    if snapshot is None or row is None:
+        return False
+    path, _contents, readable = snapshot
+    if not readable:
+        return False
+    try:
+        payload = json.loads(path.read_bytes())
+        rows = payload.get("messages") if isinstance(payload, dict) else None
+        expected_digest = _provider_error_reference_digest(row)
+        return any(
+            isinstance(candidate, dict)
+            and _provider_error_reference_digest(candidate) == expected_digest
+            and _provider_error_stable_id(candidate) == _provider_error_stable_id(row)
+            for candidate in rows or []
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 def regeneration_revision_for(rows, *, session=None, context=None) -> str:
