@@ -117,19 +117,37 @@ def _agent_dir_from_python(python_exe: str) -> Path | None:
     return _startup._agent_dir_from_python(python_exe)
 
 
-def discover_agent_dir() -> Path | None:
-    return _startup.discover_agent_dir(
+def _discover_agent_identity():
+    selected_python = discover_launcher_python(None)
+    return _startup._discover_agent_identity(
         repo_root=REPO_ROOT,
-        hermes_home=Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))),
+        hermes_home=Path(os.getenv("HERMES_HOME") or _startup._platform_default_hermes_home()),
         default_hermes_home=_startup._platform_default_hermes_home(),
         user_home=Path.home(),
-        python_exe=discover_launcher_python(None),
+        python_exe=selected_python,
+        python_fallbacks=() if os.getenv("HERMES_WEBUI_PYTHON") else (sys.executable,),
         launcher_finder=_agent_dir_from_hermes_cli,
         python_finder=_agent_dir_from_python,
     )
 
 
+_LAST_DISCOVERY = None
+
+
+def discover_agent_dir() -> Path | None:
+    global _LAST_DISCOVERY
+    _LAST_DISCOVERY = _discover_agent_identity()
+    return _LAST_DISCOVERY.agent_dir
+
+
 def discover_launcher_python(agent_dir: Path | None) -> str:
+    if (
+        agent_dir is not None
+        and _LAST_DISCOVERY is not None
+        and _LAST_DISCOVERY.agent_dir == agent_dir
+        and _LAST_DISCOVERY.python_exe
+    ):
+        return _LAST_DISCOVERY.python_exe
     env_python = os.getenv("HERMES_WEBUI_PYTHON")
     if env_python:
         return env_python
@@ -454,9 +472,11 @@ def _detect_supervisor() -> str | None:
 
 
 def main() -> int:
+    global _LAST_DISCOVERY
     args = parse_args()
     ensure_supported_platform()
 
+    _LAST_DISCOVERY = None
     agent_dir = discover_agent_dir()
     if not agent_dir and not hermes_command_exists():
         if args.skip_agent_install:
@@ -466,7 +486,10 @@ def main() -> int:
         install_hermes_agent()
         agent_dir = discover_agent_dir()
 
-    python_exe = ensure_python_has_webui_deps(discover_launcher_python(agent_dir), agent_dir)
+    python_exe = ensure_python_has_webui_deps(
+        discover_launcher_python(agent_dir),
+        agent_dir,
+    )
     state_dir = Path(
         os.getenv("HERMES_WEBUI_STATE_DIR")
         or Path(os.getenv("HERMES_HOME") or (Path.home() / ".hermes")) / "webui"

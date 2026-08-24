@@ -125,6 +125,7 @@ def _discover_agent_identity(
     default_hermes_home: Path | None = None,
     user_home: Path | None = None,
     python_exe: str | None = None,
+    python_fallbacks: tuple[str, ...] = (),
     launcher_finder=_agent_dir_from_hermes_cli,
     python_finder=_agent_dir_from_python,
 ) -> _AgentDiscovery:
@@ -158,10 +159,15 @@ def _discover_agent_identity(
     found = launcher_finder()
     if found:
         return _AgentDiscovery(found)
-    selected_python = python_exe or os.getenv("HERMES_WEBUI_PYTHON") or sys.executable
-    found = python_finder(selected_python)
-    if found:
-        return _AgentDiscovery(found, selected_python)
+    configured_python = os.getenv("HERMES_WEBUI_PYTHON")
+    selected_python = python_exe or configured_python or sys.executable
+    candidates = [selected_python]
+    if not configured_python:
+        candidates.extend(python_fallbacks)
+    for candidate in dict.fromkeys(candidates):
+        found = python_finder(candidate)
+        if found:
+            return _AgentDiscovery(found, candidate)
 
     fallback_candidates = [
         Path(os.getenv("XDG_DATA_HOME", str(user_home / ".local" / "share"))).expanduser()

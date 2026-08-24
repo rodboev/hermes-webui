@@ -8,6 +8,7 @@ installed `run_agent` module without importing it.
 
 from __future__ import annotations
 
+import sys
 import textwrap
 
 import pytest
@@ -259,6 +260,26 @@ def test_selected_interpreter_precedes_new_system_fallback(monkeypatch, tmp_path
     monkeypatch.setattr(bootstrap, "_agent_dir_from_python", lambda _python: interpreter_root)
 
     assert bootstrap.discover_agent_dir() == interpreter_root.resolve()
+
+
+def test_proven_system_interpreter_is_not_hidden_by_local_webui_venv(monkeypatch, tmp_path):
+    """A local WebUI venv that cannot prove Agent must not hide sys.executable."""
+    install, _venv_python = _make_agent_install(tmp_path)
+    local_python = tmp_path / "webui" / ".venv" / "bin" / "python"
+    local_python.parent.mkdir(parents=True)
+    local_python.write_text("", encoding="utf-8")
+    _isolate_discover_agent_dir(monkeypatch, tmp_path, hermes_path=tmp_path / "missing")
+    monkeypatch.setattr(bootstrap, "discover_launcher_python", lambda _agent: str(local_python))
+    calls = []
+
+    def probe(python_exe):
+        calls.append(python_exe)
+        return install if python_exe == sys.executable else None
+
+    monkeypatch.setattr(bootstrap, "_agent_dir_from_python", probe)
+
+    assert bootstrap.discover_agent_dir() == install.resolve()
+    assert calls == [str(local_python), sys.executable]
 
 
 def test_new_system_fallback_is_used_only_after_dynamic_sources(monkeypatch, tmp_path):
