@@ -132,10 +132,6 @@ def _provider_error_session_source(session) -> str:
         )
         if value not in (None, "")
     }
-    if len(values) > 1:
-        raise ProviderErrorDismissalUnavailable("ambiguous_source", 403)
-    if values:
-        return next(iter(values))
     try:
         from api.routes import _state_db_session_source
 
@@ -144,6 +140,12 @@ def _provider_error_session_source(session) -> str:
         )
     except Exception:
         state_source = ""
+    if state_source and state_source not in {"webui", "fork"}:
+        raise ProviderErrorDismissalUnavailable("read_only_session", 403)
+    if len(values) > 1 or (values and state_source and next(iter(values)) != state_source):
+        raise ProviderErrorDismissalUnavailable("ambiguous_source", 403)
+    if values:
+        return next(iter(values))
     if state_source:
         return state_source
     raise ProviderErrorDismissalUnavailable("unknown_source", 403)
@@ -170,7 +172,7 @@ def _provider_error_session_is_idle(session) -> bool:
 
 def _provider_error_sidecar_is_available(session) -> bool:
     try:
-        sidecar_path = getattr(session, "path")
+        sidecar_path = session.path
     except AttributeError:
         return True
     return bool(
@@ -203,7 +205,10 @@ def _provider_error_lineage_sessions(session) -> list:
             break
         if parent_id in seen:
             raise ProviderErrorDismissalUnavailable("ambiguous_lineage", 409)
-        parent = get_session(parent_id)
+        try:
+            parent = get_session(parent_id)
+        except (KeyError, OSError, ValueError) as exc:
+            raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409) from exc
         if parent is None:
             raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
         if not getattr(parent, "pre_compression_snapshot", False):
@@ -234,7 +239,7 @@ def _provider_error_lineage_sessions(session) -> list:
                 ):
                     return [session]
             except Exception:
-                raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
+                raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409) from None
         sessions.append(parent)
         seen.add(parent_id)
         current = parent
@@ -255,7 +260,7 @@ def _provider_error_owner_entries(session, *, projection_cache: bool = False) ->
 
             owner_signatures = []
             for owner in owners:
-                sidecar_path = getattr(owner, "path")
+                sidecar_path = owner.path
                 signature = _sidecar_stat_signature(sidecar_path)
                 if signature is None:
                     raise ValueError("sidecar signature unavailable")

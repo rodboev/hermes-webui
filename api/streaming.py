@@ -7922,6 +7922,10 @@ def _clear_failed_provider_error_lifecycle(session, *, active_turn_identity=None
     session.pending_attachments = []
     session.pending_started_at = None
     session.pending_user_source = None
+    try:
+        session.save(skip_index=True)
+    except Exception:
+        logger.debug("Failed to persist lifecycle cleanup after provider-error write failure", exc_info=True)
 
 
 def _terminal_turn_duration(session, *, now: float | None = None) -> float | None:

@@ -15441,6 +15441,10 @@ def handle_post(handler, parsed) -> bool:
                 model_provider=session.model_provider,
                 messages=copy.deepcopy(session.messages),
                 tool_calls=copy.deepcopy(session.tool_calls),
+                session_source="fork",
+                source_tag="fork",
+                raw_source="fork",
+                source_label="Fork",
                 # Reset ephemeral / per-session-instance flags. Duplicating an
                 # archived conversation should produce a visible (un-archived)
                 # copy; pinned status doesn't transfer either.

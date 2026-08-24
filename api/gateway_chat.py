@@ -902,12 +902,21 @@ def _stream_writeback_is_current(session: Any, stream_id: str) -> bool:
 def _clear_gateway_pending_state(session: Any, stream_id: str) -> None:
     if not _stream_writeback_is_current(session, stream_id):
         return
+    from api.streaming import _materialize_pending_user_turn_before_error
+    try:
+        _materialize_pending_user_turn_before_error(session)
+    except Exception:
+        logger.debug("Failed to recover Gateway pending user turn", exc_info=True)
     session.active_stream_id = None
     session.pending_user_message = None
-    session.pending_attachments = None
+    session.pending_attachments = []
     session.pending_started_at = None
     session.pending_user_source = None
-    session.save()
+    try:
+        session.save()
+    except Exception:
+        logger.debug("Gateway indexed cleanup save failed; retrying sidecar-only", exc_info=True)
+        session.save(skip_index=True)
 
 
 def _cleanup_gateway_pending_mirror(session_id: str) -> None:

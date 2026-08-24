@@ -120,6 +120,22 @@ def test_blank_sidecar_source_uses_state_db_webui_authority():
         assert provider_error_dismissal_ref(session, 0)
 
 
+def test_sidecar_source_conflict_with_state_db_fails_closed():
+    from api.session_ops import provider_error_dismissal_ref
+
+    session = _FakeSession([_message()])
+    with patch("api.routes._state_db_session_source", return_value="subagent"):
+        assert provider_error_dismissal_ref(session, 0) is None
+
+
+def test_missing_compression_parent_fails_closed_without_key_error():
+    from api.session_ops import provider_error_dismissal_ref
+
+    session = _FakeSession([_message()], parent_session_id="missing-parent")
+    with patch("api.session_ops.get_session", side_effect=KeyError("missing-parent")):
+        assert provider_error_dismissal_ref(session, 0) is None
+
+
 def test_repeated_reference_is_idempotent_after_the_row_is_dismissed():
     from api.session_ops import apply_provider_error_dismissal
 
@@ -330,6 +346,58 @@ def test_failed_terminal_cleanup_materializes_pending_prompt_and_clears_runtime_
     assert session.active_stream_id is None
     assert session.pending_user_message is None
     assert session.pending_started_at is None
+
+
+def test_failed_local_cleanup_persists_recovered_prompt_without_index(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import settle_provider_error_session
+    from api.streaming import _clear_failed_provider_error_lifecycle
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-local-cleanup",
+        workspace=tmp_path,
+        messages=[],
+        active_stream_id="run-cleanup",
+        pending_user_message="draft",
+        pending_started_at=100.0,
+        pending_user_source="webui",
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    with patch.object(models, "_write_session_index", side_effect=OSError("index unavailable")):
+        assert settle_provider_error_session(loaded, _message()) is False
+        _clear_failed_provider_error_lifecycle(loaded)
+    reloaded = models.Session.load(session.session_id)
+    assert reloaded.active_stream_id is None
+    assert reloaded.pending_user_message is None
+    assert reloaded.messages[0]["content"] == "draft"
+
+
+def test_failed_gateway_cleanup_persists_recovered_prompt_without_index(tmp_path, monkeypatch):
+    from api import models
+    from api.gateway_chat import _clear_gateway_pending_state
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-gateway-cleanup",
+        workspace=tmp_path,
+        messages=[],
+        active_stream_id="run-gateway-cleanup",
+        pending_user_message="draft",
+        pending_started_at=100.0,
+        pending_user_source="webui",
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    with patch.object(models, "_write_session_index", side_effect=OSError("index unavailable")):
+        _clear_gateway_pending_state(loaded, "run-gateway-cleanup")
+    reloaded = models.Session.load(session.session_id)
+    assert reloaded.active_stream_id is None
+    assert reloaded.pending_user_message is None
+    assert reloaded.messages[0]["content"] == "draft"
 
 
 def test_projection_cache_returns_detached_rows(tmp_path, monkeypatch):
