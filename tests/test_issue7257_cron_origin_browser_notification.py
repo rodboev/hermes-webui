@@ -31,8 +31,9 @@ def _function_source(name: str) -> str:
     raise AssertionError(f"{name} body did not terminate")
 
 
-@pytest.mark.skipif(NODE is None, reason="node is required for the behavioral harness")
 def _run_node(case: str) -> dict:
+    if NODE is None:
+        pytest.skip("node is required for the behavioral harness")
     helper = _function_source("_cronBrowserNotificationsDeliverable")
     poller = _function_source("startCronPolling")
     script = f"""

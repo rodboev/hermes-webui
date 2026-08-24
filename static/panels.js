@@ -12989,8 +12989,10 @@ function startCronPolling(){
       if(data.completions&&data.completions.length>0){
         for(const c of data.completions){
           if(c.toast_notifications !== false){
-            const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
-            if(hidden) sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id});
+            if(hidden){
+              const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
+              sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id});
+            }
             else showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
           }
           _cronPollSince=Math.max(_cronPollSince,c.completed_at);
