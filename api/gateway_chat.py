@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import copy
 import threading
 import time
 import uuid
@@ -807,7 +808,17 @@ def stop_gateway_run(run_id: str) -> bool:
         return False
 
 
-def _settle_gateway_terminal_error(session_id, stream_id, workspace, model, model_provider, terminal_error, *, error_type_override=None):
+def _settle_gateway_terminal_error(
+    session_id,
+    stream_id,
+    workspace,
+    model,
+    model_provider,
+    terminal_error,
+    *,
+    error_type_override=None,
+    error_classification_override=None,
+):
     from api.streaming import (
         _classify_provider_error,
         _materialize_pending_user_turn_before_error,
@@ -821,13 +832,19 @@ def _settle_gateway_terminal_error(session_id, stream_id, workspace, model, mode
         session = get_session(session_id)
         if not _stream_writeback_is_current(session, stream_id):
             return None
-        error_classification = _classify_provider_error(terminal_error)
-        if error_type_override:
+        settlement_snapshot = copy.deepcopy(session.__dict__)
+        error_classification = dict(
+            error_classification_override
+            or _classify_provider_error(terminal_error)
+        )
+        if error_type_override and error_type_override == "gateway_empty_response":
             error_classification = {
                 "label": "Gateway returned no response",
                 "type": error_type_override,
                 "hint": "Check that Hermes Gateway API server is running and reachable.",
             }
+        elif error_type_override:
+            error_classification["type"] = error_type_override
         error_payload = _provider_error_payload(
             terminal_error,
             error_classification["type"],
@@ -862,7 +879,11 @@ def _settle_gateway_terminal_error(session_id, stream_id, workspace, model, mode
         session.model = model
         session.model_provider = model_provider
         from api.session_ops import settle_provider_error_session
-        terminal_session_persisted = settle_provider_error_session(session, error_message)
+        terminal_session_persisted = settle_provider_error_session(
+            session,
+            error_message,
+            snapshot=settlement_snapshot,
+        )
         if terminal_session_persisted:
             error_payload["session"] = redact_session_data(
                 _session_payload_with_full_messages(session, tool_calls=[])
@@ -1449,18 +1470,47 @@ def _run_gateway_chat_streaming(
             err_body = exc.read(2048).decode("utf-8", errors="replace")
         except Exception:
             err_body = ""
-        put_gateway_event(
-            "apperror",
-            _gateway_http_error_event(exc, err_body, api_key_configured=bool(_gateway_api_key())),
+        fallback = _gateway_http_error_event(
+            exc,
+            err_body,
+            api_key_configured=bool(_gateway_api_key()),
         )
+        try:
+            settled = _settle_gateway_terminal_error(
+                session_id,
+                stream_id,
+                workspace,
+                model,
+                model_provider,
+                fallback.get("message") or str(exc),
+                error_classification_override=fallback,
+            )
+        except Exception:
+            logger.debug("Gateway HTTP error settlement failed", exc_info=True)
+            settled = None
+        put_gateway_event("apperror", settled or fallback)
     except Exception as exc:
         safe = _redact_text(str(exc))[:500]
-        put_gateway_event("apperror", {
+        fallback = {
             "label": "Gateway request failed",
             "type": "gateway_error",
             "message": safe or "Gateway request failed.",
             "hint": "Check HERMES_WEBUI_GATEWAY_BASE_URL and Gateway API server health.",
-        })
+        }
+        try:
+            settled = _settle_gateway_terminal_error(
+                session_id,
+                stream_id,
+                workspace,
+                model,
+                model_provider,
+                fallback["message"],
+                error_classification_override=fallback,
+            )
+        except Exception:
+            logger.debug("Gateway error settlement failed", exc_info=True)
+            settled = None
+        put_gateway_event("apperror", settled or fallback)
     finally:
         mapped_run_id = str(_STREAM_RUN_IDS.get(stream_id) or "").strip()
         if mapped_run_id:

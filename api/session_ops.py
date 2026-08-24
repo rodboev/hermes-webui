@@ -13,7 +13,7 @@ import copy
 import hashlib
 import math
 from dataclasses import dataclass
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from bisect import bisect_left
 from typing import Any
 
@@ -64,6 +64,18 @@ def _provider_error_row_digest(row) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _provider_error_reference_digest(row) -> str:
+    """Hash the complete durable row, excluding only dismissal projection state."""
+    reference_row = copy.deepcopy(row) if isinstance(row, dict) else {}
+    for key in (
+        "_dismissed",
+        "_provider_error_dismiss_ref",
+        "_provider_error_dismissed",
+    ):
+        reference_row.pop(key, None)
+    return _provider_error_row_digest(reference_row)
+
+
 def _provider_error_stable_id(row) -> str | None:
     if not isinstance(row, dict):
         return None
@@ -103,35 +115,123 @@ def _provider_error_row_is_dismissible(row) -> bool:
     )
 
 
-def _provider_error_owner_rows(session):
-    """Return the canonical writable rows and their revision under one read."""
-    try:
-        rows, context = regeneration_state(session)
-    except Exception:
-        rows, context = list(getattr(session, "messages", None) or []), []
-    if not isinstance(rows, list) or rows != list(getattr(session, "messages", None) or []):
-        source = _regeneration_source_class(
-            getattr(session, "session_source", None)
-            or getattr(session, "raw_source", None)
-            or getattr(session, "source_tag", None)
+def _provider_error_session_source(session) -> str:
+    values = {
+        _regeneration_source_class(value)
+        for value in (
+            getattr(session, "session_source", None),
+            getattr(session, "raw_source", None),
+            getattr(session, "source_tag", None),
         )
-        if source in {"", "webui", "fork"} and not getattr(session, "is_cli_session", False):
-            rows, context = list(getattr(session, "messages", None) or []), []
-        else:
-            # A state.db-only/imported/paged view has no safe physical sidecar owner.
-            raise ProviderErrorDismissalUnavailable("noncanonical_transcript", 409)
+        if value not in (None, "")
+    }
+    if len(values) > 1:
+        raise ProviderErrorDismissalUnavailable("ambiguous_source", 403)
+    return next(iter(values), "")
+
+
+def _provider_error_session_is_idle(session) -> bool:
+    if any(
+        getattr(session, key, None)
+        for key in (
+            "active_stream_id",
+            "pending_user_message",
+            "pending_started_at",
+            "pending_user_source",
+        )
+    ):
+        return False
+    if getattr(session, "pending_attachments", None):
+        return False
+    for row in getattr(session, "messages", None) or []:
+        if isinstance(row, dict) and row.get("_pending_journal_recovery"):
+            return False
+    return True
+
+
+def _provider_error_lineage_sessions(session) -> list:
+    """Resolve the durable sidecar owners for a viewed compression continuation."""
     if getattr(session, "read_only", False) or getattr(session, "is_cli_session", False):
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
-    source = _regeneration_source_class(
-        getattr(session, "session_source", None)
-        or getattr(session, "raw_source", None)
-        or getattr(session, "source_tag", None)
-    )
+    source = _provider_error_session_source(session)
     if source not in {"", "webui", "fork"} or getattr(session, "pre_compression_snapshot", False):
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
-    if getattr(session, "active_stream_id", None) or getattr(session, "pending_user_message", None):
+    if not _provider_error_session_is_idle(session):
         raise ProviderErrorDismissalUnavailable("session_active", 409)
-    return rows, regeneration_revision_for(rows, session=session, context=context)
+    if source == "fork":
+        return [session]
+
+    sessions = [session]
+    seen = {str(getattr(session, "session_id", "") or "")}
+    current = session
+    for _ in range(20):
+        parent_id = str(getattr(current, "parent_session_id", "") or "").strip()
+        if not parent_id:
+            break
+        if parent_id in seen:
+            raise ProviderErrorDismissalUnavailable("ambiguous_lineage", 409)
+        parent = get_session(parent_id)
+        if parent is None:
+            raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
+        if not getattr(parent, "pre_compression_snapshot", False):
+            break
+        parent_source = _provider_error_session_source(parent)
+        if parent_source not in {"", "webui", "fork"}:
+            raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
+        if not _provider_error_session_is_idle(parent):
+            raise ProviderErrorDismissalUnavailable("session_active", 409)
+        sessions.append(parent)
+        seen.add(parent_id)
+        current = parent
+    else:
+        raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
+    return list(reversed(sessions))
+
+
+def _provider_error_owner_entries(session) -> tuple[list[dict], str]:
+    owners = _provider_error_lineage_sessions(session)
+    entries = []
+    for owner in owners:
+        rows = getattr(owner, "messages", None)
+        if not isinstance(rows, list):
+            raise ProviderErrorDismissalUnavailable("noncanonical_transcript", 409)
+        for owner_index, row in enumerate(rows):
+            entries.append(
+                {
+                    "session": owner,
+                    "session_id": str(getattr(owner, "session_id", "") or ""),
+                    "index": owner_index,
+                    "row": row,
+                    "stable_id": _provider_error_stable_id(row),
+                    "row_digest": _provider_error_reference_digest(row),
+                }
+            )
+    revision_payload = [
+        {
+            "session_id": entry["session_id"],
+            "index": entry["index"],
+            "stable_id": entry["stable_id"],
+            "row_digest": entry["row_digest"],
+        }
+        for entry in entries
+    ]
+    revision = _provider_error_row_digest(
+        {
+            "viewed_session_id": str(getattr(session, "session_id", "") or ""),
+            "entries": revision_payload,
+        }
+    )
+    return entries, revision
+
+
+def _provider_error_owner_rows(session):
+    entries, revision = _provider_error_owner_entries(session)
+    viewed_id = str(getattr(session, "session_id", "") or "")
+    return [
+        entry["row"]
+        for entry in entries
+        if entry["session_id"] == viewed_id
+    ], revision
 
 
 def _provider_error_reference_payload(viewed_session_id, owner_session_id, revision, stable_id, owner_index, row_digest):
@@ -154,21 +254,29 @@ def _provider_error_reference(**parts) -> str:
 def provider_error_dismissal_plan(session, row_index: int, *, lock_held: bool = False):
     lock = nullcontext() if lock_held else _get_session_agent_lock(session.session_id)
     with lock:
-        rows, revision = _provider_error_owner_rows(session)
-        if isinstance(row_index, bool) or not isinstance(row_index, int) or not 0 <= row_index < len(rows):
+        entries, revision = _provider_error_owner_entries(session)
+        viewed_id = str(getattr(session, "session_id", "") or "")
+        if isinstance(row_index, bool) or not isinstance(row_index, int):
             raise ProviderErrorDismissalUnavailable("message_not_found", 404)
-        row = rows[row_index]
-        if not _provider_error_row_is_dismissible(row) or row.get("_dismissed") is True:
+        matches = [
+            entry
+            for entry in entries
+            if entry["session_id"] == viewed_id and entry["index"] == row_index
+        ]
+        if len(matches) != 1:
+            raise ProviderErrorDismissalUnavailable("message_not_found", 404)
+        entry = matches[0]
+        row = entry["row"]
+        if not _provider_error_row_is_dismissible(row):
             raise ProviderErrorDismissalUnavailable("not_dismissible", 409)
-        stable_id = _provider_error_stable_id(row)
-        digest = _provider_error_row_digest(row)
+        stable_id = entry["stable_id"]
         payload = _provider_error_reference_payload(
-            session.session_id, session.session_id, revision, stable_id, row_index, digest,
+            viewed_id, entry["session_id"], revision, stable_id, row_index, entry["row_digest"],
         )
         return ProviderErrorDismissalPlan(
-            viewed_session_id=str(session.session_id), owner_session_id=str(session.session_id),
+            viewed_session_id=viewed_id, owner_session_id=entry["session_id"],
             owner_index=row_index, owner_revision=revision, stable_id=stable_id,
-            row_digest=digest, dismiss_ref=_provider_error_reference(**payload),
+            row_digest=entry["row_digest"], dismiss_ref=_provider_error_reference(**payload),
         )
 
 
@@ -182,35 +290,72 @@ def provider_error_dismissal_ref(session, row_index: int, *, lock_held: bool = F
 def apply_provider_error_dismissal(session, dismiss_ref: str, *, lock_held: bool = False):
     if not isinstance(dismiss_ref, str) or len(dismiss_ref) != 64 or any(c not in "0123456789abcdef" for c in dismiss_ref):
         raise ProviderErrorDismissalUnavailable("invalid_dismiss_ref", 400)
-    lock = nullcontext() if lock_held else _get_session_agent_lock(session.session_id)
-    with lock:
-        plan = None
-        rows, revision = _provider_error_owner_rows(session)
-        for index, row in enumerate(rows):
-            if not _provider_error_row_is_dismissible(row) or row.get("_dismissed") is True:
-                continue
-            candidate = provider_error_dismissal_plan(session, index, lock_held=True)
-            if candidate.dismiss_ref == dismiss_ref:
-                if plan is not None:
-                    raise ProviderErrorDismissalUnavailable("ambiguous_dismiss_ref", 409)
-                plan = candidate
-        if plan is None or plan.owner_revision != revision:
-            raise ProviderErrorDismissalUnavailable("stale_dismiss_ref", 409)
-        current = rows[plan.owner_index]
-        if _provider_error_row_digest(current) != plan.row_digest:
-            raise ProviderErrorDismissalUnavailable("stale_dismiss_ref", 409)
-        snapshot = copy.deepcopy(session.__dict__)
-        try:
-            if "_dismissed" in current:
-                current["_dismissed"] = True
-            else:
-                current["_dismissed"] = True
-            session.messages[plan.owner_index] = current
-            session.save(touch_updated_at=False, skip_index=True)
-        except Exception as exc:
-            restore_regeneration_state(session, snapshot)
-            raise ProviderErrorDismissalUnavailable("persistence_failed", 409) from exc
+    entries, _ = _provider_error_owner_entries(session)
+    lock_ids = sorted(
+        {
+            str(getattr(session, "session_id", "") or "")
+            for _ in [0]
+        }
+        | {entry["session_id"] for entry in entries}
+    )
+    if not lock_held:
+        with ExitStack() as stack:
+            for lock_id in lock_ids:
+                stack.enter_context(_get_session_agent_lock(lock_id))
+            return apply_provider_error_dismissal(session, dismiss_ref, lock_held=True)
+
+    entries, revision = _provider_error_owner_entries(session)
+    matches = []
+    viewed_id = str(getattr(session, "session_id", "") or "")
+    for entry in entries:
+        if not _provider_error_row_is_dismissible(entry["row"]):
+            continue
+        payload = _provider_error_reference_payload(
+            viewed_id,
+            entry["session_id"],
+            revision,
+            entry["stable_id"],
+            entry["index"],
+            entry["row_digest"],
+        )
+        if _provider_error_reference(**payload) == dismiss_ref:
+            matches.append(entry)
+    if len(matches) != 1:
+        raise ProviderErrorDismissalUnavailable(
+            "ambiguous_dismiss_ref" if len(matches) > 1 else "stale_dismiss_ref",
+            409,
+        )
+    entry = matches[0]
+    owner = entry["session"]
+    owner_rows = getattr(owner, "messages", None)
+    if not isinstance(owner_rows, list) or entry["index"] >= len(owner_rows):
+        raise ProviderErrorDismissalUnavailable("stale_dismiss_ref", 409)
+    current = owner_rows[entry["index"]]
+    if (
+        not _provider_error_row_is_dismissible(current)
+        or _provider_error_reference_digest(current) != entry["row_digest"]
+        or _provider_error_stable_id(current) != entry["stable_id"]
+    ):
+        raise ProviderErrorDismissalUnavailable("stale_dismiss_ref", 409)
+    plan = ProviderErrorDismissalPlan(
+        viewed_session_id=viewed_id,
+        owner_session_id=entry["session_id"],
+        owner_index=entry["index"],
+        owner_revision=revision,
+        stable_id=entry["stable_id"],
+        row_digest=entry["row_digest"],
+        dismiss_ref=dismiss_ref,
+    )
+    if current.get("_dismissed") is True:
         return plan
+    snapshot = copy.deepcopy(owner.__dict__)
+    try:
+        current["_dismissed"] = True
+        owner.save(touch_updated_at=False, skip_index=True)
+    except Exception as exc:
+        restore_regeneration_state(owner, snapshot)
+        raise ProviderErrorDismissalUnavailable("persistence_failed", 409) from exc
+    return plan
 
 
 def project_provider_error_dismissal_capabilities(session, projected: dict) -> dict:
@@ -220,45 +365,57 @@ def project_provider_error_dismissal_capabilities(session, projected: dict) -> d
     if not isinstance(messages, list):
         return result
     try:
-        source_messages, revision = _provider_error_owner_rows(session)
+        entries, revision = _provider_error_owner_entries(session)
     except ProviderErrorDismissalUnavailable:
         return result
-    used: set[int] = set()
-    for index, message in enumerate(messages):
+    used: set[tuple[str, int]] = set()
+    viewed_id = str(getattr(session, "session_id", "") or "")
+    for message in messages:
         if not isinstance(message, dict):
             continue
+        message.pop("_provider_error_dismiss_ref", None)
+        message.pop("_provider_error_dismissed", None)
         stable_id = _provider_error_stable_id(message)
+        digest = _provider_error_reference_digest(message)
         candidates = [
-            owner_index for owner_index, source_row in enumerate(source_messages)
-            if owner_index not in used
-            and ((stable_id is not None and _provider_error_stable_id(source_row) == stable_id)
-                 or (stable_id is None and _provider_error_row_digest(source_row) == _provider_error_row_digest(message)))
+            entry
+            for entry in entries
+            if (entry["session_id"], entry["index"]) not in used
+            and _provider_error_row_is_dismissible(entry["row"])
+            and entry["row_digest"] == digest
+            and entry["stable_id"] == stable_id
         ]
-        if len(candidates) != 1:
+        if not candidates:
             continue
-        owner_index = candidates[0]
-        used.add(owner_index)
-        source_row = source_messages[owner_index]
-        if _provider_error_row_is_dismissible(source_row):
-            if source_row.get("_dismissed") is True:
-                message["_provider_error_dismissed"] = True
-            else:
-                digest = _provider_error_row_digest(source_row)
-                payload = _provider_error_reference_payload(
-                    session.session_id, session.session_id, revision,
-                    _provider_error_stable_id(source_row), owner_index, digest,
-                )
-                message["_provider_error_dismiss_ref"] = _provider_error_reference(**payload)
+        if stable_id is None and len(candidates) != 1:
+            continue
+        if stable_id is not None:
+            owner_ids = {(entry["session_id"], entry["index"]) for entry in candidates}
+            same_owner = {entry["session_id"] for entry in candidates}
+            if len(same_owner) != len(owner_ids):
+                continue
+            candidates = [candidates[0]]
+        entry = candidates[0]
+        used.add((entry["session_id"], entry["index"]))
+        source_row = entry["row"]
+        if source_row.get("_dismissed") is True:
+            message["_provider_error_dismissed"] = True
+        else:
+            payload = _provider_error_reference_payload(
+                viewed_id, entry["session_id"], revision,
+                entry["stable_id"], entry["index"], entry["row_digest"],
+            )
+            message["_provider_error_dismiss_ref"] = _provider_error_reference(**payload)
     return result
 
 
-def settle_provider_error_session(session, error_message: dict, *, save=True) -> bool:
+def settle_provider_error_session(session, error_message: dict, *, save=True, snapshot=None) -> bool:
     """Append and durably settle one provider-error row atomically.
 
     Producers use this adapter so an error notification never carries a dirty
     in-memory transcript after the sidecar write fails.
     """
-    snapshot = copy.deepcopy(session.__dict__)
+    snapshot = copy.deepcopy(session.__dict__) if snapshot is None else copy.deepcopy(snapshot)
     try:
         row = copy.deepcopy(error_message)
         if isinstance(row, dict) and not _provider_error_stable_id(row):

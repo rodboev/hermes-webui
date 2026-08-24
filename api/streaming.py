@@ -11332,6 +11332,7 @@ def _run_agent_streaming(
                         # fall through to normal post-result persistence below.
                         pass
                     else:
+                        _settlement_snapshot = copy.deepcopy(s.__dict__)
                         _result_public_error = _err_str or f'{_err_label}.'
                         if _err_type == 'compression_snapshot_stale':
                             _result_public_error = (
@@ -11418,7 +11419,11 @@ def _run_agent_streaming(
                         elif _err_type == 'tool_limit_reached':
                             _error_message['provider_details_label'] = 'Terminal state details'
                         from api.session_ops import settle_provider_error_session
-                        _terminal_session_persisted = settle_provider_error_session(s, _error_message)
+                        _terminal_session_persisted = settle_provider_error_session(
+                            s,
+                            _error_message,
+                            snapshot=_settlement_snapshot,
+                        )
                         if _terminal_session_persisted:
                             _error_payload['session'] = redact_session_data(
                                 _session_payload_with_full_messages(s, tool_calls=s.tool_calls)
@@ -12680,6 +12685,7 @@ def _run_agent_streaming(
                     )
                     return
 
+                _settlement_snapshot = copy.deepcopy(s.__dict__)
                 if _turn_pending_source == 'process_wakeup':
                     _recorded_pause = record_process_wakeup_provider_unavailable_pause(
                         s,
@@ -12749,7 +12755,11 @@ def _run_agent_streaming(
                 elif _exc_type == 'interrupted':
                     _error_message['provider_details_label'] = 'Interruption details'
                 from api.session_ops import settle_provider_error_session
-                _terminal_session_persisted = settle_provider_error_session(s, _error_message)
+                _terminal_session_persisted = settle_provider_error_session(
+                    s,
+                    _error_message,
+                    snapshot=_settlement_snapshot,
+                )
                 if not ephemeral:
                     try:
                         append_turn_journal_event_for_stream(

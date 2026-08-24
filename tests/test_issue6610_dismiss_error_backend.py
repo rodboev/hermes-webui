@@ -109,6 +109,96 @@ def test_control_imported_busy_and_ambiguous_rows_have_no_capability():
         assert provider_error_dismissal_ref(_FakeSession([row]), 0) is None
     assert provider_error_dismissal_ref(_FakeSession([_message()], is_cli_session=True), 0) is None
     assert provider_error_dismissal_ref(_FakeSession([_message()], active_stream_id="run"), 0) is None
+    assert provider_error_dismissal_ref(_FakeSession([_message()], pending_started_at=12.0), 0) is None
+    assert provider_error_dismissal_ref(_FakeSession([_message()], pending_attachments=[{"name": "x"}]), 0) is None
+
+
+def test_repeated_reference_is_idempotent_after_the_row_is_dismissed():
+    from api.session_ops import apply_provider_error_dismissal
+
+    session = _FakeSession([_message()])
+    plan = _plan(session)
+    first = apply_provider_error_dismissal(session, plan.dismiss_ref)
+    second = apply_provider_error_dismissal(session, plan.dismiss_ref)
+    assert first.dismiss_ref == second.dismiss_ref == plan.dismiss_ref
+    assert session.save_count == 1
+
+
+def test_reference_requires_stable_id_and_complete_row_digest():
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    first = _message("first", id="same-id")
+    second = _message("second", id="same-id")
+    session = _FakeSession([first, second])
+    projected = project_provider_error_dismissal_capabilities(
+        session,
+        {"messages": [copy.deepcopy(second)]},
+    )
+    assert projected["messages"][0]["_provider_error_dismiss_ref"]
+    projected["messages"][0]["content"] = "changed"
+    assert "_provider_error_dismiss_ref" not in project_provider_error_dismissal_capabilities(
+        session,
+        projected,
+    )["messages"][0]
+
+
+def test_compression_lineage_projects_and_mutates_the_physical_owner():
+    from api.session_ops import apply_provider_error_dismissal, project_provider_error_dismissal_capabilities
+
+    parent = _FakeSession([_message("parent")], session_id="parent-session")
+    parent.pre_compression_snapshot = True
+    child = _FakeSession([_message("child")], session_id="child-session", parent_session_id=parent.session_id)
+    with patch("api.session_ops.get_session", side_effect=lambda sid: parent if sid == parent.session_id else child):
+        projected = project_provider_error_dismissal_capabilities(
+            child,
+            {"messages": copy.deepcopy(parent.messages + child.messages)},
+        )
+        ref = projected["messages"][0]["_provider_error_dismiss_ref"]
+        plan = apply_provider_error_dismissal(child, ref)
+    assert plan.owner_session_id == parent.session_id
+    assert parent.messages[0]["_dismissed"] is True
+    assert child.messages[0].get("_dismissed") is None
+
+
+def test_settlement_restores_producer_snapshot_before_a_later_unrelated_save():
+    from api.session_ops import settle_provider_error_session
+
+    session = _FakeSession([{"role": "user", "content": "prompt"}], pending_user_message="draft")
+    producer_snapshot = copy.deepcopy(session.__dict__)
+    session.messages.append({"role": "assistant", "content": "partial"})
+    session.pending_user_message = None
+    session.save_error = OSError("disk")
+    assert settle_provider_error_session(session, _message(), snapshot=producer_snapshot) is False
+    assert session.__dict__ == producer_snapshot
+    session.save_error = None
+    session.messages.append({"role": "user", "content": "later"})
+    session.save()
+    assert session.messages == producer_snapshot["messages"] + [{"role": "user", "content": "later"}]
+
+
+def test_real_sidecar_reload_stays_clean_after_failed_dismissal_then_unrelated_save(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import ProviderErrorDismissalUnavailable, apply_provider_error_dismissal, provider_error_dismissal_plan
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-real",
+        workspace=tmp_path,
+        messages=[_message()],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    plan = provider_error_dismissal_plan(loaded, 0)
+    with patch.object(loaded, "save", side_effect=OSError("sidecar unavailable")):
+        with pytest.raises(ProviderErrorDismissalUnavailable):
+            apply_provider_error_dismissal(loaded, plan.dismiss_ref)
+    assert models.Session.load(session.session_id).messages[0].get("_dismissed") is None
+    loaded.messages.append({"role": "user", "content": "later"})
+    loaded.save(touch_updated_at=False, skip_index=True)
+    reloaded = models.Session.load(session.session_id)
+    assert reloaded.messages[0].get("_dismissed") is None
+    assert reloaded.messages[-1]["content"] == "later"
 
 
 def test_settlement_helper_rolls_back_failed_producer_and_stamps_successful_rows():

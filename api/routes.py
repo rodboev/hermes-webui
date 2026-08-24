@@ -3959,26 +3959,6 @@ def _assistant_anchor_scene_message_ref(message) -> str:
     return _anchor_scene_message_ref_digest(payload)
 
 
-_PROVIDER_ERROR_CONTROL_LABELS = frozenset({
-    "cancellation details",
-    "interruption details",
-    "terminal state details",
-})
-_PROVIDER_ERROR_TYPES = frozenset({
-    "error",
-    "quota_exhausted",
-    "rate_limit",
-    "auth_mismatch",
-    "model_not_found",
-    "no_response",
-    "credential_pool_empty",
-    "gateway_error",
-    "gateway_http_error",
-    "gateway_auth_error",
-    "gateway_empty_response",
-})
-
-
 def _is_provider_error_card_message(message) -> bool:
     """Compatibility adapter for the canonical session mutation classifier."""
     from api.session_ops import _provider_error_row_is_dismissible
@@ -13960,7 +13940,7 @@ def handle_get(handler, parsed) -> bool:
                 if revision:
                     raw["regeneration_revision"] = revision
             redact = redact_session_data(raw)
-            if not _truncated and load_messages:
+            if load_messages:
                 try:
                     from api.session_ops import project_provider_error_dismissal_capabilities
                     redact = project_provider_error_dismissal_capabilities(s, redact)
@@ -16230,20 +16210,19 @@ def handle_post(handler, parsed) -> bool:
             source_rejection = _dismiss_error_source_rejection(sid, handler)
             if source_rejection is not None:
                 return bad(handler, *source_rejection)
-            with _get_session_agent_lock(sid):
-                try:
-                    s = _get_or_materialize_session(sid, allow_materialize=False)
-                except PermissionError:
-                    return bad(handler, "Read-only imported sessions cannot be modified", 403)
-                except KeyError:
-                    return bad(handler, "Session not found", 404)
-                if not _session_visible_to_active_profile(getattr(s, "profile", None), handler):
-                    return bad(handler, "Session not found", 404)
-                from api.session_ops import (
-                    ProviderErrorDismissalUnavailable,
-                    apply_provider_error_dismissal,
-                )
-                apply_provider_error_dismissal(s, dismiss_ref, lock_held=True)
+            try:
+                s = _get_or_materialize_session(sid, allow_materialize=False)
+            except PermissionError:
+                return bad(handler, "Read-only imported sessions cannot be modified", 403)
+            except KeyError:
+                return bad(handler, "Session not found", 404)
+            if not _session_visible_to_active_profile(getattr(s, "profile", None), handler):
+                return bad(handler, "Session not found", 404)
+            from api.session_ops import (
+                ProviderErrorDismissalUnavailable,
+                apply_provider_error_dismissal,
+            )
+            plan = apply_provider_error_dismissal(s, dismiss_ref)
         except ProviderErrorDismissalUnavailable as exc:
             logger.info("provider-error dismissal rejected for %s: %s", sid, exc.code)
             return bad(handler, "Could not dismiss the provider error card", exc.status)
@@ -16253,6 +16232,8 @@ def handle_post(handler, parsed) -> bool:
 
         from api.config import _evict_session_agent
         _evict_session_agent(sid)
+        if plan.owner_session_id != sid:
+            _evict_session_agent(plan.owner_session_id)
         return j(handler, {"ok": True})
 
     if parsed.path == "/api/session/branch":
