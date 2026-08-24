@@ -22913,10 +22913,12 @@ def _commit_chat_start_admission(
         worker_abort.set()
         worker_release.set()
         if worker_thread is not None:
-            try:
-                worker_thread.join(timeout=1)
-            except RuntimeError:
-                logger.debug("Chat-start worker thread was not joinable after launch failure")
+            join = getattr(worker_thread, "join", None)
+            if callable(join):
+                try:
+                    join(timeout=1)
+                except RuntimeError:
+                    logger.debug("Chat-start worker thread was not joinable after launch failure")
         try:
             _cleanup_owned_resources()
         except Exception:

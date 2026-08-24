@@ -248,7 +248,7 @@ def test_partial_submitted_journal_is_interrupted_on_strict_failure(transaction_
     real_append = journal.append_turn_journal_event
 
     def append_then_raise(session_id, event):
-        result = real_append(session_id, event)
+        real_append(session_id, event)
         raise OSError("journal fsync unavailable")
 
     monkeypatch.setattr(journal, "append_turn_journal_event", append_then_raise)
