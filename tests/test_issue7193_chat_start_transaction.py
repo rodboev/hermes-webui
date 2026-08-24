@@ -626,11 +626,18 @@ def test_pathless_successor_compensation_uses_legacy_save_signature(transaction_
         model="test-model",
     )
     successor = "pathless-successor-stream"
+    save_calls = []
+    failure_save_count = {}
+
+    def save(touch_updated_at=True):
+        save_calls.append(touch_updated_at)
+
+    session.save = save
 
     def install_successor(_self):
         config.register_session_writeback_owner(session.session_id, successor)
-        session.active_stream_id = successor
         session.pending_user_message = "successor"
+        failure_save_count["count"] = len(save_calls)
         raise RuntimeError("thread start rejected")
 
     monkeypatch.setattr(threading.Thread, "start", install_successor)
@@ -639,3 +646,4 @@ def test_pathless_successor_compensation_uses_legacy_save_signature(transaction_
 
     assert config.session_writeback_owner(session.session_id) == successor
     assert session.active_stream_id == successor
+    assert len(save_calls) == failure_save_count["count"] + 1
