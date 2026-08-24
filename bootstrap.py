@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import os
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -108,10 +107,16 @@ def ensure_supported_platform() -> None:
 
 def _walk_up_for_run_agent(start: Path) -> Path | None:
     return _startup._walk_up_for_run_agent(start)
+
+
 def _agent_dir_from_hermes_cli() -> Path | None:
     return _startup._agent_dir_from_hermes_cli()
+
+
 def _agent_dir_from_python(python_exe: str) -> Path | None:
     return _startup._agent_dir_from_python(python_exe)
+
+
 def discover_agent_dir() -> Path | None:
     return _startup.discover_agent_dir(
         repo_root=REPO_ROOT,
@@ -122,6 +127,8 @@ def discover_agent_dir() -> Path | None:
         launcher_finder=_agent_dir_from_hermes_cli,
         python_finder=_agent_dir_from_python,
     )
+
+
 def discover_launcher_python(agent_dir: Path | None) -> str:
     env_python = os.getenv("HERMES_WEBUI_PYTHON")
     if env_python:

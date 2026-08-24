@@ -25,7 +25,7 @@ def _walk_up_for_run_agent(start: Path) -> Path | None:
 
 
 def _agent_dir_from_hermes_cli() -> Path | None:
-    """Resolve an Agent root from an absolute path embedded in ``hermes``."""
+    """Resolve an Agent root from a console-script shebang or bash wrapper."""
     hermes_path = shutil.which("hermes")
     if not hermes_path:
         return None
@@ -44,7 +44,7 @@ def _agent_dir_from_hermes_cli() -> Path | None:
         if interpreter.is_absolute() and interpreter.name != "env":
             candidates.append(interpreter)
     for line in lines[1:]:
-        for match in re.findall(r"""['\"]([^'\"]+)['\"]""", line):
+        for match in re.findall(r"""['"]([^'"]+)['"]""", line):
             candidate = Path(match)
             if candidate.is_absolute():
                 candidates.append(candidate)

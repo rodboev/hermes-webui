@@ -77,6 +77,11 @@ def _isolate_discover_agent_dir(monkeypatch, tmp_path, hermes_path):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "no-such-hermes-home"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "isolated-xdg-data"))
+    monkeypatch.setattr(
+        bootstrap._startup,
+        "_platform_default_hermes_home",
+        lambda: tmp_path / "isolated-default-hermes-home",
+    )
     monkeypatch.delenv("HERMES_WEBUI_AGENT_DIR", raising=False)
     monkeypatch.delenv("HERMES_WEBUI_PYTHON", raising=False)
     monkeypatch.setattr(bootstrap, "_agent_dir_from_python", lambda _python: None)

@@ -22,12 +22,18 @@ def _run_hidden(argv, *, cwd, env):
 
 
 def _site_packages_for(python_exe: Path) -> Path:
-    return Path(
-        _run_hidden(
-            [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
+    paths = [
+        Path(path)
+        for path in _run_hidden(
+            [str(python_exe), "-c", "import site; print('\\n'.join(site.getsitepackages()))"],
             cwd=REPO_ROOT,
             env=os.environ.copy(),
-        ).stdout.strip()
+        ).stdout.splitlines()
+        if path.strip()
+    ]
+    return next(
+        (path for path in paths if path.name == "site-packages"),
+        paths[-1],
     )
 
 
@@ -52,7 +58,7 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path, monkeypatch):
     venv_python = venv_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     _write_agent_stubs(venv_python, tmp_path)
     test_site_packages = _site_packages_for(Path(sys.executable))
-    local_python = tmp_path / "fake-webui-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    local_python = REPO_ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
     child = textwrap.dedent(
         """
@@ -82,18 +88,22 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path, monkeypatch):
             return real_exists(path)
 
         bootstrap.REPO_ROOT = isolated / "isolated-webui"
+        local_python_visible = False
         with patch.object(pathlib.Path, "exists", isolated_exists):
             bootstrap_result = bootstrap.discover_agent_dir()
             os.environ["ISSUE1019_SHOW_LOCAL"] = "1"
+            local_python_visible = pathlib.Path(
+                os.environ["ISSUE1019_LOCAL_PYTHON"]
+            ).exists()
             import api.config as config
 
-        config.REPO_ROOT = isolated / "isolated-webui"
         with contextlib.redirect_stdout(io.StringIO()) as captured:
             config.print_startup_config()
         print(json.dumps({
             "bootstrap": str(bootstrap_result) if bootstrap_result else None,
             "config": str(config._AGENT_DIR) if config._AGENT_DIR else None,
             "python_exe": config.PYTHON_EXE,
+            "local_python_visible": local_python_visible,
             "found": config._HERMES_FOUND,
             "imports": config.verify_hermes_imports(),
             "banner": captured.getvalue(),
@@ -121,12 +131,9 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stderr
     observed = json.loads(result.stdout)
 
-    agent_origin = next(
-        line for line in result.stdout.splitlines() if line.startswith("{")
-    )
-    assert json.loads(agent_origin) == observed
     assert observed["bootstrap"] == observed["config"]
     assert observed["python_exe"] == str(venv_python)
+    assert observed["local_python_visible"] is True
     assert observed["found"] is True
     assert observed["imports"][0] is True
     assert "agent dir   : " in observed["banner"]
@@ -143,10 +150,13 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path, monkeypatch):
 
     monkeypatch.setattr(api_config, "_AGENT_DIR", Path(observed["config"]))
     monkeypatch.setattr(api_config, "PYTHON_EXE", observed["python_exe"])
-    monkeypatch.setattr(routes, "get_active_profile_name", lambda: "default")
+    from api import profiles
+
+    monkeypatch.setattr(profiles, "get_active_profile_name", lambda: "default")
     monkeypatch.setattr(routes.subprocess, "run", capture_run)
     routes._run_gateway_lifecycle_command("start")
     assert gateway["args"][0] == str(venv_python)
+    assert f"python      : {venv_python}" in observed["banner"]
 
 
 def test_interpreter_only_identity_does_not_authorize_auto_install(monkeypatch, tmp_path):
