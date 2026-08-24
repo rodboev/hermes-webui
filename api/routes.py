@@ -22737,7 +22737,8 @@ def _commit_chat_start_admission(
     stream_id = uuid.uuid4().hex
     pre_attempt_snapshot = None
     marker_claim = {"goal": False, "background": False}
-    sidecar_existed = s.path.exists()
+    session_path = getattr(s, "path", None)
+    sidecar_existed = bool(session_path and session_path.exists())
     was_hidden_empty_session = _is_hidden_empty_session(s)
     journal_event = {}
     journal_append = None
@@ -22747,7 +22748,6 @@ def _commit_chat_start_admission(
     goal_stream_registered = False
     gateway_starting = False
     save_attempted = False
-    thread_started = False
     committed = False
     worker_thread = None
     worker_release = _ThreadEvent()
@@ -22855,7 +22855,10 @@ def _commit_chat_start_admission(
         save_attempted = True
         save = getattr(s, "save", None)
         if callable(save):
-            save(skip_index=True)
+            if session_path is not None:
+                save(skip_index=True)
+            else:
+                save()
         diag.stage("worker_thread_start") if diag else None
         worker_thread = threading.Thread(
             target=_run_chat_start_worker,
@@ -22877,7 +22880,6 @@ def _commit_chat_start_admission(
                 kwargs={},
             )
         worker_thread.start()
-        thread_started = True
         committed = True
         worker_release.set()
         try:
@@ -22937,9 +22939,12 @@ def _commit_chat_start_admission(
                 save = getattr(s, "save", None)
                 if callable(save):
                     if sidecar_existed:
+                        # No successor owns this rollback, so do not back up the rejected prompt.
                         save(touch_updated_at=False, skip_index=True, skip_backup=True)
                     else:
-                        s.path.unlink(missing_ok=True)
+                        path = getattr(s, "path", None)
+                        if path is not None:
+                            path.unlink(missing_ok=True)
             except Exception as compensation_exc:
                 compensation_error = compensation_exc
                 logger.exception(

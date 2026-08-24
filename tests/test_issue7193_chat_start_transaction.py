@@ -146,8 +146,10 @@ def test_rejected_start_does_not_leave_rejected_prompt_in_sidecar_backup(transac
         {"role": "assistant", "content": "answer"},
     ]
     session.save(touch_updated_at=False)
+    session.messages = [{"role": "user", "content": "previous"}]
+    session.save(touch_updated_at=False)
     backup = session.path.with_suffix(".json.bak")
-    before_backup = backup.read_bytes() if backup.exists() else None
+    before_backup = backup.read_bytes()
     monkeypatch.setattr(
         threading.Thread,
         "start",
@@ -157,11 +159,8 @@ def test_rejected_start_does_not_leave_rejected_prompt_in_sidecar_backup(transac
     with pytest.raises(RuntimeError, match="thread start rejected"):
         _start(session)
 
-    assert backup.exists() == (before_backup is not None)
-    if before_backup is not None:
-        assert backup.read_bytes() == before_backup
-    if backup.exists():
-        assert "retry me" not in backup.read_text(encoding="utf-8")
+    assert backup.read_bytes() == before_backup
+    assert "retry me" not in backup.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("prestate", ["both", "sidecar_only", "index_only", "neither"])
@@ -310,9 +309,22 @@ def test_strict_regeneration_journal_failure_compensates(transaction_env, monkey
 
 
 def test_worker_gate_is_untimed_and_does_not_leave_accepted_start_busy(transaction_env, monkeypatch):
-    waits = []
     invoked = threading.Event()
     real_thread = threading.Thread
+
+    class RecordingEvent:
+        def __init__(self):
+            self._event = threading.Event()
+
+        def wait(self, *args, **kwargs):
+            waits.append((args, kwargs))
+            return self._event.wait(*args, **kwargs)
+
+        def is_set(self):
+            return self._event.is_set()
+
+        def set(self):
+            self._event.set()
 
     class DelayedThread:
         def __init__(self, *, target, args, daemon, kwargs):
@@ -326,6 +338,8 @@ def test_worker_gate_is_untimed_and_does_not_leave_accepted_start_busy(transacti
             self._thread.join(timeout)
 
     monkeypatch.setattr(routes.threading, "Thread", DelayedThread)
+    waits = []
+    monkeypatch.setattr(routes, "_ThreadEvent", RecordingEvent)
     monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: invoked.set())
     session = new_session(workspace=str(transaction_env.parent))
 
@@ -333,6 +347,7 @@ def test_worker_gate_is_untimed_and_does_not_leave_accepted_start_busy(transacti
 
     assert response["session_id"] == session.session_id
     assert invoked.wait(2)
+    assert waits == [((), {})]
     assert config.session_writeback_owner(session.session_id) == session.active_stream_id
 
 
@@ -374,7 +389,6 @@ def test_precommit_launch_then_raise_unconditionally_signals_abort_and_release(t
 
     monkeypatch.setattr(routes.threading, "Thread", LaunchThenRaiseThread)
     monkeypatch.setattr(routes, "_ThreadEvent", RecordingEvent)
-    monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: None)
     executed = []
     monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: executed.append(True))
     session = new_session(workspace=str(transaction_env.parent))
