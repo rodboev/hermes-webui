@@ -12,6 +12,7 @@ Discovery order for all paths:
 import collections
 import copy
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -3404,6 +3405,7 @@ def resolve_owner_runtime_state(
         return state
     try:
         from contextlib import nullcontext
+        import inspect
 
         from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
         from hermes_cli.runtime_provider import resolve_runtime_provider
@@ -3423,10 +3425,19 @@ def resolve_owner_runtime_state(
                 _thread_ctx.env = dict(owner_env)
                 _thread_ctx.block_process_env_fallback = True
             try:
+                runtime_kwargs = {"requested": state.provider}
+                try:
+                    runtime_parameters = inspect.signature(resolve_runtime_provider).parameters
+                except (TypeError, ValueError):
+                    runtime_parameters = {}
+                if "target_model" in runtime_parameters or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in runtime_parameters.values()
+                ):
+                    runtime_kwargs["target_model"] = state.outbound_model
                 runtime = resolve_runtime_provider_with_anthropic_env_lock(
                     resolve_runtime_provider,
-                    requested=state.provider,
-                    target_model=state.outbound_model,
+                    **runtime_kwargs,
                 )
             finally:
                 if owner_env is not None and not owner_profile:
@@ -3539,10 +3550,26 @@ def resolve_owner_model_state(
                 _owner_runtime_fallback_allowed(config_obj, stored),
             )
 
+    resolver_kwargs = {}
+    try:
+        resolver_parameters = inspect.signature(resolve_model_provider).parameters
+    except (TypeError, ValueError):
+        resolver_parameters = {}
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in resolver_parameters.values()
+    )
+    if config_obj is not None and (
+        "config_obj" in resolver_parameters or accepts_kwargs
+    ):
+        resolver_kwargs["config_obj"] = owner_cfg
+    if explicitly_picked and (
+        "explicitly_picked" in resolver_parameters or accepts_kwargs
+    ):
+        resolver_kwargs["explicitly_picked"] = True
     resolved_model, resolved_provider, resolved_base = resolve_model_provider(
         requested,
-        explicitly_picked=explicitly_picked,
-        config_obj=owner_cfg,
+        **resolver_kwargs,
     )
     if not resolved_provider and default_provider:
         resolved_provider = default_provider
@@ -5823,6 +5850,9 @@ def _static_models_catalog_without_live_probes(config_obj: dict | None = None) -
         if active_provider:
             detected_providers.add(active_provider)
             _append_model_id(active_provider, default_model)
+            if isinstance(model_cfg, dict):
+                for model_id in _configured_model_ids(model_cfg.get("models")):
+                    _append_model_id(active_provider, model_id)
 
         try:
             _pool = auth_store.get("credential_pool", {}) if isinstance(auth_store, dict) else {}

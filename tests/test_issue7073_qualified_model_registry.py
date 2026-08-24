@@ -164,6 +164,20 @@ def test_owner_endpoint_slug_keeps_local_provider_identity():
     assert uppercase.provider == "ollama"
 
 
+def test_profile_default_repairs_unqualified_cross_provider_session_model():
+    owner = {
+        "model": {"provider": "openai-codex", "default": "gpt-5.5"},
+        "providers": {"openai-codex": {"models": ["gpt-5.5"]}},
+    }
+    assert routes._resolve_compatible_session_model_state(
+        "openai/gpt-5.4-mini",
+        "openai-codex",
+        profile_provider="openai-codex",
+        profile_default_model="gpt-5.5",
+        profile_config=owner,
+    ) == ("gpt-5.5", "openai-codex", True)
+
+
 def test_persisted_session_runtime_consumers_use_owner_state_and_connection(monkeypatch):
     owner = {
         **CUSTOM_OWNER_CONFIG,

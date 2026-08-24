@@ -7389,20 +7389,23 @@ def _resolve_compatible_session_model_state(
     persisted model wins over the catalog and the catalog is only consulted
     for the default-model backstop.
     """
-    owner_state = resolve_owner_model_state(
-        model_id,
-        model_provider,
-        config_obj=profile_config,
-        explicitly_picked=explicit_model_pick,
-    )
+    owner_kwargs = {"config_obj": profile_config}
+    if explicit_model_pick:
+        owner_kwargs["explicitly_picked"] = True
+    owner_state = resolve_owner_model_state(model_id, model_provider, **owner_kwargs)
     if isinstance(profile_config, dict):
         model = owner_state.outbound_model if owner_state.repaired else owner_state.model
         requested_provider = owner_state.provider
-        owner_repaired = owner_state.repaired
+        _owner_model_bare, _owner_explicit_provider = _split_provider_qualified_model(
+            model, profile_config
+        )
+        if model_provider and not _owner_explicit_provider:
+            requested_provider = _clean_session_model_provider(
+                model_provider, profile_config
+            )
     else:
         model = str(model_id or "").strip()
         requested_provider = _clean_session_model_provider(model_provider, profile_config)
-        owner_repaired = False
     if model and requested_provider == "moa":
         return _moa_fast_path_model_state(model)
     if model and requested_provider and model.startswith(f"@{requested_provider}:"):
@@ -7437,9 +7440,26 @@ def _resolve_compatible_session_model_state(
             requested_provider == "openai-codex"
             and model_prefix == "openai"
         )
-        if explicit_provider and isinstance(profile_config, dict):
+        profile_provider_normalized = _normalize_provider_id(profile_provider)
+        explicit_cross_profile_model = (
+            bool(profile_provider_normalized)
+            and bool(model_provider_from_name := (
+                _normalize_provider_id(model_prefix) if "/" in model else ""
+            ))
+            and model_provider_from_name != profile_provider_normalized
+        )
+        if (
+            explicit_provider
+            and isinstance(profile_config, dict)
+            and not stale_codex_openai_slash_id
+            and not explicit_cross_profile_model
+        ):
             return model, requested_provider, False
-        if not explicit_provider and not stale_codex_openai_slash_id:
+        if (
+            not explicit_provider
+            and not stale_codex_openai_slash_id
+            and not explicit_cross_profile_model
+        ):
             _profile_default = str(profile_default_model or "").strip()
             _profile_prov = _clean_session_model_provider(profile_provider, profile_config)
             _providers_match_for_repair = (
@@ -13853,10 +13873,15 @@ def handle_get(handler, parsed) -> bool:
                     s, _stored_provider_for_lookup
                 )[2]
                 _session_owner_env = None
-                if _session_owner_config is not None and getattr(s, "profile", None):
+                _session_profile = getattr(s, "profile", None)
+                if (
+                    _session_owner_config is not None
+                    and isinstance(_session_profile, str)
+                    and _session_profile.strip()
+                ):
                     from api.profiles import get_hermes_home_for_profile, get_profile_runtime_env
                     _session_owner_env = get_profile_runtime_env(
-                        get_hermes_home_for_profile(s.profile)
+                        get_hermes_home_for_profile(_session_profile)
                     )
                 _model_for_lookup = (
                     effective_model or _stored_model_for_lookup
@@ -25144,10 +25169,7 @@ def _llm_git_commit_message(system_prompt: str, user_prompt: str, session=None) 
         "git commit message",
         logger_override=logger,
     ):
-        from api.config import (
-            get_effective_default_model,
-            resolve_owner_model_state,
-        )
+        from api.config import get_effective_default_model
 
         session_model = str(getattr(session, "model", "") or "").strip()
         session_provider = str(getattr(session, "model_provider", "") or "").strip() or None
@@ -27829,6 +27851,7 @@ def _handle_handoff_summary(handler, body):
         AIAgent = require_ai_agent_class()
 
         # Try to resolve model from an existing session, fall back to default.
+        s_obj = None
         resolved_model = None
         resolved_provider = None
         resolved_base_url = None

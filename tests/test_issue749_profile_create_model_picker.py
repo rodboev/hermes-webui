@@ -241,6 +241,23 @@ def test_clone_validation_accepts_full_builtin_owner_catalog(monkeypatch):
     profiles._validate_profile_model_selection("gpt-5.5", "openai-codex", config_obj=owner)
 
 
+def test_clone_validation_accepts_owner_model_models_allowlist(monkeypatch):
+    owner = {
+        "model": {
+            "provider": "openai-codex",
+            "default": "gpt-5.4",
+            "models": ["gpt-5.5"],
+        }
+    }
+    monkeypatch.setattr(
+        "api.config.get_available_models",
+        lambda: (_ for _ in ()).throw(AssertionError("ambient catalog was consulted")),
+    )
+    profiles._validate_profile_model_selection(
+        "gpt-5.5", "openai-codex", config_obj=owner
+    )
+
+
 def test_clone_validation_accepts_custom_provider_model_shapes():
     owner = {
         "custom_providers": [{
