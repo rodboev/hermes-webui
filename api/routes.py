@@ -22955,7 +22955,10 @@ def _commit_chat_start_admission(
             try:
                 save = getattr(s, "save", None)
                 if callable(save):
-                    save(touch_updated_at=False)
+                    if session_path is not None:
+                        save(touch_updated_at=False)
+                    else:
+                        save()
             except Exception as compensation_exc:
                 compensation_error = compensation_exc
                 logger.exception(

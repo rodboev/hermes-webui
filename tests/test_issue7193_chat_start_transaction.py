@@ -609,3 +609,33 @@ def test_failed_admission_preserves_successor_owner_and_state(transaction_env, m
     assert reloaded.title == "successor title"
     assert reloaded.workspace == successor_workspace
     assert reloaded.active_stream_id == successor
+
+
+def test_pathless_successor_compensation_uses_legacy_save_signature(transaction_env, monkeypatch):
+    class PathlessSession(models.Session):
+        @property
+        def path(self):
+            raise AttributeError("path is not available")
+
+        def save(self, touch_updated_at=True):
+            return None
+
+    session = PathlessSession(
+        session_id="pathless-successor-session",
+        workspace=str(transaction_env.parent),
+        model="test-model",
+    )
+    successor = "pathless-successor-stream"
+
+    def install_successor(_self):
+        config.register_session_writeback_owner(session.session_id, successor)
+        session.active_stream_id = successor
+        session.pending_user_message = "successor"
+        raise RuntimeError("thread start rejected")
+
+    monkeypatch.setattr(threading.Thread, "start", install_successor)
+    with pytest.raises(RuntimeError, match="thread start rejected"):
+        _start(session)
+
+    assert config.session_writeback_owner(session.session_id) == successor
+    assert session.active_stream_id == successor

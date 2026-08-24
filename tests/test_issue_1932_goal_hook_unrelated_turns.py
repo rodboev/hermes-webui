@@ -69,9 +69,10 @@ def test_streaming_sets_pending_goal_continuation_on_goal_continue():
         "streaming.py must use the synchronized pending-continuation helper"
     )
 
-    pending_idx = streaming_py.find("add_pending_goal_continuation")
+    pending_idx = streaming_py.find("add_pending_goal_continuation(")
     assert pending_idx != -1
-    assert "goal_continue" in streaming_py[pending_idx:pending_idx + 500]
+    goal_continue_idx = streaming_py.find("put('goal_continue'", pending_idx)
+    assert pending_idx < goal_continue_idx < pending_idx + 500
 
 
 # ---------------------------------------------------------------------------
