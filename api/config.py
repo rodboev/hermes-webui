@@ -3419,7 +3419,11 @@ def resolve_owner_runtime_state(
         with scope:
             from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
             if runtime_resolver is None:
-                from hermes_cli.runtime_provider import resolve_runtime_provider
+                try:
+                    from hermes_cli.runtime_provider import resolve_runtime_provider
+                except ImportError:
+                    def resolve_runtime_provider(**kwargs):
+                        return {"provider": kwargs.get("requested")}
             else:
                 resolve_runtime_provider = runtime_resolver
 
