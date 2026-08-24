@@ -7093,6 +7093,36 @@ def _read_profile_model_config(
     return _provider, _default, _pcfg
 
 
+def _resolve_persisted_session_owner_state(
+    session,
+    model: str | None = None,
+    provider: str | None = None,
+):
+    """Resolve a persisted session through its owner snapshot and env."""
+    from api.config import resolve_owner_model_state
+
+    profile = getattr(session, "profile", None)
+    if not profile:
+        return resolve_owner_model_state(model, provider, config_obj=None), None
+    from api.profiles import (
+        get_hermes_home_for_profile,
+        get_profile_runtime_env,
+        resolve_profile_config_context,
+    )
+
+    _owner, owner_cfg = resolve_profile_config_context(profile)
+    owner_env = get_profile_runtime_env(get_hermes_home_for_profile(profile))
+    return (
+        resolve_owner_model_state(
+            model,
+            provider,
+            config_obj=owner_cfg,
+            owner_env=owner_env,
+        ),
+        owner_cfg,
+    )
+
+
 # perf(webui/session-load-latency) tier2a: process-wide cache for parsed
 # profile config.yaml. Key = (profile_name, inode, mtime, size); value = parsed
 # dict. inode tracks atomic-rename edits (most editors replace files, giving a
@@ -7879,6 +7909,7 @@ def _session_context_length_lookup_state(
     model: str | None,
     provider: str | None,
     config_obj: dict | None = None,
+    owner_env: dict[str, str] | None = None,
 ) -> tuple[str, str, str, str]:
     """Return model/provider/base_url/api_key inputs for session context lookup.
 
@@ -7895,7 +7926,10 @@ def _session_context_length_lookup_state(
     cfg = config_obj if isinstance(config_obj, dict) else None
     if cfg is not None:
         owner_state = resolve_owner_model_state(
-            model_for_lookup, provider_for_lookup, config_obj=cfg
+            model_for_lookup,
+            provider_for_lookup,
+            config_obj=cfg,
+            owner_env=owner_env,
         )
         owner_lookup = _context_length_lookup_inputs_for_model(
             owner_state.outbound_model,
@@ -13807,6 +13841,12 @@ def handle_get(handler, parsed) -> bool:
                 _session_owner_config = _read_profile_model_config(
                     s, _stored_provider_for_lookup
                 )[2]
+                _session_owner_env = None
+                if _session_owner_config is not None and getattr(s, "profile", None):
+                    from api.profiles import get_hermes_home_for_profile, get_profile_runtime_env
+                    _session_owner_env = get_profile_runtime_env(
+                        get_hermes_home_for_profile(s.profile)
+                    )
                 _model_for_lookup = (
                     effective_model or _stored_model_for_lookup
                 ).strip()
@@ -13819,6 +13859,7 @@ def handle_get(handler, parsed) -> bool:
                     _model_for_lookup,
                     effective_provider or getattr(s, "model_provider", None) or "",
                     _session_owner_config,
+                    _session_owner_env,
                 )
                 _fb_cl = _resolve_context_length_for_session_model(
                     _model_for_lookup,
@@ -17460,14 +17501,21 @@ def handle_post(handler, parsed) -> bool:
                 ]
 
                 _owner, _owner_cfg = profiles_api.resolve_profile_config_context(active_profile)
+                _owner_env = profiles_api.get_profile_runtime_env(
+                    profiles_api.get_hermes_home_for_profile(active_profile)
+                )
                 _main_state = resolve_owner_model_state(
-                    get_effective_default_model(), config_obj=_owner_cfg
+                    get_effective_default_model(),
+                    config_obj=_owner_cfg,
+                    owner_env=_owner_env,
                 )
                 _main_model = _main_state.outbound_model
                 _main_provider = _main_state.provider
                 _main_base_url = _main_state.base_url
                 _main_api_key = _main_state.api_key
                 try:
+                    if _owner_cfg is not None:
+                        raise LookupError("owner-scoped runtime fallback disabled")
                     from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
                     from hermes_cli.runtime_provider import resolve_runtime_provider
 
@@ -24540,13 +24588,10 @@ def _handle_chat_sync(handler, body):
         AIAgent = require_ai_agent_class()
 
         with CHAT_LOCK:
-            from api.config import (
-                resolve_owner_model_state,
-            )
-            _owner_state = resolve_owner_model_state(
+            _owner_state, _owner_cfg = _resolve_persisted_session_owner_state(
+                s,
                 s.model,
                 getattr(s, "model_provider", None),
-                config_obj=_pp_cfg,
             )
             _model = _owner_state.outbound_model
             _provider = _owner_state.provider
@@ -24554,6 +24599,8 @@ def _handle_chat_sync(handler, body):
             # Resolve API key via Hermes runtime provider (matches gateway behaviour)
             _api_key = _owner_state.api_key
             try:
+                if _owner_cfg is not None:
+                    raise LookupError("owner-scoped runtime fallback disabled")
                 from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
                 from hermes_cli.runtime_provider import resolve_runtime_provider
 
@@ -25126,22 +25173,18 @@ def _llm_git_commit_message(system_prompt: str, user_prompt: str, session=None) 
 
         session_model = str(getattr(session, "model", "") or "").strip()
         session_provider = str(getattr(session, "model_provider", "") or "").strip() or None
-        try:
-            _owner, _owner_cfg = profiles_api.resolve_profile_config_context(
-                getattr(session, "profile", None)
-            )
-        except Exception:
-            _owner_cfg = None
-        _main_state = resolve_owner_model_state(
+        _main_state, _owner_cfg = _resolve_persisted_session_owner_state(
+            session,
             session_model or get_effective_default_model(),
             session_provider,
-            config_obj=_owner_cfg,
         )
         _main_model = _main_state.outbound_model
         _main_provider = _main_state.provider
         _main_base_url = _main_state.base_url
         _main_api_key = _main_state.api_key
         try:
+            if _owner_cfg is not None:
+                raise LookupError("owner-scoped runtime fallback disabled")
             from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
             from hermes_cli.runtime_provider import resolve_runtime_provider
 
@@ -27175,15 +27218,10 @@ def _handle_session_compress(handler, body):
         import hermes_cli.runtime_provider as _runtime_provider
         AIAgent = require_ai_agent_class()
 
-        try:
-            from api.profiles import resolve_profile_config_context
-            _owner_name, _owner_cfg = resolve_profile_config_context(getattr(s, "profile", None))
-        except Exception:
-            _owner_cfg = None
-        _owner_state = _cfg.resolve_owner_model_state(
+        _owner_state, _owner_cfg = _resolve_persisted_session_owner_state(
+            s,
             s.model,
             getattr(s, "model_provider", None),
-            config_obj=_owner_cfg,
         )
         resolved_model = _owner_state.outbound_model
         resolved_provider = _owner_state.provider
@@ -27191,6 +27229,8 @@ def _handle_session_compress(handler, body):
 
         resolved_api_key = _owner_state.api_key
         try:
+            if _owner_cfg is not None:
+                raise LookupError("owner-scoped runtime fallback disabled")
             _rt = resolve_runtime_provider_with_anthropic_env_lock(
                 _runtime_provider.resolve_runtime_provider,
                 requested=resolved_provider,
@@ -27868,17 +27908,10 @@ def _handle_handoff_summary(handler, body):
         except Exception:
             pass
 
-        try:
-            from api.profiles import resolve_profile_config_context
-            _owner_name, _owner_cfg = resolve_profile_config_context(
-                getattr(s_obj, "profile", None)
-            )
-        except Exception:
-            _owner_cfg = None
-        _owner_state = _cfg.resolve_owner_model_state(
+        _owner_state, _owner_cfg = _resolve_persisted_session_owner_state(
+            s_obj,
             resolved_model,
             session_model_provider,
-            config_obj=_owner_cfg,
         )
         resolved_model = _owner_state.outbound_model
         resolved_provider = _owner_state.provider
@@ -27886,6 +27919,8 @@ def _handle_handoff_summary(handler, body):
 
         resolved_api_key = _owner_state.api_key
         try:
+            if _owner_cfg is not None:
+                raise LookupError("owner-scoped runtime fallback disabled")
             _rt = resolve_runtime_provider_with_anthropic_env_lock(
                 _runtime_provider.resolve_runtime_provider,
                 requested=resolved_provider,

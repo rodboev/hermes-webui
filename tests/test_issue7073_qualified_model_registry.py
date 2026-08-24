@@ -8,6 +8,7 @@ import api.config as config
 import api.gateway_chat as gateway_chat
 import api.profiles as profiles
 import api.routes as routes
+import api.streaming as streaming
 
 
 OLLAMA_CONFIG = {
@@ -52,6 +53,18 @@ def test_owner_reconciliation_matrix():
     assert (matching.outbound_model, matching.provider) == ("org/model", "custom:backup")
 
 
+def test_unknown_named_custom_qualifier_repairs_without_borrowing_backup():
+    state = config.resolve_owner_model_state(
+        "@custom:other:org/model",
+        "custom:other",
+        config_obj=CUSTOM_OWNER_CONFIG,
+        owner_env={"BACKUP_KEY": "owner-secret"},
+    )
+    assert state.repaired is True
+    assert (state.provider, state.outbound_model) == ("custom:backup", "org/model")
+    assert state.api_key == "owner-secret"
+
+
 def test_explicit_pick_unknown_qualifier_repairs_to_owner_default():
     state = config.resolve_owner_model_state(
         "@removed:mistral-large",
@@ -82,6 +95,64 @@ def test_owner_connection_uses_env_backed_key_from_same_entry(monkeypatch):
     ) == ("env-secret", "https://backup.example/v1")
 
 
+def test_owner_env_mapping_wins_over_foreign_process_environment(monkeypatch):
+    monkeypatch.setenv("BACKUP_KEY", "foreign-secret")
+    owner = {
+        **CUSTOM_OWNER_CONFIG,
+        "_env": {"BACKUP_KEY": "owner-secret"},
+    }
+    assert config.resolve_custom_provider_connection("custom:backup", owner) == (
+        "owner-secret",
+        "https://backup.example/v1",
+    )
+
+
+def test_persisted_session_runtime_consumers_use_owner_state_and_connection(monkeypatch):
+    owner = {
+        **CUSTOM_OWNER_CONFIG,
+        "_env": {"BACKUP_KEY": "owner-secret"},
+    }
+    monkeypatch.setattr(profiles, "resolve_profile_config_context", lambda _name: ("owner", owner))
+    monkeypatch.setattr(profiles, "get_hermes_home_for_profile", lambda _name: "/owner")
+    monkeypatch.setattr(profiles, "get_profile_runtime_env", lambda _home: {"BACKUP_KEY": "owner-secret"})
+    monkeypatch.setattr(config, "get_config_for_profile_home", lambda _home: owner)
+    session = SimpleNamespace(profile="owner", model="org/model", model_provider="custom:backup")
+
+    route_state, route_cfg = routes._resolve_persisted_session_owner_state(
+        session, session.model, session.model_provider
+    )
+    stream_state = streaming._resolve_stream_owner_model_state(
+        "owner", "/owner", session.model, session.model_provider
+    )
+    assert route_cfg is owner
+    for state in (route_state, stream_state):
+        assert (state.provider, state.base_url, state.api_key) == (
+            "custom:backup",
+            "https://backup.example/v1",
+            "owner-secret",
+        )
+
+
+def test_empty_owner_runtime_consumers_do_not_fill_ambient_provider(monkeypatch):
+    monkeypatch.setattr(profiles, "resolve_profile_config_context", lambda _name: ("empty", {}))
+    monkeypatch.setattr(profiles, "get_hermes_home_for_profile", lambda _name: "/empty")
+    monkeypatch.setattr(profiles, "get_profile_runtime_env", lambda _home: {})
+    monkeypatch.setattr(config, "get_config_for_profile_home", lambda _home: {})
+    monkeypatch.setattr(config, "cfg", CUSTOM_OWNER_CONFIG)
+    session = SimpleNamespace(profile="empty", model="org/model", model_provider=None)
+
+    route_state, _ = routes._resolve_persisted_session_owner_state(session)
+    stream_state = streaming._resolve_stream_owner_model_state(
+        "empty", "/empty", session.model, session.model_provider
+    )
+    assert route_state.provider is None
+    assert route_state.base_url is None
+    assert route_state.api_key is None
+    assert stream_state.provider is None
+    assert stream_state.base_url is None
+    assert stream_state.api_key is None
+
+
 def test_known_unconfigured_qualifier_is_not_removed():
     state = config.resolve_owner_model_state(
         "@openrouter:some/model", "openrouter", config_obj={}
@@ -96,6 +167,28 @@ def test_explicit_empty_owner_never_falls_back_to_ambient_config(monkeypatch):
     assert state.provider is None
     assert state.base_url is None
     assert not catalog.get("groups")
+
+
+def test_explicit_empty_owner_does_not_import_plugin_catalog(monkeypatch):
+    import api.providers as providers
+
+    monkeypatch.setattr(
+        config,
+        "_plugin_model_provider_profiles",
+        lambda: {"ambient-plugin": object()},
+    )
+    monkeypatch.setattr(
+        providers,
+        "_provider_has_key",
+        lambda _provider: (_ for _ in ()).throw(
+            AssertionError("explicit owner must not inspect ambient plugin auth")
+        ),
+    )
+    catalog = config._static_models_catalog_without_live_probes({})
+    assert all(
+        group.get("provider_id") != "ambient-plugin"
+        for group in catalog.get("groups", [])
+    )
 
 
 def test_omitted_owner_config_preserves_ambient_resolver_contract(monkeypatch):

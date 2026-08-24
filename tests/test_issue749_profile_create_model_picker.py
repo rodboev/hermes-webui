@@ -233,11 +233,12 @@ def test_profile_create_rejects_unknown_model_before_creating_profile(monkeypatc
 
 
 def test_clone_validation_accepts_full_builtin_owner_catalog(monkeypatch):
-    owner = {"model": {"provider": "openai", "default": "gpt-5.4"}}
-    monkeypatch.setattr(profiles, "_get_available_models_for_profile_validation", lambda cfg: {
-        "groups": [{"provider_id": "openai", "models": [{"id": "gpt-5.5"}]}]
-    })
-    profiles._validate_profile_model_selection("gpt-5.5", "openai", config_obj=owner)
+    owner = {"model": {"provider": "openai-codex", "default": "gpt-5.4"}}
+    monkeypatch.setattr(
+        "api.config.get_available_models",
+        lambda: (_ for _ in ()).throw(AssertionError("ambient catalog was consulted")),
+    )
+    profiles._validate_profile_model_selection("gpt-5.5", "openai-codex", config_obj=owner)
 
 
 def test_clone_validation_accepts_custom_provider_model_shapes():

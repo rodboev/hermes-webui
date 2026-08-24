@@ -1683,12 +1683,29 @@ def _provider_is_known_or_configured(
     if isinstance(providers, dict):
         if raw in {str(key).strip().lower() for key in providers}:
             return True
-    # Configured custom provider: a named slug in custom_providers, or any
-    # ``custom`` / ``custom:<slug>`` form when custom_providers are defined.
-    if _named_custom_provider_slug_for_provider(raw, config_obj):
+    # Bare ``custom`` is a real built-in lane. Named custom lanes, however,
+    # are identities minted by this owner's entries, not a namespace that any
+    # configured custom provider implicitly authorizes.
+    if raw == "custom":
         return True
-    if raw == "custom" or raw.startswith("custom:"):
-        return bool(_custom_provider_entries(config_obj))
+    if raw.startswith("custom:"):
+        if _custom_slug_rest_looks_like_host_port(raw.removeprefix("custom:")):
+            return True
+        if _named_custom_provider_slug_for_provider(raw, config_obj):
+            return True
+        source_entries = _custom_provider_entries(config_obj)
+        endpoint_slugs = {
+            slug
+            for entry in source_entries
+            for slug in _custom_endpoint_slugs_for_base_url(entry.get("base_url"))
+        }
+        model_cfg = source.get("model", {}) if isinstance(source, dict) else {}
+        endpoint_slugs.update(
+            _custom_endpoint_slugs_for_base_url(
+                model_cfg.get("base_url") if isinstance(model_cfg, dict) else None
+            )
+        )
+        return raw in endpoint_slugs
     # Known first-party / built-in provider id (alias-resolved). Static registry
     # knowledge that is always available, so a live-discovery provider whose
     # catalog group is momentarily absent still counts as known.
@@ -3249,6 +3266,8 @@ def resolve_model_provider(
 def resolve_custom_provider_connection(
     provider_id: str,
     config_obj: dict | None = None,
+    *,
+    env: dict[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Return (api_key, base_url) for a named ``custom:*`` provider.
 
@@ -3268,18 +3287,32 @@ def resolve_custom_provider_connection(
     # cases after profile switches or runtime config edits.
     cfg_data = config_obj if isinstance(config_obj, dict) else get_config()
 
+    owner_env = env
+    if owner_env is None and isinstance(config_obj, dict):
+        candidate_env = config_obj.get("_env") or config_obj.get("env")
+        if isinstance(candidate_env, dict):
+            owner_env = {str(key): str(value) for key, value in candidate_env.items()}
+
+    def _env_value(name: object) -> str:
+        key = str(name or "").strip()
+        if not key:
+            return ""
+        if owner_env is not None:
+            return str(owner_env.get(key) or "")
+        return _thread_local_env_value(key)
+
     def _resolve_key(raw_api_key, raw_key_env, provider_hint=None) -> str | None:
         api_key = None
         if raw_api_key is not None:
             key_text = str(raw_api_key).strip()
             if key_text.startswith("${") and key_text.endswith("}") and len(key_text) > 3:
-                api_key = _thread_local_env_value(key_text[2:-1]).strip() or None
+                api_key = _env_value(key_text[2:-1]).strip() or None
             elif key_text:
                 api_key = key_text
         if not api_key:
             key_env = str(raw_key_env or "").strip()
             if key_env:
-                api_key = _thread_local_env_value(key_env).strip() or None
+                api_key = _env_value(key_env).strip() or None
         if not api_key and provider_hint:
             api_key = _lookup_custom_api_key_env(provider_hint)
         return api_key
@@ -3354,9 +3387,14 @@ def resolve_owner_model_state(
     *,
     config_obj: dict | None = None,
     explicitly_picked: bool = False,
+    owner_env: dict[str, str] | None = None,
 ) -> OwnerModelState:
     """Resolve model, provider, connection, and catalog ownership together."""
     owner_cfg = config_obj if isinstance(config_obj, dict) else cfg
+    if owner_env is None and isinstance(owner_cfg, dict):
+        candidate_env = owner_cfg.get("_env") or owner_cfg.get("env")
+        if isinstance(candidate_env, dict):
+            owner_env = {str(key): str(value) for key, value in candidate_env.items()}
     requested = str(model_id or "").strip()
     original_requested = requested
     model_cfg = owner_cfg.get("model", {}) if isinstance(owner_cfg, dict) else {}
@@ -3391,7 +3429,9 @@ def resolve_owner_model_state(
             resolved_base = _get_provider_base_url(resolved_provider, owner_cfg)
             key = None
             if resolved_provider.startswith("custom:"):
-                key, entry_base = resolve_custom_provider_connection(resolved_provider, owner_cfg)
+                key, entry_base = resolve_custom_provider_connection(
+                    resolved_provider, owner_cfg, env=owner_env
+                )
                 resolved_base = resolved_base or entry_base
             return OwnerModelState(
                 model=original_requested,
@@ -3408,7 +3448,9 @@ def resolve_owner_model_state(
             base = _get_provider_base_url(stored, owner_cfg)
             key = None
             if stored.startswith("custom:"):
-                key, entry_base = resolve_custom_provider_connection(stored, owner_cfg)
+                key, entry_base = resolve_custom_provider_connection(
+                    stored, owner_cfg, env=owner_env
+                )
                 base = base or entry_base
             return OwnerModelState(requested, requested, stored, base, key, False)
 
@@ -3423,7 +3465,9 @@ def resolve_owner_model_state(
         repaired = True
     key = None
     if isinstance(resolved_provider, str) and resolved_provider.startswith("custom:"):
-        key, entry_base = resolve_custom_provider_connection(resolved_provider, owner_cfg)
+        key, entry_base = resolve_custom_provider_connection(
+            resolved_provider, owner_cfg, env=owner_env
+        )
         resolved_base = resolved_base or entry_base
     if not resolved_base and isinstance(model_cfg, dict):
         resolved_base = str(model_cfg.get("base_url") or "").strip() or None
@@ -5758,12 +5802,19 @@ def _static_models_catalog_without_live_probes(config_obj: dict | None = None) -
         # `providers:` block — otherwise the picker silently drops the
         # group when the live-rebuild cache is cold.
         try:
-            for _plugin_pid in list(_plugin_model_provider_profiles().keys()):
-                if not _plugin_pid or not _provider_has_key(_plugin_pid):
-                    continue
-                _canonical = _canonicalise_provider_id(_plugin_pid) or _plugin_pid
-                if _canonical:
-                    detected_providers.add(_canonical)
+            if config_obj is None:
+                for _plugin_pid in list(_plugin_model_provider_profiles().keys()):
+                    if not _plugin_pid or not _provider_has_key(_plugin_pid):
+                        continue
+                    _canonical = _canonicalise_provider_id(_plugin_pid) or _plugin_pid
+                    if _canonical:
+                        detected_providers.add(_canonical)
+            else:
+                # Explicit owners may use a plugin only when their snapshot
+                # names that provider. Never inspect ambient plugin auth state.
+                for _plugin_pid in configured_provider_ids:
+                    if _is_plugin_model_provider(_plugin_pid):
+                        detected_providers.add(_plugin_pid)
         except Exception:
             logger.debug("Plugin provider detection failed in static catalog", exc_info=True)
 

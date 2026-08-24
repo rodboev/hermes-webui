@@ -994,13 +994,20 @@ def _run_gateway_chat_streaming(
         from api.config import get_config  # imported lazily to avoid config-cycle churn
 
         cfg = get_config()
+        owner_env = None
         if getattr(s, "profile", None):
-            from api.profiles import resolve_profile_config_context
+            from api.profiles import (
+                get_hermes_home_for_profile,
+                get_profile_runtime_env,
+                resolve_profile_config_context,
+            )
             _owner, cfg = resolve_profile_config_context(s.profile)
+            owner_env = get_profile_runtime_env(get_hermes_home_for_profile(s.profile))
         owner_state = resolve_owner_model_state(
             model,
             model_provider,
             config_obj=cfg,
+            owner_env=owner_env,
         )
         model = owner_state.outbound_model
         model_provider = owner_state.provider

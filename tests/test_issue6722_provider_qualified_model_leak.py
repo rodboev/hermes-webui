@@ -34,6 +34,12 @@ from api.config import STREAMS, create_stream_channel
 from api.models import new_session
 
 
+OWNER = {
+    "model": {"provider": "openai-codex", "default": "gpt-5.5"},
+    "providers": {"openai-codex": {"models": ["gpt-5.5"]}},
+}
+
+
 @pytest.fixture(autouse=True)
 def _configured_custom_provider_registry():
     import api.config as cfg_mod
@@ -160,7 +166,10 @@ class TestSessionModelStatePreservesQualifierForRepair:
             },
         )
         model_value, provider = routes._session_model_state_from_request(
-            "@removed:mistral-large", None, "removed"
+            "@removed:mistral-large",
+            None,
+            current_provider="removed",
+            profile_config=OWNER,
         )
         assert model_value == "gpt-5.5", (
             f"removed/unconfigured qualified provider must repair to the active "
@@ -333,3 +342,35 @@ class TestGatewayRequestBodiesCarryBareModel:
         payload = json.loads(captured["body"])
         assert payload["model"] == "model-a:free"
         assert not payload["model"].startswith("@")
+
+    def test_runs_api_body_forwards_canonical_provider_pair(self, monkeypatch):
+        captured = {}
+
+        def fake_urlopen(req, timeout=0):
+            captured["body"] = req.data.decode("utf-8")
+            raise AssertionError("stop after the POST body is captured")
+
+        monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(gateway_chat, "update_active_run", lambda *a, **k: None)
+
+        try:
+            gateway_chat._run_gateway_runs_api_streaming(
+                "sess-6722",
+                "hi",
+                "org/model",
+                "/tmp",
+                "stream-6722-runs-provider",
+                "http://gateway.local",
+                "owner-key",
+                [],
+                {},
+                put_gateway_event=lambda *a, **k: None,
+                cancel_event=None,
+                active_provider="custom:backup",
+            )
+        except Exception:
+            pass
+
+        payload = json.loads(captured["body"])
+        assert payload["model"] == "org/model"
+        assert payload["provider"] == "custom:backup"

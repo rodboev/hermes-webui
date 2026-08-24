@@ -8661,6 +8661,29 @@ def _refresh_cached_agent_primary_runtime_snapshot(agent) -> None:
             rt['is_anthropic_oauth'] = getattr(agent, '_is_anthropic_oauth')
 
 
+def _resolve_stream_owner_model_state(
+    profile_name,
+    profile_home,
+    model,
+    provider,
+    *,
+    explicitly_picked=False,
+):
+    """Resolve a streaming session through its persisted owner snapshot."""
+    from api.config import get_config_for_profile_home
+    from api.profiles import get_profile_runtime_env
+
+    owner_cfg = get_config_for_profile_home(profile_home) if profile_name else None
+    owner_env = get_profile_runtime_env(profile_home) if owner_cfg is not None else None
+    return resolve_owner_model_state(
+        model,
+        provider,
+        config_obj=owner_cfg,
+        explicitly_picked=explicitly_picked,
+        owner_env=owner_env,
+    )
+
+
 def _run_agent_streaming(
     session_id,
     msg_text,
@@ -10015,17 +10038,14 @@ def _run_agent_streaming(
                 _resolved_profile_name, "model + credential resolution", logger_override=logger
             ):
                 warm_models_catalog_provenance_if_cold()
-                from api.config import get_config_for_profile_home as _get_owner_config
-                try:
-                    _owner_cfg = _get_owner_config(_profile_home)
-                except Exception:
-                    _owner_cfg = {}
-                _owner_state = resolve_owner_model_state(
+                _owner_state = _resolve_stream_owner_model_state(
+                    _resolved_profile_name,
+                    _profile_home,
                     model,
                     provider_context,
-                    config_obj=_owner_cfg,
                     explicitly_picked=_explicitly_picked,
                 )
+                _owner_cfg = {"owner": _resolved_profile_name} if _resolved_profile_name else None
                 resolved_model = _owner_state.outbound_model
                 resolved_provider = _owner_state.provider
                 configured_base_url = _owner_state.base_url
@@ -10034,6 +10054,8 @@ def _run_agent_streaming(
                 # Pass the resolved provider so non-default providers get their own credentials.
                 resolved_api_key = _owner_state.api_key
                 try:
+                    if _owner_cfg is not None:
+                        raise LookupError("owner-scoped runtime fallback disabled")
                     from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
                     from hermes_cli.runtime_provider import resolve_runtime_provider
                     _rt = resolve_runtime_provider_with_anthropic_env_lock(
@@ -10057,10 +10079,13 @@ def _run_agent_streaming(
                 # still select the exact custom_providers entry after the rewrite
                 # to "custom" below.
                 _session_requested_provider = resolved_provider
-                resolved_provider, resolved_api_key, resolved_base_url = _resolve_custom_provider_runtime_overrides(
-                    resolved_provider, resolved_api_key, resolved_base_url,
-                    profile_name=_resolved_profile_name,
-                )
+                if _owner_cfg is None:
+                    resolved_provider, resolved_api_key, resolved_base_url = _resolve_custom_provider_runtime_overrides(
+                        resolved_provider, resolved_api_key, resolved_base_url,
+                        profile_name=_resolved_profile_name,
+                    )
+                else:
+                    resolved_base_url = configured_base_url
 
             # Read per-profile config at call time (not module-level snapshot).
             # The streaming worker is a detached thread that does NOT inherit the
