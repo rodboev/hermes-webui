@@ -21,6 +21,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 def _run_restart(monkeypatch, *, argv, frozen=False, pythonw=False, spawn=None, exit=None):
     events = []
     exit_event = threading.Event()
+    spawn_finished = threading.Event()
     spawn_failed = []
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "executable", r"C:\Python\python.exe")
@@ -43,12 +44,14 @@ def _run_restart(monkeypatch, *, argv, frozen=False, pythonw=False, spawn=None, 
 
     def record_spawn(args, **kwargs):
         events.append(("spawn", list(args), kwargs))
-        if spawn:
-            try:
+        try:
+            if spawn:
                 spawn(args, **kwargs)
-            except BaseException:
-                spawn_failed.append(True)
-                raise
+        except BaseException:
+            spawn_failed.append(True)
+            raise
+        finally:
+            spawn_finished.set()
 
     def record_exit(code):
         events.append(("exit", code))
@@ -64,6 +67,8 @@ def _run_restart(monkeypatch, *, argv, frozen=False, pythonw=False, spawn=None, 
         if time.monotonic() >= deadline:
             pytest.fail(f"restart worker did not spawn: {events!r}")
         time.sleep(0.01)
+    if not spawn_finished.wait(timeout=2):
+        pytest.fail(f"restart worker did not finish spawning: {events!r}")
     if not spawn_failed and not exit_event.wait(timeout=2):
         pytest.fail(f"restart worker did not exit after spawning: {events!r}")
     return events
@@ -74,7 +79,7 @@ def test_reported_pytest_argv_restarts_canonical_server(monkeypatch):
     events = _run_restart(monkeypatch, argv=fixture["launch"]["argv_shape"])
     spawn = next(event for event in events if event[0] == "spawn")
     assert spawn[1] == [r"C:\Python\python.exe", str(REPO / "server.py")]
-    assert not any(token in {"pytest", "tests/test_updates.py", "tests/test_update_checker.py", "tests/test_update_channels.py"} for token in spawn[1])
+    assert not any("pytest" in token.lower() for token in spawn[1])
     assert events[-1] == ("exit", 0)
 
 
@@ -96,6 +101,8 @@ def test_frozen_restart_preserves_argv(monkeypatch):
 
 def test_windows_restart_spawns_once_then_exits_once(monkeypatch):
     events = _run_restart(monkeypatch, argv=["pytest", "tests/test_issue7195_windows_restart.py"], pythonw=True)
+    assert events[0] == "wait"
+    assert events[1][0] == "purge"
     assert [event[0] for event in events if isinstance(event, tuple) and event[0] in {"spawn", "exit"}] == ["spawn", "exit"]
     spawn = next(event for event in events if event[0] == "spawn")
     assert spawn[1][0].endswith("pythonw.exe")
@@ -135,12 +142,13 @@ def test_local_restart_recorders_restore_session_guards(monkeypatch):
     assert updates._windows_restart_exit is conftest._pytest_session_safe_windows_restart_exit
 
 
-def test_posix_restart_keeps_execv_shape(monkeypatch):
+@pytest.mark.parametrize("frozen", [False, True])
+def test_posix_restart_keeps_execv_shape(monkeypatch, frozen):
     events = []
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(sys, "executable", "/usr/bin/python")
     monkeypatch.setattr(sys, "argv", ["wrapper", "--profile", "default"])
-    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
     monkeypatch.setattr(updates, "_AGENT_DIR", None)
     monkeypatch.setattr(updates, "_wait_until_restart_safe", lambda: {})
     monkeypatch.setattr(updates, "_purge_agent_pycache", lambda _path: None)
@@ -149,7 +157,8 @@ def test_posix_restart_keeps_execv_shape(monkeypatch):
     deadline = time.monotonic() + 2
     while not events and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert events == [("/usr/bin/python", ["/usr/bin/python", "wrapper", "--profile", "default"])]
+    expected_argv = ["wrapper", "--profile", "default"]
+    assert events == [("/usr/bin/python", expected_argv if frozen else ["/usr/bin/python", *expected_argv])]
 
 
 def test_fixture_subprocess_is_not_guarded():
