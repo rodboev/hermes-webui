@@ -12,6 +12,7 @@ import uuid
 import copy
 import hashlib
 import math
+import threading
 from dataclasses import dataclass
 from contextlib import ExitStack, nullcontext
 from bisect import bisect_left
@@ -24,6 +25,10 @@ from api.agent_sessions import normalize_agent_session_source
 logger = logging.getLogger(__name__)
 
 AUTO_TITLE_LABELS = {'untitled', 'new chat'}
+
+_PROVIDER_ERROR_PROJECTION_CACHE: dict[tuple, tuple[list[dict], str]] = {}
+_PROVIDER_ERROR_PROJECTION_CACHE_LOCK = threading.Lock()
+_PROVIDER_ERROR_PROJECTION_CACHE_MAX = 32
 
 
 class RegenerationUnavailable(Exception):
@@ -127,7 +132,19 @@ def _provider_error_session_source(session) -> str:
     }
     if len(values) > 1:
         raise ProviderErrorDismissalUnavailable("ambiguous_source", 403)
-    return next(iter(values), "")
+    if values:
+        return next(iter(values))
+    try:
+        sidecar_path = getattr(session, "path")
+        if (
+            getattr(session, "_loaded_metadata_only", False)
+            or not sidecar_path.exists()
+            or not isinstance(getattr(session, "messages", None), list)
+        ):
+            raise ProviderErrorDismissalUnavailable("unknown_source", 403)
+    except AttributeError as exc:
+        raise ProviderErrorDismissalUnavailable("unknown_source", 403) from exc
+    return "webui"
 
 
 def _provider_error_session_is_idle(session) -> bool:
@@ -154,7 +171,7 @@ def _provider_error_lineage_sessions(session) -> list:
     if getattr(session, "read_only", False) or getattr(session, "is_cli_session", False):
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
     source = _provider_error_session_source(session)
-    if source not in {"", "webui", "fork"} or getattr(session, "pre_compression_snapshot", False):
+    if source not in {"webui", "fork"} or getattr(session, "pre_compression_snapshot", False):
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
     if not _provider_error_session_is_idle(session):
         raise ProviderErrorDismissalUnavailable("session_active", 409)
@@ -176,7 +193,7 @@ def _provider_error_lineage_sessions(session) -> list:
         if not getattr(parent, "pre_compression_snapshot", False):
             break
         parent_source = _provider_error_session_source(parent)
-        if parent_source not in {"", "webui", "fork"}:
+        if parent_source not in {"webui", "fork"}:
             raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
         if not _provider_error_session_is_idle(parent):
             raise ProviderErrorDismissalUnavailable("session_active", 409)
@@ -188,8 +205,36 @@ def _provider_error_lineage_sessions(session) -> list:
     return list(reversed(sessions))
 
 
-def _provider_error_owner_entries(session) -> tuple[list[dict], str]:
+def _provider_error_owner_entries(session, *, projection_cache: bool = False) -> tuple[list[dict], str]:
     owners = _provider_error_lineage_sessions(session)
+    cache_key = None
+    if projection_cache:
+        try:
+            from api.models import _sidecar_stat_signature
+
+            owner_signatures = []
+            for owner in owners:
+                sidecar_path = getattr(owner, "path")
+                signature = _sidecar_stat_signature(sidecar_path)
+                if signature is None:
+                    raise ValueError("sidecar signature unavailable")
+                owner_signatures.append(
+                    (
+                        str(getattr(owner, "session_id", "") or ""),
+                        tuple(signature),
+                        len(getattr(owner, "messages", None) or []),
+                    )
+                )
+            cache_key = (
+                str(getattr(session, "session_id", "") or ""),
+                tuple(owner_signatures),
+            )
+            with _PROVIDER_ERROR_PROJECTION_CACHE_LOCK:
+                cached = _PROVIDER_ERROR_PROJECTION_CACHE.get(cache_key)
+            if cached is not None:
+                return list(cached[0]), cached[1]
+        except (AttributeError, OSError, TypeError, ValueError):
+            cache_key = None
     entries = []
     for owner in owners:
         rows = getattr(owner, "messages", None)
@@ -221,17 +266,12 @@ def _provider_error_owner_entries(session) -> tuple[list[dict], str]:
             "entries": revision_payload,
         }
     )
+    if cache_key is not None:
+        with _PROVIDER_ERROR_PROJECTION_CACHE_LOCK:
+            _PROVIDER_ERROR_PROJECTION_CACHE[cache_key] = (list(entries), revision)
+            while len(_PROVIDER_ERROR_PROJECTION_CACHE) > _PROVIDER_ERROR_PROJECTION_CACHE_MAX:
+                _PROVIDER_ERROR_PROJECTION_CACHE.pop(next(iter(_PROVIDER_ERROR_PROJECTION_CACHE)))
     return entries, revision
-
-
-def _provider_error_owner_rows(session):
-    entries, revision = _provider_error_owner_entries(session)
-    viewed_id = str(getattr(session, "session_id", "") or "")
-    return [
-        entry["row"]
-        for entry in entries
-        if entry["session_id"] == viewed_id
-    ], revision
 
 
 def _provider_error_reference_payload(viewed_session_id, owner_session_id, revision, stable_id, owner_index, row_digest):
@@ -290,18 +330,21 @@ def provider_error_dismissal_ref(session, row_index: int, *, lock_held: bool = F
 def apply_provider_error_dismissal(session, dismiss_ref: str, *, lock_held: bool = False):
     if not isinstance(dismiss_ref, str) or len(dismiss_ref) != 64 or any(c not in "0123456789abcdef" for c in dismiss_ref):
         raise ProviderErrorDismissalUnavailable("invalid_dismiss_ref", 400)
-    entries, _ = _provider_error_owner_entries(session)
-    lock_ids = sorted(
-        {
-            str(getattr(session, "session_id", "") or "")
-            for _ in [0]
-        }
-        | {entry["session_id"] for entry in entries}
-    )
+    initial_owner_ids = [
+        str(getattr(owner, "session_id", "") or "")
+        for owner in _provider_error_lineage_sessions(session)
+    ]
+    lock_ids = sorted(set(initial_owner_ids))
     if not lock_held:
         with ExitStack() as stack:
             for lock_id in lock_ids:
                 stack.enter_context(_get_session_agent_lock(lock_id))
+            fresh_owner_ids = [
+                str(getattr(owner, "session_id", "") or "")
+                for owner in _provider_error_lineage_sessions(session)
+            ]
+            if fresh_owner_ids != initial_owner_ids:
+                raise ProviderErrorDismissalUnavailable("lineage_changed", 409)
             return apply_provider_error_dismissal(session, dismiss_ref, lock_held=True)
 
     entries, revision = _provider_error_owner_entries(session)
@@ -365,7 +408,7 @@ def project_provider_error_dismissal_capabilities(session, projected: dict) -> d
     if not isinstance(messages, list):
         return result
     try:
-        entries, revision = _provider_error_owner_entries(session)
+        entries, revision = _provider_error_owner_entries(session, projection_cache=True)
     except ProviderErrorDismissalUnavailable:
         return result
     used: set[tuple[str, int]] = set()
@@ -419,7 +462,16 @@ def settle_provider_error_session(session, error_message: dict, *, save=True, sn
     try:
         row = copy.deepcopy(error_message)
         if isinstance(row, dict) and not _provider_error_stable_id(row):
-            row["id"] = uuid.uuid4().hex
+            try:
+                from api.streaming import _assign_stable_message_ids
+
+                _assign_stable_message_ids(
+                    [row],
+                    getattr(session, "messages", None) or [],
+                    getattr(session, "context_messages", None) or [],
+                )
+            except Exception:
+                logger.debug("Failed to stamp stable provider-error row id", exc_info=True)
         if not isinstance(getattr(session, "messages", None), list):
             session.messages = []
         session.messages.append(row)

@@ -3959,12 +3959,6 @@ def _assistant_anchor_scene_message_ref(message) -> str:
     return _anchor_scene_message_ref_digest(payload)
 
 
-def _is_provider_error_card_message(message) -> bool:
-    """Compatibility adapter for the canonical session mutation classifier."""
-    from api.session_ops import _provider_error_row_is_dismissible
-    return _provider_error_row_is_dismissible(message)
-
-
 def _dismiss_error_source_rejection(sid: str, handler):
     """Reject foreign sessions before any missing-sidecar materialization."""
     try:
@@ -13939,13 +13933,13 @@ def handle_get(handler, parsed) -> bool:
                 )
                 if revision:
                     raw["regeneration_revision"] = revision
-            redact = redact_session_data(raw)
             if load_messages:
                 try:
                     from api.session_ops import project_provider_error_dismissal_capabilities
-                    redact = project_provider_error_dismissal_capabilities(s, redact)
+                    raw = project_provider_error_dismissal_capabilities(s, raw)
                 except Exception:
                     logger.debug("Provider-error capability projection failed", exc_info=True)
+            redact = redact_session_data(raw)
             _t5 = _time.monotonic()
             if _diag: _diag.stage("t5_after_redact")
             resp = j(handler, {"session": redact})
@@ -16193,6 +16187,10 @@ def handle_post(handler, parsed) -> bool:
         )
 
     if parsed.path == "/api/session/message/dismiss-error":
+        from api.session_ops import (
+            ProviderErrorDismissalUnavailable,
+            apply_provider_error_dismissal,
+        )
         if not isinstance(body, dict):
             return bad(handler, "Request body must be an object", 400)
         sid = body.get("session_id")
@@ -16218,10 +16216,6 @@ def handle_post(handler, parsed) -> bool:
                 return bad(handler, "Session not found", 404)
             if not _session_visible_to_active_profile(getattr(s, "profile", None), handler):
                 return bad(handler, "Session not found", 404)
-            from api.session_ops import (
-                ProviderErrorDismissalUnavailable,
-                apply_provider_error_dismissal,
-            )
             plan = apply_provider_error_dismissal(s, dismiss_ref)
         except ProviderErrorDismissalUnavailable as exc:
             logger.info("provider-error dismissal rejected for %s: %s", sid, exc.code)

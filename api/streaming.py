@@ -11333,6 +11333,7 @@ def _run_agent_streaming(
                         pass
                     else:
                         _settlement_snapshot = copy.deepcopy(s.__dict__)
+                        _base_error_hint = _err_hint
                         _result_public_error = _err_str or f'{_err_label}.'
                         if _err_type == 'compression_snapshot_stale':
                             _result_public_error = (
@@ -11424,6 +11425,15 @@ def _run_agent_streaming(
                             _error_message,
                             snapshot=_settlement_snapshot,
                         )
+                        if not _terminal_session_persisted:
+                            s.active_stream_id = None
+                            s.pending_user_message = None
+                            s.pending_attachments = []
+                            s.pending_started_at = None
+                            s.pending_user_source = None
+                            _error_payload['hint'] = _base_error_hint
+                            _error_payload.pop('compression_recovery', None)
+                            _error_payload.pop('recommended_recovery_action', None)
                         if _terminal_session_persisted:
                             _error_payload['session'] = redact_session_data(
                                 _session_payload_with_full_messages(s, tool_calls=s.tool_calls)
@@ -12686,6 +12696,7 @@ def _run_agent_streaming(
                     return
 
                 _settlement_snapshot = copy.deepcopy(s.__dict__)
+                _base_exception_hint = _exc_hint
                 if _turn_pending_source == 'process_wakeup':
                     _recorded_pause = record_process_wakeup_provider_unavailable_pause(
                         s,
@@ -12760,6 +12771,15 @@ def _run_agent_streaming(
                     _error_message,
                     snapshot=_settlement_snapshot,
                 )
+                if not _terminal_session_persisted:
+                    s.active_stream_id = None
+                    s.pending_user_message = None
+                    s.pending_attachments = []
+                    s.pending_started_at = None
+                    s.pending_user_source = None
+                    _error_payload['hint'] = _base_exception_hint
+                    _error_payload.pop('compression_recovery', None)
+                    _error_payload.pop('recommended_recovery_action', None)
                 if not ephemeral:
                     try:
                         append_turn_journal_event_for_stream(
@@ -12773,7 +12793,7 @@ def _run_agent_streaming(
                         )
                     except Exception:
                         logger.debug("Failed to append interrupted turn journal event", exc_info=True)
-            if _terminal_session_persisted:
+            if _terminal_session_persisted and _exc_type not in {'cancelled', 'interrupted'}:
                 _error_payload['session'] = redact_session_data(
                     _session_payload_with_full_messages(s, tool_calls=s.tool_calls)
                 )

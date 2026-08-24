@@ -1,7 +1,6 @@
 """Production-composed contract tests for issue #6610 RESPEC-4."""
 
 import copy
-from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlparse
@@ -43,16 +42,14 @@ class _FakeSession:
 
 def _plan(session, index=0):
     from api.session_ops import provider_error_dismissal_plan
-    with patch("api.session_ops.regeneration_state", return_value=(session.messages, [])):
-        return provider_error_dismissal_plan(session, index)
+    return provider_error_dismissal_plan(session, index)
 
 
 def test_reference_is_fixed_size_for_long_ascii_and_multibyte_content():
     from api.session_ops import provider_error_dismissal_plan
     for content in ["a" * 8191, "b" * 8192, "c" * 9000, "x" * 65536, "é" * 9000]:
         session = _FakeSession([_message(content)])
-        with patch("api.session_ops.regeneration_state", return_value=(session.messages, [])):
-            plan = provider_error_dismissal_plan(session, 0)
+        plan = provider_error_dismissal_plan(session, 0)
         assert len(plan.dismiss_ref) == 64 and plan.dismiss_ref == plan.dismiss_ref.lower()
 
 
@@ -61,8 +58,7 @@ def test_dismissal_changes_only_owner_and_uses_private_save_flags():
     session = _FakeSession([{"role": "user", "content": "prompt"}, _message(), {"role": "assistant", "content": "later"}])
     plan = _plan(session, 1)
     with patch.object(session, "save", wraps=session.save) as save:
-        with patch("api.session_ops.regeneration_state", return_value=(session.messages, [])):
-            apply_provider_error_dismissal(session, plan.dismiss_ref)
+        apply_provider_error_dismissal(session, plan.dismiss_ref)
     assert session.messages[1]["_dismissed"] is True
     assert session.messages[0]["content"] == "prompt" and session.messages[2]["content"] == "later"
     save.assert_called_once_with(touch_updated_at=False, skip_index=True)
@@ -80,8 +76,7 @@ def test_forced_save_failure_restores_exact_absent_or_false_marker(initial):
     plan = _plan(session)
     before = copy.deepcopy(session.__dict__)
     with pytest.raises(ProviderErrorDismissalUnavailable):
-        with patch("api.session_ops.regeneration_state", return_value=(session.messages, [])):
-            apply_provider_error_dismissal(session, plan.dismiss_ref)
+        apply_provider_error_dismissal(session, plan.dismiss_ref)
     assert session.messages == before["messages"]
     assert session.updated_at == before["updated_at"]
     session.save_error = None
@@ -97,7 +92,7 @@ def test_stale_duplicate_cross_session_and_malformed_references_fail_closed():
     with pytest.raises(ProviderErrorDismissalUnavailable):
         apply_provider_error_dismissal(second, first_plan.dismiss_ref)
     first.messages.insert(0, {"role": "user", "content": "stale"})
-    with patch("api.session_ops.regeneration_state", return_value=(first.messages, [])), pytest.raises(ProviderErrorDismissalUnavailable):
+    with pytest.raises(ProviderErrorDismissalUnavailable):
         apply_provider_error_dismissal(first, first_plan.dismiss_ref)
     with pytest.raises(ProviderErrorDismissalUnavailable):
         apply_provider_error_dismissal(first, "x" * 64)
@@ -111,6 +106,9 @@ def test_control_imported_busy_and_ambiguous_rows_have_no_capability():
     assert provider_error_dismissal_ref(_FakeSession([_message()], active_stream_id="run"), 0) is None
     assert provider_error_dismissal_ref(_FakeSession([_message()], pending_started_at=12.0), 0) is None
     assert provider_error_dismissal_ref(_FakeSession([_message()], pending_attachments=[{"name": "x"}]), 0) is None
+    unknown = _FakeSession([_message()])
+    unknown.session_source = unknown.raw_source = unknown.source_tag = None
+    assert provider_error_dismissal_ref(unknown, 0) is None
 
 
 def test_repeated_reference_is_idempotent_after_the_row_is_dismissed():
@@ -190,10 +188,11 @@ def test_real_sidecar_reload_stays_clean_after_failed_dismissal_then_unrelated_s
     session.save(touch_updated_at=False, skip_index=True)
     loaded = models.Session.load(session.session_id)
     plan = provider_error_dismissal_plan(loaded, 0)
-    with patch.object(loaded, "save", side_effect=OSError("sidecar unavailable")):
+    with patch.object(models, "_safe_replace", side_effect=OSError("sidecar unavailable")):
         with pytest.raises(ProviderErrorDismissalUnavailable):
             apply_provider_error_dismissal(loaded, plan.dismiss_ref)
     assert models.Session.load(session.session_id).messages[0].get("_dismissed") is None
+    assert not list(tmp_path.glob("*.tmp.*"))
     loaded.messages.append({"role": "user", "content": "later"})
     loaded.save(touch_updated_at=False, skip_index=True)
     reloaded = models.Session.load(session.session_id)
@@ -207,7 +206,7 @@ def test_settlement_helper_rolls_back_failed_producer_and_stamps_successful_rows
     session.save_error = OSError("disk")
     assert settle_provider_error_session(session, _message()) is False and session.messages == []
     session.save_error = None
-    assert settle_provider_error_session(session, _message()) is True and session.messages[0]["id"]
+    assert settle_provider_error_session(session, _message()) is True and isinstance(session.messages[0].get("id"), int)
 
 
 def test_route_accepts_only_capability_reference():
@@ -223,9 +222,7 @@ def test_route_accepts_only_capability_reference():
     with patch.object(routes, "read_body", return_value=body), patch.object(routes, "_check_csrf", return_value=True), \
          patch.object(routes, "_guard_request_session_visibility", return_value=True), patch.object(routes, "_get_or_materialize_session", return_value=session), \
          patch.object(routes, "_session_visible_to_active_profile", return_value=True), patch.object(routes, "j", side_effect=response), \
-         patch.object(routes, "bad", side_effect=response), patch("api.config._evict_session_agent"), \
-         patch("api.session_ops.regeneration_state", return_value=(session.messages, [])), \
-         patch("api.session_ops._get_session_agent_lock", return_value=nullcontext()):
+         patch.object(routes, "bad", side_effect=response), patch("api.config._evict_session_agent"):
         assert routes.handle_post(handler, urlparse("/api/session/message/dismiss-error")) is True
     assert captured["status"] == 200 and captured["data"] == {"ok": True}
 
@@ -234,8 +231,18 @@ def test_public_projection_contains_only_reference_and_no_private_owner_fields()
     from api.session_ops import project_provider_error_dismissal_capabilities
     session = _FakeSession([_message()])
     plan = _plan(session)
-    with patch("api.session_ops.regeneration_state", return_value=(session.messages, [])):
-        projected = project_provider_error_dismissal_capabilities(session, {"messages": copy.deepcopy(session.messages)})
+    projected = project_provider_error_dismissal_capabilities(session, {"messages": copy.deepcopy(session.messages)})
     row = projected["messages"][0]
     assert row["_provider_error_dismiss_ref"] == plan.dismiss_ref
     assert not {"owner_session_id", "owner_index", "row_digest"} & set(row)
+
+
+def test_redacted_http_projection_keeps_the_capability_from_the_raw_owner_row():
+    from api.helpers import redact_session_data
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    session = _FakeSession([_message(provider_details="Bearer secret-token")])
+    raw = {"messages": copy.deepcopy(session.messages)}
+    projected = project_provider_error_dismissal_capabilities(session, raw)
+    public = redact_session_data(projected)
+    assert public["messages"][0]["_provider_error_dismiss_ref"]
