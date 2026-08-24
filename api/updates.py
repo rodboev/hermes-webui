@@ -76,6 +76,29 @@ _GIT_LOCK_SIGNATURES = (
     'another git process seems to be running',
     'unable to create .git/index.lock',
 )
+
+
+def _windows_restart_spawn(args, **kwargs):
+    """Spawn the replacement process for a Windows self-restart."""
+    return subprocess.Popen(args, **kwargs)
+
+
+def _windows_restart_exit(code):
+    """Exit the old process after a Windows replacement is running."""
+    os._exit(code)
+
+
+def _windows_restart_command():
+    """Return the canonical replacement command for the current packaging mode."""
+    if getattr(sys, "frozen", False):
+        return list(sys.argv)
+
+    executable = sys.executable
+    if executable.lower().endswith("python.exe"):
+        windowless_executable = executable[:-4] + "w.exe"
+        if os.path.isfile(windowless_executable):
+            executable = windowless_executable
+    return [executable, str(REPO_ROOT / "server.py")]
 # Lock files we previously enumerated for auto-removal in v2. v2.2 no longer
 # removes anything on the server, so the enumerable list is no longer needed;
 # ``_inventory_locks`` reports whatever ``.git/**/*.lock`` files currently exist
@@ -1757,75 +1780,39 @@ def _schedule_restart(delay: float = 2.0) -> None:
             try:
                 # Re-exec into the just-pulled image.
                 #
-                # sys.argv[0]'s meaning depends on how the server was launched:
-                #
-                #   * Source checkout (`python server.py` via bootstrap.py /
-                #     ctl.sh / start.sh): sys.argv[0] is the SCRIPT path
-                #     (e.g. "/root/hermes-webui/server.py"), sys.executable is
-                #     the interpreter. CPython treats argv[1] as the script to
-                #     run, so we must pass [sys.executable] + sys.argv.
-                #
-                #   * Frozen/packaged build (PyInstaller, embedded zipapp,
-                #     etc.): sys.argv[0] == sys.executable == <binary>. Passing
-                #     [sys.executable] + sys.argv would re-insert the binary as
-                #     argv[1] — the kernel launches it, the interpreter treats
-                #     the binary itself as the "script" to run, and execv
-                #     effectively becomes a recursive no-op that never reaches
-                #     bind(), leaving the WebUI stuck "offline" after every
-                #     self-update. Pass argv as-is instead.
-                #
-                # Distinguish the two cases with sys.frozen (set by
-                # PyInstaller / zipapp / similar). For source checkouts the
-                # `[sys.executable] + sys.argv` form is the canonical CPython
-                # re-exec idiom (same shape Flask/Django reloaders use) and
-                # is the correct path.
-                #
                 # IMPORTANT: On Windows, os.execv() does NOT replace the
                 # current process — it spawns a new process while the old
                 # one keeps running.  This causes "address already in use"
                 # because the old process still holds the port.  On Windows
-                # we use subprocess.Popen() + os._exit() instead.
+                # we use a detached spawn + exit instead.
                 if sys.platform == 'win32':
-                    import subprocess
-                    if getattr(sys, "frozen", False):
-                        args = sys.argv
-                    else:
-                        args = [sys.executable] + sys.argv
-                    # Prefer pythonw.exe over python.exe so the restarted
-                    # server does not create a visible console window.
-                    # sys.executable may point at python.exe (console
-                    # subsystem); substitute pythonw.exe if it exists
-                    # next to python.exe.
-                    _exe = sys.executable
-                    if _exe.lower().endswith('python.exe'):
-                        _w_exe = _exe[:-4] + 'w.exe'  # python.exe -> pythonw.exe
-                        if os.path.isfile(_w_exe):
-                            if getattr(sys, "frozen", False):
-                                args = sys.argv
-                            else:
-                                args = [_w_exe] + sys.argv
+                    args = _windows_restart_command()
                     # Start new process fully detached with NO console
                     # window.  DETACHED_PROCESS alone is not sufficient
                     # on modern Windows — without CREATE_NO_WINDOW a
                     # python.exe (console-subsystem) child still flashes
                     # an empty terminal window, which the user then
                     # manually kills (taking the WebUI with it).
-                    subprocess.Popen(
-                        args,
-                        cwd=os.getcwd(),
-                        creationflags=(
-                            subprocess.DETACHED_PROCESS
-                            | subprocess.CREATE_NEW_PROCESS_GROUP
-                            | subprocess.CREATE_NO_WINDOW
-                        ),
-                        close_fds=True,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    try:
+                        _windows_restart_spawn(
+                            args,
+                            cwd=os.getcwd(),
+                            creationflags=(
+                                subprocess.DETACHED_PROCESS
+                                | subprocess.CREATE_NEW_PROCESS_GROUP
+                                | subprocess.CREATE_NO_WINDOW
+                            ),
+                            close_fds=True,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    except Exception:
+                        logger.exception("Windows WebUI restart spawn failed")
+                        return
                     # Exit immediately — the port is released as soon as
                     # this process dies, allowing the new process to bind.
-                    os._exit(0)
+                    _windows_restart_exit(0)
                 else:
                     if getattr(sys, "frozen", False):
                         os.execv(sys.executable, sys.argv)

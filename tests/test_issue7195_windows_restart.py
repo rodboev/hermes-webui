@@ -1,0 +1,147 @@
+"""Behavioral regression coverage for the Windows restart entrypoint."""
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import time
+
+import pytest
+
+import api.updates as updates
+
+
+FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "issue7195_windows_restart.json"
+REPO = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _run_restart(monkeypatch, *, argv, frozen=False, pythonw=False, spawn=None, exit=None):
+    events = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "executable", r"C:\Python\python.exe")
+    monkeypatch.setattr(sys, "argv", list(argv))
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr(updates, "REPO_ROOT", REPO)
+    monkeypatch.setattr(updates, "_AGENT_DIR", None)
+    monkeypatch.setattr(updates, "_wait_until_restart_safe", lambda: events.append("wait") or {"restart_blocked": False})
+    monkeypatch.setattr(updates, "_purge_agent_pycache", lambda path: events.append(("purge", path)))
+    monkeypatch.setattr(updates.subprocess, "DETACHED_PROCESS", 1, raising=False)
+    monkeypatch.setattr(updates.subprocess, "CREATE_NEW_PROCESS_GROUP", 2, raising=False)
+    monkeypatch.setattr(updates.subprocess, "CREATE_NO_WINDOW", 4, raising=False)
+    monkeypatch.setattr(updates.subprocess, "DEVNULL", subprocess.DEVNULL)
+    monkeypatch.setattr(updates.os.path, "isfile", lambda path: pythonw)
+
+    def record_spawn(args, **kwargs):
+        events.append(("spawn", list(args), kwargs))
+        if spawn:
+            spawn(args, **kwargs)
+
+    def record_exit(code):
+        events.append(("exit", code))
+        if exit:
+            exit(code)
+
+    monkeypatch.setattr(updates, "_windows_restart_spawn", record_spawn)
+    monkeypatch.setattr(updates, "_windows_restart_exit", record_exit)
+    updates._schedule_restart(delay=0)
+    deadline = time.monotonic() + 2
+    while not any(event[0] == "spawn" for event in events if isinstance(event, tuple)):
+        if time.monotonic() >= deadline:
+            pytest.fail(f"restart worker did not spawn: {events!r}")
+        time.sleep(0.01)
+    return events
+
+
+def test_reported_pytest_argv_restarts_canonical_server(monkeypatch):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    events = _run_restart(monkeypatch, argv=fixture["launch"]["argv_shape"])
+    spawn = next(event for event in events if event[0] == "spawn")
+    assert spawn[1] == [r"C:\Python\python.exe", str(REPO / "server.py")]
+    assert not any(token in {"pytest", "tests/test_updates.py", "tests/test_update_checker.py", "tests/test_update_channels.py"} for token in spawn[1])
+    assert events[-1] == ("exit", 0)
+
+
+@pytest.mark.parametrize("argv", [
+    ["server.py"],
+    ["python", "-m", "server"],
+    ["hermes-webui", "--profile", "default"],
+    ["wrapper", "--run", "server.py"],
+])
+def test_source_restart_always_targets_server(monkeypatch, argv):
+    events = _run_restart(monkeypatch, argv=argv)
+    assert next(event for event in events if event[0] == "spawn")[1] == [r"C:\Python\python.exe", str(REPO / "server.py")]
+
+
+def test_frozen_restart_preserves_argv(monkeypatch):
+    argv = [r"C:\Apps\Hermes\hermes.exe", "--profile", "default"]
+    assert next(event for event in _run_restart(monkeypatch, argv=argv, frozen=True) if event[0] == "spawn")[1] == argv
+
+
+def test_windows_restart_spawns_once_then_exits_once(monkeypatch):
+    events = _run_restart(monkeypatch, argv=["pytest", "tests/test_issue7195_windows_restart.py"], pythonw=True)
+    assert [event[0] for event in events if isinstance(event, tuple) and event[0] in {"spawn", "exit"}] == ["spawn", "exit"]
+    spawn = next(event for event in events if event[0] == "spawn")
+    assert spawn[1][0].endswith("pythonw.exe")
+    assert spawn[2]["cwd"] == os.getcwd()
+    assert spawn[2]["creationflags"] == 7
+    assert spawn[2]["close_fds"] is True
+    assert spawn[2]["stdin"] is subprocess.DEVNULL
+    assert spawn[2]["stdout"] is subprocess.DEVNULL
+    assert spawn[2]["stderr"] is subprocess.DEVNULL
+
+
+def test_windows_spawn_failure_keeps_current_process(monkeypatch, caplog):
+    def fail(*_args, **_kwargs):
+        raise OSError("spawn failure")
+
+    messages = []
+    monkeypatch.setattr(updates.logger, "exception", lambda message: messages.append(message))
+    events = _run_restart(monkeypatch, argv=["server.py"], spawn=fail)
+    assert not any(event[0] == "exit" for event in events if isinstance(event, tuple))
+    assert messages == ["Windows WebUI restart spawn failed"]
+
+
+def test_pytest_session_restart_operations_are_inert():
+    import tests.conftest as conftest
+
+    assert updates._windows_restart_spawn is conftest._pytest_session_safe_windows_restart_spawn
+    assert updates._windows_restart_exit is conftest._pytest_session_safe_windows_restart_exit
+
+
+def test_local_restart_recorders_restore_session_guards(monkeypatch):
+    import tests.conftest as conftest
+
+    monkeypatch.setattr(updates, "_windows_restart_spawn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updates, "_windows_restart_exit", lambda *_args: None)
+    monkeypatch.undo()
+    assert updates._windows_restart_spawn is conftest._pytest_session_safe_windows_restart_spawn
+    assert updates._windows_restart_exit is conftest._pytest_session_safe_windows_restart_exit
+
+
+def test_posix_restart_keeps_execv_shape(monkeypatch):
+    events = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "executable", "/usr/bin/python")
+    monkeypatch.setattr(sys, "argv", ["wrapper", "--profile", "default"])
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setattr(updates, "_AGENT_DIR", None)
+    monkeypatch.setattr(updates, "_wait_until_restart_safe", lambda: {})
+    monkeypatch.setattr(updates, "_purge_agent_pycache", lambda _path: None)
+    monkeypatch.setattr(os, "execv", lambda exe, argv: events.append((exe, argv)))
+    updates._schedule_restart(delay=0)
+    deadline = time.monotonic() + 2
+    while not events and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert events == [("/usr/bin/python", ["/usr/bin/python", "wrapper", "--profile", "default"])]
+
+
+def test_fixture_subprocess_is_not_guarded():
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    assert child.wait(timeout=5) == 0
+
+
+def test_restart_callers_remain_complete():
+    source = (REPO / "api" / "updates.py").read_text(encoding="utf-8")
+    assert source.count("_schedule_restart()") == 3

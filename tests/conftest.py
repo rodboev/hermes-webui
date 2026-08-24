@@ -469,6 +469,26 @@ def _pytest_session_safe_execv(_exe, _args):  # pragma: no cover — never calle
 
 os.execv = _pytest_session_safe_execv
 
+# The Windows restart path cannot use os.execv, so protect its two private
+# operations as well.  Ordinary subprocesses, including the test server,
+# remain real because only api.updates' restart seams are replaced.
+from api import updates as _updates
+
+_real_windows_restart_spawn = _updates._windows_restart_spawn
+_real_windows_restart_exit = _updates._windows_restart_exit
+
+
+def _pytest_session_safe_windows_restart_spawn(_args, **_kwargs):  # pragma: no cover
+    return None
+
+
+def _pytest_session_safe_windows_restart_exit(_code):  # pragma: no cover
+    return None
+
+
+_updates._windows_restart_spawn = _pytest_session_safe_windows_restart_spawn
+_updates._windows_restart_exit = _pytest_session_safe_windows_restart_exit
+
 # ── Hermetic network isolation ─────────────────────────────────────────────
 # Tests must not reach the public internet. Outbound to Anthropic / OpenAI /
 # Amazon / OpenRouter / etc. is forbidden by default. The test suite already
