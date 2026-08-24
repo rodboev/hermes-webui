@@ -6,6 +6,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -19,6 +20,8 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 
 def _run_restart(monkeypatch, *, argv, frozen=False, pythonw=False, spawn=None, exit=None):
     events = []
+    exit_event = threading.Event()
+    spawn_failed = []
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "executable", r"C:\Python\python.exe")
     monkeypatch.setattr(sys, "argv", list(argv))
@@ -31,15 +34,25 @@ def _run_restart(monkeypatch, *, argv, frozen=False, pythonw=False, spawn=None, 
     monkeypatch.setattr(updates.subprocess, "CREATE_NEW_PROCESS_GROUP", 2, raising=False)
     monkeypatch.setattr(updates.subprocess, "CREATE_NO_WINDOW", 4, raising=False)
     monkeypatch.setattr(updates.subprocess, "DEVNULL", subprocess.DEVNULL)
-    monkeypatch.setattr(updates.os.path, "isfile", lambda path: pythonw)
+    real_isfile = updates.os.path.isfile
+    monkeypatch.setattr(
+        updates.os.path,
+        "isfile",
+        lambda path: pythonw if str(path).lower().endswith("pythonw.exe") else real_isfile(path),
+    )
 
     def record_spawn(args, **kwargs):
         events.append(("spawn", list(args), kwargs))
         if spawn:
-            spawn(args, **kwargs)
+            try:
+                spawn(args, **kwargs)
+            except BaseException:
+                spawn_failed.append(True)
+                raise
 
     def record_exit(code):
         events.append(("exit", code))
+        exit_event.set()
         if exit:
             exit(code)
 
@@ -51,6 +64,8 @@ def _run_restart(monkeypatch, *, argv, frozen=False, pythonw=False, spawn=None, 
         if time.monotonic() >= deadline:
             pytest.fail(f"restart worker did not spawn: {events!r}")
         time.sleep(0.01)
+    if not spawn_failed and not exit_event.wait(timeout=2):
+        pytest.fail(f"restart worker did not exit after spawning: {events!r}")
     return events
 
 

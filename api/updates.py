@@ -1740,9 +1740,9 @@ def _schedule_restart(delay: float = 2.0) -> None:
     loaded on the next request, rather than running with a mix of old and
     new Python modules in sys.modules.
 
-    os.execv() replaces the current process image with a fresh interpreter
-    running the same argv — sessions are preserved on disk, the HTTP port
-    is reclaimed within the delay window, and the client's own
+    The restart replaces the current process image or starts the canonical
+    server entrypoint, depending on platform and packaging mode. Sessions are
+    preserved on disk, the HTTP port is reclaimed within the delay window, and the client's own
     ``setTimeout(() => location.reload(), 2500)`` lands after the restart.
 
     Coordinates with ``_apply_lock``: when the user updates both webui
@@ -1819,9 +1819,8 @@ def _schedule_restart(delay: float = 2.0) -> None:
                     else:
                         os.execv(sys.executable, [sys.executable] + sys.argv)
             except Exception:
-                # Last-resort: if execv fails for any reason, just exit so the
-                # process supervisor (start.sh / Docker) restarts us.
-                os._exit(0)
+                # Last-resort: let the process supervisor restart us.
+                _windows_restart_exit(0)
 
     threading.Thread(target=_do, daemon=True).start()
 
@@ -2393,11 +2392,8 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
             }
 
     # Schedule a self-restart so the updated code is loaded fresh.  A plain
-    # git pull leaves stale Python modules in sys.modules — agent imports that
-    # reference new symbols (functions, classes) added in the update will fail
-    # on the next request with AttributeError / ImportError.  os.execv() re-
-    # execs the same interpreter with the same argv, picking up the new code
-    # cleanly without requiring the user to restart manually.
+    # git pull leaves stale Python modules in sys.modules. Replacing the process
+    # loads the updated code cleanly without requiring a manual restart.
     #
     # The 2 s delay gives the HTTP response time to flush to the client before
     # the process replaces itself.  The client already does
