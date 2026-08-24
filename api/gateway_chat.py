@@ -807,7 +807,7 @@ def stop_gateway_run(run_id: str) -> bool:
         return False
 
 
-def _settle_gateway_terminal_error(session_id, stream_id, workspace, model, model_provider, terminal_error):
+def _settle_gateway_terminal_error(session_id, stream_id, workspace, model, model_provider, terminal_error, *, error_type_override=None):
     from api.streaming import (
         _classify_provider_error,
         _materialize_pending_user_turn_before_error,
@@ -822,6 +822,12 @@ def _settle_gateway_terminal_error(session_id, stream_id, workspace, model, mode
         if not _stream_writeback_is_current(session, stream_id):
             return None
         error_classification = _classify_provider_error(terminal_error)
+        if error_type_override:
+            error_classification = {
+                "label": "Gateway returned no response",
+                "type": error_type_override,
+                "hint": "Check that Hermes Gateway API server is running and reachable.",
+            }
         error_payload = _provider_error_payload(
             terminal_error,
             error_classification["type"],
@@ -852,21 +858,15 @@ def _settle_gateway_terminal_error(session_id, stream_id, workspace, model, mode
             error_message["_turnDuration"] = turn_duration
         if error_payload.get("details"):
             error_message["provider_details"] = error_payload["details"]
-        if not isinstance(session.messages, list):
-            session.messages = []
-        session.messages.append(error_message)
         session.workspace = str(workspace)
         session.model = model
         session.model_provider = model_provider
-        terminal_session_persisted = False
-        try:
-            session.save()
-            terminal_session_persisted = True
-        except Exception:
-            logger.debug("Failed to persist gateway terminal error settlement", exc_info=True)
-        error_payload["session"] = redact_session_data(
-            _session_payload_with_full_messages(session, tool_calls=[])
-        )
+        from api.session_ops import settle_provider_error_session
+        terminal_session_persisted = settle_provider_error_session(session, error_message)
+        if terminal_session_persisted:
+            error_payload["session"] = redact_session_data(
+                _session_payload_with_full_messages(session, tool_calls=[])
+            )
         error_payload["session_id"] = session.session_id
         error_payload["terminal_session_persisted"] = terminal_session_persisted
         if terminal_session_persisted:
@@ -1258,12 +1258,13 @@ def _run_gateway_chat_streaming(
             put_gateway_event("apperror", error_payload)
             return
         if not assistant_text:
-            put_gateway_event("apperror", {
-                "label": "Gateway returned no response",
-                "type": "gateway_empty_response",
-                "message": "Gateway returned no assistant message for this turn.",
-                "hint": "Check that Hermes Gateway API server is running and reachable.",
-            })
+            error_payload = _settle_gateway_terminal_error(
+                session_id, stream_id, workspace, model, model_provider,
+                "Gateway returned no assistant message for this turn.",
+                error_type_override="gateway_empty_response",
+            )
+            if error_payload is not None:
+                put_gateway_event("apperror", error_payload)
             return
         with _get_session_agent_lock(session_id):
             s = get_session(session_id)

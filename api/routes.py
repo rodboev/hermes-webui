@@ -3980,37 +3980,9 @@ _PROVIDER_ERROR_TYPES = frozenset({
 
 
 def _is_provider_error_card_message(message) -> bool:
-    """Return whether a row is a user-curatable terminal provider error."""
-    if not isinstance(message, dict) or message.get("role") != "assistant":
-        return False
-    if message.get("_error") is not True:
-        return False
-    if (
-        "_compressionRecovery" in message
-        or "_statusCard" in message
-        or message.get("recovery_control") is True
-        or message.get("_pending_journal_recovery") is True
-        or message.get("type") == "interrupted"
-        or bool(message.get("interruption_cause"))
-    ):
-        return False
-    provider_error_type = str(message.get("_provider_error_type") or "").strip().lower()
-    if provider_error_type:
-        return provider_error_type in _PROVIDER_ERROR_TYPES
-    if "provider_details" not in message:
-        return False
-    label = str(message.get("provider_details_label") or "").strip().lower()
-    if label in _PROVIDER_ERROR_CONTROL_LABELS:
-        return False
-    content = str(message.get("content") or "").strip().lower()
-    return not content.startswith((
-        "**task cancelled:",
-        "**task canceled:",
-        "**response interrupted:",
-        "**connection interrupted:",
-        "**tool iteration limit reached:",
-        "**context compression exhausted:",
-    ))
+    """Compatibility adapter for the canonical session mutation classifier."""
+    from api.session_ops import _provider_error_row_is_dismissible
+    return _provider_error_row_is_dismissible(message)
 
 
 def _dismiss_error_source_rejection(sid: str, handler):
@@ -13988,6 +13960,12 @@ def handle_get(handler, parsed) -> bool:
                 if revision:
                     raw["regeneration_revision"] = revision
             redact = redact_session_data(raw)
+            if not _truncated and load_messages:
+                try:
+                    from api.session_ops import project_provider_error_dismissal_capabilities
+                    redact = project_provider_error_dismissal_capabilities(s, redact)
+                except Exception:
+                    logger.debug("Provider-error capability projection failed", exc_info=True)
             _t5 = _time.monotonic()
             if _diag: _diag.stage("t5_after_redact")
             resp = j(handler, {"session": redact})
@@ -16240,33 +16218,19 @@ def handle_post(handler, parsed) -> bool:
         sid = body.get("session_id")
         if not isinstance(sid, str) or not sid.strip():
             return bad(handler, "session_id must be a string", 400)
-        message_index = body.get("message_index")
-        if isinstance(message_index, bool) or not isinstance(message_index, int):
-            return bad(handler, "message_index must be an integer", 400)
-        if message_index < 0 or message_index > 1_000_000:
-            return bad(handler, "message_index is outside the supported range", 400)
-        expected = body.get("expected_message")
-        if not isinstance(expected, dict):
-            return bad(handler, "expected_message must be an object", 400)
-        if set(expected) - {"role", "content", "timestamp"}:
-            return bad(handler, "expected_message contains unsupported fields", 400)
-        if expected.get("role") != "assistant" or not isinstance(expected.get("content"), str):
-            return bad(handler, "expected_message must contain assistant role and text content", 400)
-        if not isinstance(expected.get("timestamp"), (str, int, float, type(None))) or isinstance(expected.get("timestamp"), bool):
-            return bad(handler, "expected_message.timestamp has an invalid type", 400)
-        try:
-            if len(json.dumps(expected, ensure_ascii=False, separators=(",", ":"))) > 8_192:
-                return bad(handler, "expected_message is too large", 400)
-        except (TypeError, ValueError):
-            return bad(handler, "expected_message is invalid", 400)
+        dismiss_ref = body.get("dismiss_ref")
+        if set(body) != {"session_id", "dismiss_ref"}:
+            return bad(handler, "Request must contain only session_id and dismiss_ref", 400)
+        if not isinstance(dismiss_ref, str) or len(dismiss_ref) != 64 or any(
+            char not in "0123456789abcdef" for char in dismiss_ref
+        ):
+            return bad(handler, "dismiss_ref must be a 64-character lowercase hex string", 400)
 
         try:
             source_rejection = _dismiss_error_source_rejection(sid, handler)
             if source_rejection is not None:
                 return bad(handler, *source_rejection)
             with _get_session_agent_lock(sid):
-                if _session_is_subagent_view_only(sid):
-                    return bad(handler, "Subagent sessions are view-only and cannot be modified from WebUI", 400)
                 try:
                     s = _get_or_materialize_session(sid, allow_materialize=False)
                 except PermissionError:
@@ -16275,43 +16239,21 @@ def handle_post(handler, parsed) -> bool:
                     return bad(handler, "Session not found", 404)
                 if not _session_visible_to_active_profile(getattr(s, "profile", None), handler):
                     return bad(handler, "Session not found", 404)
-                if (
-                    getattr(s, "read_only", False)
-                    or getattr(s, "is_cli_session", False)
-                    or _is_messaging_session_record(s)
-                ):
-                    return bad(handler, "Read-only imported sessions cannot be modified", 403)
-                if (
-                    getattr(s, "active_stream_id", None)
-                    or getattr(s, "pending_user_message", None)
-                    or getattr(s, "pending_started_at", None)
-                    or getattr(s, "has_pending_user_message", False)
-                ):
-                    return bad(handler, "Cannot dismiss an error while the session is active", 409)
-                messages = getattr(s, "messages", None)
-                if not isinstance(messages, list) or not 0 <= message_index < len(messages):
-                    return bad(handler, "Message not found", 404)
-                message = messages[message_index]
-                if not _is_provider_error_card_message(message):
-                    return bad(handler, "Message is not a dismissible provider error", 409)
-                if _assistant_anchor_scene_message_ref(message) != _assistant_anchor_scene_message_ref(expected):
-                    return bad(handler, "Message changed; reload the session and try again", 409)
-                if not message.get("_dismissed"):
-                    message["_dismissed"] = True
-                    s.save()
+                from api.session_ops import (
+                    ProviderErrorDismissalUnavailable,
+                    apply_provider_error_dismissal,
+                )
+                apply_provider_error_dismissal(s, dismiss_ref, lock_held=True)
+        except ProviderErrorDismissalUnavailable as exc:
+            logger.info("provider-error dismissal rejected for %s: %s", sid, exc.code)
+            return bad(handler, "Could not dismiss the provider error card", exc.status)
         except (OSError, RuntimeError, ValueError) as exc:
             logger.warning("provider-error dismissal failed for %s: %s", sid, exc)
             return bad(handler, "Could not persist the dismissal", 409)
 
         from api.config import _evict_session_agent
         _evict_session_agent(sid)
-        return j(
-            handler,
-            {
-                "ok": True,
-                "session": public_session_projection(s.compact() | {"messages": s.messages}),
-            },
-        )
+        return j(handler, {"ok": True})
 
     if parsed.path == "/api/session/branch":
         # Fork a conversation from any message point (#465).

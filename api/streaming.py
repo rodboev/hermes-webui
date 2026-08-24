@@ -180,6 +180,11 @@ def _session_payload_with_full_messages(session, *, tool_calls=None):
             raw.pop('regeneration_revision', None)
     except Exception:
         raw.pop('regeneration_revision', None)
+    try:
+        from api.session_ops import project_provider_error_dismissal_capabilities
+        raw = project_provider_error_dismissal_capabilities(session, raw)
+    except Exception:
+        logger.debug("Failed to project provider-error dismissal capability", exc_info=True)
     return raw
 
 
@@ -11412,14 +11417,13 @@ def _run_agent_streaming(
                             _error_message['provider_details_label'] = 'Interruption details'
                         elif _err_type == 'tool_limit_reached':
                             _error_message['provider_details_label'] = 'Terminal state details'
-                        s.messages.append(_error_message)
-                        try:
-                            s.save()
-                        except Exception:
-                            pass
-                        _error_payload['session'] = redact_session_data(
-                            _session_payload_with_full_messages(s, tool_calls=s.tool_calls)
-                        )
+                        from api.session_ops import settle_provider_error_session
+                        _terminal_session_persisted = settle_provider_error_session(s, _error_message)
+                        if _terminal_session_persisted:
+                            _error_payload['session'] = redact_session_data(
+                                _session_payload_with_full_messages(s, tool_calls=s.tool_calls)
+                            )
+                        _error_payload['terminal_session_persisted'] = _terminal_session_persisted
                         _error_payload['session_id'] = s.session_id
                         _error_payload['old_session_id'] = _compression_origin_session_id
                         if _compression_continuation_session_id is not None:
@@ -12744,11 +12748,8 @@ def _run_agent_streaming(
                     _error_message['provider_details_label'] = 'Cancellation details'
                 elif _exc_type == 'interrupted':
                     _error_message['provider_details_label'] = 'Interruption details'
-                s.messages.append(_error_message)
-                try:
-                    s.save()
-                except Exception:
-                    pass
+                from api.session_ops import settle_provider_error_session
+                _terminal_session_persisted = settle_provider_error_session(s, _error_message)
                 if not ephemeral:
                     try:
                         append_turn_journal_event_for_stream(
@@ -12762,6 +12763,11 @@ def _run_agent_streaming(
                         )
                     except Exception:
                         logger.debug("Failed to append interrupted turn journal event", exc_info=True)
+            if _terminal_session_persisted:
+                _error_payload['session'] = redact_session_data(
+                    _session_payload_with_full_messages(s, tool_calls=s.tool_calls)
+                )
+            _error_payload['terminal_session_persisted'] = _terminal_session_persisted
             _error_payload['session_id'] = getattr(s, 'session_id', session_id)
             _error_payload['old_session_id'] = session_id
         put('apperror', _error_payload)
