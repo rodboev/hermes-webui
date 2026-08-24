@@ -22711,7 +22711,7 @@ def _restore_pending_start_markers(s, claim):
 
 def _run_chat_start_worker(worker_target, worker_args, worker_kwargs, release, abort):
     """Keep the real worker unchanged while the route owns admission gating."""
-    if not release.wait(timeout=5.0) or abort.is_set():
+    if not release.wait() or abort.is_set():
         return
     worker_target(*worker_args, **worker_kwargs)
 
@@ -22729,6 +22729,7 @@ def _commit_chat_start_admission(
     moa_config,
     diag,
     gateway_regeneration: bool = False,
+    journal_required: bool = False,
 ):
     """Own the shared pre-acceptance transaction for every WebUI chat start."""
     from api.session_ops import restore_session_state, snapshot_session_state
@@ -22736,6 +22737,7 @@ def _commit_chat_start_admission(
     stream_id = uuid.uuid4().hex
     pre_attempt_snapshot = None
     marker_claim = {"goal": False, "background": False}
+    sidecar_existed = s.path.exists()
     was_hidden_empty_session = _is_hidden_empty_session(s)
     journal_event = {}
     journal_append = None
@@ -22805,7 +22807,9 @@ def _commit_chat_start_admission(
             )
         except Exception:
             logger.warning("Failed to append submitted turn journal event", exc_info=True)
-            raise
+            if journal_required:
+                raise
+            journal_event = {}
         diag.stage("stream_registration") if diag else None
         stream = create_stream_channel()
         stream_registered = True
@@ -22836,7 +22840,7 @@ def _commit_chat_start_admission(
         save_attempted = True
         save = getattr(s, "save", None)
         if callable(save):
-            save()
+            save(skip_index=True)
         diag.stage("worker_thread_start") if diag else None
         worker_thread = threading.Thread(
             target=_run_chat_start_worker,
@@ -22862,6 +22866,14 @@ def _commit_chat_start_admission(
         committed = True
         worker_release.set()
         try:
+            _write_session_index(updates=[s])
+        except Exception:
+            logger.warning(
+                "Failed to publish session index after accepted chat start for %s",
+                s.session_id,
+                exc_info=True,
+            )
+        try:
             set_last_workspace(workspace)
         except Exception:
             logger.warning(
@@ -22881,10 +22893,13 @@ def _commit_chat_start_admission(
     except Exception as exc:
         if committed:
             raise
-        if thread_started and worker_thread is not None:
-            worker_abort.set()
-            worker_release.set()
-            worker_thread.join(timeout=1)
+        worker_abort.set()
+        worker_release.set()
+        if worker_thread is not None:
+            try:
+                worker_thread.join(timeout=1)
+            except RuntimeError:
+                logger.debug("Chat-start worker thread was not joinable after launch failure")
         try:
             _cleanup_owned_resources()
         except Exception:
@@ -22906,11 +22921,10 @@ def _commit_chat_start_admission(
             try:
                 save = getattr(s, "save", None)
                 if callable(save):
-                    if was_hidden_empty_session:
-                        s.path.unlink(missing_ok=True)
-                        prune_session_from_index(s.session_id)
+                    if sidecar_existed:
+                        save(touch_updated_at=False, skip_index=True)
                     else:
-                        save(touch_updated_at=False)
+                        s.path.unlink(missing_ok=True)
             except Exception as compensation_exc:
                 compensation_error = compensation_exc
                 logger.exception(
@@ -23032,6 +23046,7 @@ def _start_regeneration_stream_locked(
         moa_config=moa_config,
         diag=diag,
         gateway_regeneration=True,
+        journal_required=True,
     )
 
 

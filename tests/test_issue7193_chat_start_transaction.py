@@ -62,14 +62,19 @@ def _users(session):
 
 def test_eager_rejected_start_retry_reload_has_one_user_prompt(transaction_env, monkeypatch):
     session = new_session(workspace=str(transaction_env.parent))
-    monkeypatch.setattr(routes, "create_stream_channel", lambda: (_ for _ in ()).throw(RuntimeError("reject")))
+    original_thread_start = threading.Thread.start
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda _self: (_ for _ in ()).throw(RuntimeError("reject")),
+    )
     with pytest.raises(RuntimeError, match="reject"):
         _start(session)
     assert _users(session) == []
     assert not session.path.exists()
     if models.SESSION_INDEX_FILE.exists():
         assert all(row.get("session_id") != session.session_id for row in json.loads(models.SESSION_INDEX_FILE.read_text(encoding="utf-8")))
-    monkeypatch.setattr(routes, "create_stream_channel", lambda: object())
+    monkeypatch.setattr(threading.Thread, "start", original_thread_start)
     _start(session)
     reloaded = models.Session.load(session.session_id)
     assert [row["content"] for row in _users(reloaded)] == ["retry me"]
@@ -107,6 +112,189 @@ def test_rejected_start_preserves_persisted_composer_draft(transaction_env, monk
     reloaded = models.Session.load(session.session_id)
     assert reloaded.composer_draft == {"text": "keep this draft", "files": []}
     assert _users(reloaded) == []
+
+
+def test_rejected_first_send_preserves_preexisting_empty_sidecar_and_index(transaction_env, monkeypatch):
+    session = new_session(workspace=str(transaction_env.parent), profile="profile-a", project_id="project-a")
+    session.enabled_toolsets = ["workspace"]
+    session.save(touch_updated_at=False)
+    before_sidecar = session.path.read_bytes()
+    before_index = models.SESSION_INDEX_FILE.read_bytes()
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda _self: (_ for _ in ()).throw(RuntimeError("thread start rejected")),
+    )
+
+    with pytest.raises(RuntimeError, match="thread start rejected"):
+        _start(session)
+
+    assert session.path.read_bytes() == before_sidecar
+    assert models.SESSION_INDEX_FILE.read_bytes() == before_index
+    reloaded = models.Session.load(session.session_id)
+    assert reloaded.profile == "profile-a"
+    assert reloaded.project_id == "project-a"
+    assert reloaded.enabled_toolsets == ["workspace"]
+    assert _users(reloaded) == []
+
+
+@pytest.mark.parametrize("prestate", ["both", "sidecar_only", "index_only", "neither"])
+def test_rejected_start_uses_physical_sidecar_prestate(transaction_env, monkeypatch, prestate):
+    session = new_session(workspace=str(transaction_env.parent), profile="profile-a", project_id="project-a")
+    session.enabled_toolsets = ["workspace"]
+    if prestate in {"both", "sidecar_only", "index_only"}:
+        session.save(touch_updated_at=False, skip_index=prestate == "sidecar_only")
+    if prestate == "index_only":
+        session.path.unlink()
+    before_sidecar = session.path.read_bytes() if session.path.exists() else None
+    before_index = models.SESSION_INDEX_FILE.read_bytes() if models.SESSION_INDEX_FILE.exists() else None
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda _self: (_ for _ in ()).throw(RuntimeError("thread start rejected")),
+    )
+
+    with pytest.raises(RuntimeError, match="thread start rejected"):
+        _start(session)
+
+    if before_sidecar is None:
+        assert not session.path.exists()
+    else:
+        assert session.path.read_bytes() == before_sidecar
+    if before_index is None:
+        assert not models.SESSION_INDEX_FILE.exists()
+    else:
+        assert models.SESSION_INDEX_FILE.read_bytes() == before_index
+
+
+def test_ordinary_start_survives_turn_journal_append_failure(transaction_env, monkeypatch):
+    journal = __import__("api.turn_journal", fromlist=["append_turn_journal_event"])
+    monkeypatch.setattr(
+        journal,
+        "append_turn_journal_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("journal unavailable")),
+    )
+    session = new_session(workspace=str(transaction_env.parent))
+
+    response = _start(session)
+
+    assert response["session_id"] == session.session_id
+    assert session.path.exists()
+    assert [row["content"] for row in _users(models.Session.load(session.session_id))] == ["retry me"]
+
+
+def test_strict_regeneration_journal_failure_compensates(transaction_env, monkeypatch):
+    journal = __import__("api.turn_journal", fromlist=["append_turn_journal_event"])
+    monkeypatch.setattr(
+        journal,
+        "append_turn_journal_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("journal unavailable")),
+    )
+    session = new_session(workspace=str(transaction_env.parent))
+
+    def prepare(stream_id, _effective_goal_related):
+        session.active_stream_id = stream_id
+        session.pending_user_message = "regenerate me"
+        session.pending_started_at = 1.0
+        return "regenerate me", []
+
+    with pytest.raises(OSError, match="journal unavailable"):
+        routes._commit_chat_start_admission(
+            session,
+            prepare=prepare,
+            workspace="/tmp/workspace",
+            model=session.model,
+            model_provider=session.model_provider,
+            normalized_model=False,
+            goal_related=False,
+            backend_is_gateway=False,
+            moa_config=None,
+            diag=None,
+            journal_required=True,
+        )
+
+    assert session.active_stream_id is None
+    assert config.session_writeback_owner(session.session_id) is None
+    assert not config.STREAMS
+
+
+def test_worker_gate_is_untimed_and_does_not_leave_accepted_start_busy(transaction_env, monkeypatch):
+    waits = []
+    invoked = threading.Event()
+
+    class Gate:
+        def __init__(self):
+            self._set = False
+
+        def wait(self, *args, **kwargs):
+            waits.append((args, kwargs))
+            return not args and not kwargs
+
+        def is_set(self):
+            return self._set
+
+        def set(self):
+            self._set = True
+
+    monkeypatch.setattr(routes, "_ThreadEvent", Gate)
+    monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: invoked.set())
+    session = new_session(workspace=str(transaction_env.parent))
+
+    response = _start(session)
+
+    assert response["session_id"] == session.session_id
+    assert invoked.wait(2)
+    assert waits == [((), {})]
+    assert config.session_writeback_owner(session.session_id) == session.active_stream_id
+
+
+def test_precommit_launch_then_raise_unconditionally_signals_abort_and_release(transaction_env, monkeypatch):
+    events = []
+    real_thread = threading.Thread
+
+    class LaunchThenRaiseThread:
+        def __init__(self, *, target, args, daemon, kwargs):
+            self._target = target
+            self._args = args
+            self._thread = None
+
+        def start(self):
+            self._thread = real_thread(target=self._target, args=self._args, daemon=True)
+            self._thread.start()
+            raise RuntimeError("thread start reported failure after launch")
+
+        def join(self, timeout=None):
+            self._thread.join(timeout)
+
+    original_event = routes._ThreadEvent
+
+    class RecordingEvent:
+        def __init__(self):
+            self._event = original_event()
+            self.set_calls = 0
+            events.append(self)
+
+        def wait(self, *args, **kwargs):
+            return self._event.wait(*args, **kwargs)
+
+        def is_set(self):
+            return self._event.is_set()
+
+        def set(self):
+            self.set_calls += 1
+            self._event.set()
+
+    monkeypatch.setattr(routes.threading, "Thread", LaunchThenRaiseThread)
+    monkeypatch.setattr(routes, "_ThreadEvent", RecordingEvent)
+    monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: None)
+    session = new_session(workspace=str(transaction_env.parent))
+
+    with pytest.raises(RuntimeError, match="thread start reported failure after launch"):
+        _start(session)
+
+    assert len(events) == 2
+    assert all(event.is_set() for event in events)
+    assert all(event.set_calls >= 1 for event in events)
 
 
 @pytest.mark.parametrize("backend", [False, True])
@@ -260,6 +448,18 @@ def test_session_list_publication_failure_does_not_reject_durable_start(transact
         routes,
         "publish_session_list_changed",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("notify failed")),
+    )
+    response = _start(session)
+    assert response["session_id"] == session.session_id
+    assert session.path.exists()
+
+
+def test_session_index_publication_failure_does_not_reject_durable_start(transaction_env, monkeypatch):
+    session = new_session(workspace=str(transaction_env.parent))
+    monkeypatch.setattr(
+        routes,
+        "_write_session_index",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("index unavailable")),
     )
     response = _start(session)
     assert response["session_id"] == session.session_id
