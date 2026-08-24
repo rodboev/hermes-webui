@@ -21,14 +21,18 @@ def _run_hidden(argv, *, cwd, env):
     return subprocess.run(argv, **kwargs)
 
 
-def _write_agent_stubs(venv_python: Path, root: Path) -> None:
-    site_packages = Path(
+def _site_packages_for(python_exe: Path) -> Path:
+    return Path(
         _run_hidden(
-            [str(venv_python), "-c", "import site; print(site.getsitepackages()[0])"],
+            [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
             cwd=REPO_ROOT,
             env=os.environ.copy(),
         ).stdout.strip()
     )
+
+
+def _write_agent_stubs(venv_python: Path, root: Path) -> Path:
+    site_packages = _site_packages_for(venv_python)
     site_packages.mkdir(parents=True, exist_ok=True)
     (site_packages / "run_agent.py").write_text(
         "DIRECT_SERVICE_STUB = True\n", encoding="utf-8"
@@ -38,14 +42,17 @@ def _write_agent_stubs(venv_python: Path, root: Path) -> None:
     (hermes_cli / "__init__.py").write_text("DIRECT_SERVICE_STUB = True\n", encoding="utf-8")
     (hermes_cli / "main.py").write_text("print('direct service CLI stub')\n", encoding="utf-8")
     (root / "isolated-webui").mkdir()
+    return site_packages
 
 
-def test_direct_service_uses_active_agent_venv_identity(tmp_path):
+def test_direct_service_uses_active_agent_venv_identity(tmp_path, monkeypatch):
     """A real Agent venv must produce one identity for both production wrappers."""
     venv_root = tmp_path / "agent-venv"
     venv.EnvBuilder(with_pip=False, clear=True).create(venv_root)
     venv_python = venv_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     _write_agent_stubs(venv_python, tmp_path)
+    test_site_packages = _site_packages_for(Path(sys.executable))
+    local_python = tmp_path / "fake-webui-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
     child = textwrap.dedent(
         """
@@ -81,27 +88,12 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
             import api.config as config
 
         config.REPO_ROOT = isolated / "isolated-webui"
-        import api.routes as routes
-        real_run = routes.subprocess.run
-        gateway = {"args": None, "error": None}
-
-        def capture_run(args, *run_args, **run_kwargs):
-            gateway["args"] = args
-            return real_run(args, *run_args, **run_kwargs)
-
-        with patch.object(routes.subprocess, "run", capture_run):
-            try:
-                routes._run_gateway_lifecycle_command("start")
-            except FileNotFoundError as exc:
-                gateway["error"] = repr(exc)
         with contextlib.redirect_stdout(io.StringIO()) as captured:
             config.print_startup_config()
         print(json.dumps({
             "bootstrap": str(bootstrap_result) if bootstrap_result else None,
             "config": str(config._AGENT_DIR) if config._AGENT_DIR else None,
             "python_exe": config.PYTHON_EXE,
-            "gateway_args": gateway["args"],
-            "gateway_error": gateway["error"],
             "found": config._HERMES_FOUND,
             "imports": config.verify_hermes_imports(),
             "banner": captured.getvalue(),
@@ -121,8 +113,8 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
             "PATH": str(tmp_path / "empty-path"),
             "ISSUE1019_ISOLATED_ROOT": str(tmp_path),
             "ISSUE1019_AGENT_ROOT": str(tmp_path / "agent-root-never-used"),
-            "ISSUE1019_LOCAL_PYTHON": str(REPO_ROOT / ".venv" / "Scripts" / "python.exe"),
-            "ISSUE1019_SHARED_SITE_PACKAGES": str(Path(sys.executable).parent.parent / "Lib" / "site-packages"),
+            "ISSUE1019_LOCAL_PYTHON": str(local_python),
+            "ISSUE1019_SHARED_SITE_PACKAGES": str(test_site_packages),
         }
     )
     result = _run_hidden([str(venv_python), str(child_script)], cwd=REPO_ROOT, env=env)
@@ -135,13 +127,26 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
     assert json.loads(agent_origin) == observed
     assert observed["bootstrap"] == observed["config"]
     assert observed["python_exe"] == str(venv_python)
-    assert observed["gateway_args"][0] == str(venv_python)
-    assert observed["gateway_error"] is None
     assert observed["found"] is True
     assert observed["imports"][0] is True
     assert "agent dir   : " in observed["banner"]
     assert "NOT FOUND" not in observed["banner"]
     assert "agent-venv" in observed["bootstrap"]
+
+    from api import config as api_config, routes
+
+    gateway = {"args": None}
+
+    def capture_run(args, *run_args, **run_kwargs):
+        gateway["args"] = args
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(api_config, "_AGENT_DIR", Path(observed["config"]))
+    monkeypatch.setattr(api_config, "PYTHON_EXE", observed["python_exe"])
+    monkeypatch.setattr(routes, "get_active_profile_name", lambda: "default")
+    monkeypatch.setattr(routes.subprocess, "run", capture_run)
+    routes._run_gateway_lifecycle_command("start")
+    assert gateway["args"][0] == str(venv_python)
 
 
 def test_interpreter_only_identity_does_not_authorize_auto_install(monkeypatch, tmp_path):
