@@ -7910,6 +7910,7 @@ def _materialize_pending_user_turn_before_error(
 
 def _clear_failed_provider_error_lifecycle(session, *, active_turn_identity=None) -> None:
     """Leave a failed terminal write retryable without retaining stream state."""
+    cleanup_snapshot = copy.deepcopy(session.__dict__)
     try:
         _materialize_pending_user_turn_before_error(
             session,
@@ -7926,6 +7927,8 @@ def _clear_failed_provider_error_lifecycle(session, *, active_turn_identity=None
         session.save(skip_index=True)
     except Exception:
         logger.debug("Failed to persist lifecycle cleanup after provider-error write failure", exc_info=True)
+        session.__dict__.clear()
+        session.__dict__.update(copy.deepcopy(cleanup_snapshot))
 
 
 def _terminal_turn_duration(session, *, now: float | None = None) -> float | None:

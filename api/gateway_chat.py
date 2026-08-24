@@ -902,6 +902,7 @@ def _stream_writeback_is_current(session: Any, stream_id: str) -> bool:
 def _clear_gateway_pending_state(session: Any, stream_id: str) -> None:
     if not _stream_writeback_is_current(session, stream_id):
         return
+    cleanup_snapshot = copy.deepcopy(session.__dict__)
     from api.streaming import _materialize_pending_user_turn_before_error
     try:
         _materialize_pending_user_turn_before_error(session)
@@ -916,7 +917,12 @@ def _clear_gateway_pending_state(session: Any, stream_id: str) -> None:
         session.save()
     except Exception:
         logger.debug("Gateway indexed cleanup save failed; retrying sidecar-only", exc_info=True)
-        session.save(skip_index=True)
+        try:
+            session.save(skip_index=True)
+        except Exception:
+            session.__dict__.clear()
+            session.__dict__.update(copy.deepcopy(cleanup_snapshot))
+            logger.debug("Gateway sidecar-only cleanup save failed", exc_info=True)
 
 
 def _cleanup_gateway_pending_mirror(session_id: str) -> None:

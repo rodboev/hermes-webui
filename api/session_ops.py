@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 AUTO_TITLE_LABELS = {'untitled', 'new chat'}
 
+_PROVIDER_ERROR_PUBLIC_ONLY_FIELDS = {
+    "_provider_error_dismiss_ref",
+    "_provider_error_dismissed",
+    "_anchor_activity_scene",
+    "_anchor_stream_id",
+}
+
 _PROVIDER_ERROR_PROJECTION_CACHE: dict[tuple, tuple[list[dict], str]] = {}
 _PROVIDER_ERROR_PROJECTION_CACHE_LOCK = threading.Lock()
 _PROVIDER_ERROR_PROJECTION_CACHE_MAX = 32
@@ -72,13 +79,9 @@ def _provider_error_row_digest(row) -> str:
 
 
 def _provider_error_reference_digest(row) -> str:
-    """Hash the complete durable row, excluding only dismissal projection state."""
+    """Hash the durable row while excluding transport-only projection fields."""
     reference_row = copy.deepcopy(row) if isinstance(row, dict) else {}
-    for key in (
-        "_dismissed",
-        "_provider_error_dismiss_ref",
-        "_provider_error_dismissed",
-    ):
+    for key in {"_dismissed", *_PROVIDER_ERROR_PUBLIC_ONLY_FIELDS}:
         reference_row.pop(key, None)
     return _provider_error_row_digest(reference_row)
 
@@ -93,11 +96,27 @@ def _provider_error_stable_id(row) -> str | None:
     return None
 
 
+def _provider_error_stable_id_conflicted(row) -> bool:
+    if not isinstance(row, dict):
+        return False
+    values = {
+        str(row[key])
+        for key in ("id", "_stable_id", "stable_id", "message_id")
+        if key in row
+        and row[key] not in (None, "")
+        and isinstance(row[key], (str, int))
+        and not isinstance(row[key], bool)
+    }
+    return len(values) > 1
+
+
 def _provider_error_row_is_dismissible(row) -> bool:
     """Classify only terminal provider failures at the mutation owner."""
     if not isinstance(row, dict):
         return False
     if row.get("role") != "assistant" or row.get("_error") is not True:
+        return False
+    if _provider_error_stable_id_conflicted(row):
         return False
     if any(row.get(key) is not None for key in ("_compressionRecovery", "_statusCard", "recovery_control", "_pending_journal_recovery")):
         return False
@@ -498,14 +517,13 @@ def project_provider_error_dismissal_capabilities(session, projected: dict) -> d
         entry = candidates[0]
         used.add((entry["session_id"], entry["index"]))
         source_row = entry["row"]
+        payload = _provider_error_reference_payload(
+            viewed_id, entry["session_id"], revision,
+            entry["stable_id"], entry["index"], entry["row_digest"],
+        )
+        message["_provider_error_dismiss_ref"] = _provider_error_reference(**payload)
         if source_row.get("_dismissed") is True:
-            message["_provider_error_dismissed"] = True
-        else:
-            payload = _provider_error_reference_payload(
-                viewed_id, entry["session_id"], revision,
-                entry["stable_id"], entry["index"], entry["row_digest"],
-            )
-            message["_provider_error_dismiss_ref"] = _provider_error_reference(**payload)
+            message["_dismissed"] = True
     return result
 
 

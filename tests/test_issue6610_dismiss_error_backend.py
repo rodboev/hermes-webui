@@ -165,6 +165,42 @@ def test_reference_requires_stable_id_and_complete_row_digest():
     )["messages"][0]
 
 
+def test_conflicting_stable_id_aliases_fail_closed():
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    session = _FakeSession([_message(id="one", message_id="two")])
+    projected = project_provider_error_dismissal_capabilities(
+        session,
+        {"messages": copy.deepcopy(session.messages)},
+    )
+    assert "_provider_error_dismiss_ref" not in projected["messages"][0]
+
+
+def test_anchor_scene_transport_fields_do_not_change_owner_digest():
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    session = _FakeSession([_message()])
+    projected = project_provider_error_dismissal_capabilities(
+        session,
+        {"messages": [{**copy.deepcopy(session.messages[0]), "_anchor_activity_scene": {"version": 1}, "_anchor_stream_id": "run"}]},
+    )
+    assert projected["messages"][0]["_provider_error_dismiss_ref"]
+
+
+def test_dismissed_projection_uses_existing_marker_and_reference_only():
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    session = _FakeSession([_message(_dismissed=True)])
+    projected = project_provider_error_dismissal_capabilities(
+        session,
+        {"messages": copy.deepcopy(session.messages)},
+    )
+    row = projected["messages"][0]
+    assert row["_dismissed"] is True
+    assert row["_provider_error_dismiss_ref"]
+    assert "_provider_error_dismissed" not in row
+
+
 def test_compression_lineage_projects_and_mutates_the_physical_owner():
     from api.session_ops import apply_provider_error_dismissal, project_provider_error_dismissal_capabilities
 
