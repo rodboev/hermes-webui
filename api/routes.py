@@ -22807,9 +22807,24 @@ def _commit_chat_start_admission(
             )
         except Exception:
             logger.warning("Failed to append submitted turn journal event", exc_info=True)
+            try:
+                from api.turn_journal import read_turn_journal
+
+                journal_event = next(
+                    (
+                        event
+                        for event in reversed(
+                            read_turn_journal(s.session_id).get("events") or []
+                        )
+                        if event.get("event") == "submitted"
+                        and event.get("stream_id") == stream_id
+                    ),
+                    {},
+                )
+            except Exception:
+                journal_event = {}
             if journal_required:
                 raise
-            journal_event = {}
         diag.stage("stream_registration") if diag else None
         stream = create_stream_channel()
         stream_registered = True
@@ -22922,7 +22937,7 @@ def _commit_chat_start_admission(
                 save = getattr(s, "save", None)
                 if callable(save):
                     if sidecar_existed:
-                        save(touch_updated_at=False, skip_index=True)
+                        save(touch_updated_at=False, skip_index=True, skip_backup=True)
                     else:
                         s.path.unlink(missing_ok=True)
             except Exception as compensation_exc:

@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 
 import pytest
 
@@ -138,6 +139,31 @@ def test_rejected_first_send_preserves_preexisting_empty_sidecar_and_index(trans
     assert _users(reloaded) == []
 
 
+def test_rejected_start_does_not_leave_rejected_prompt_in_sidecar_backup(transaction_env, monkeypatch):
+    session = new_session(workspace=str(transaction_env.parent), profile="profile-a")
+    session.messages = [
+        {"role": "user", "content": "previous"},
+        {"role": "assistant", "content": "answer"},
+    ]
+    session.save(touch_updated_at=False)
+    backup = session.path.with_suffix(".json.bak")
+    before_backup = backup.read_bytes() if backup.exists() else None
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda _self: (_ for _ in ()).throw(RuntimeError("thread start rejected")),
+    )
+
+    with pytest.raises(RuntimeError, match="thread start rejected"):
+        _start(session)
+
+    assert backup.exists() == (before_backup is not None)
+    if before_backup is not None:
+        assert backup.read_bytes() == before_backup
+    if backup.exists():
+        assert "retry me" not in backup.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("prestate", ["both", "sidecar_only", "index_only", "neither"])
 def test_rejected_start_uses_physical_sidecar_prestate(transaction_env, monkeypatch, prestate):
     session = new_session(workspace=str(transaction_env.parent), profile="profile-a", project_id="project-a")
@@ -174,13 +200,78 @@ def test_ordinary_start_survives_turn_journal_append_failure(transaction_env, mo
         "append_turn_journal_event",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("journal unavailable")),
     )
+    done = threading.Event()
+    monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: done.set())
     session = new_session(workspace=str(transaction_env.parent))
 
     response = _start(session)
 
     assert response["session_id"] == session.session_id
+    assert response["turn_id"] is None
+    assert done.wait(2)
     assert session.path.exists()
     assert [row["content"] for row in _users(models.Session.load(session.session_id))] == ["retry me"]
+    assert config.session_writeback_owner(session.session_id) == response["stream_id"]
+
+
+def test_strict_regeneration_callsite_requires_journal(transaction_env, monkeypatch):
+    captured = {}
+    turn = type("Turn", (), {"revision": "revision", "message_text": "retry me", "attachments": []})()
+    plan = type("Plan", (), {"turn": turn})()
+    monkeypatch.setattr("api.session_ops.plan_regeneration", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(
+        routes,
+        "_commit_chat_start_admission",
+        lambda _session, **kwargs: captured.update(kwargs) or {"ok": True},
+    )
+    session = new_session(workspace=str(transaction_env.parent))
+
+    result = routes._start_regeneration_stream_locked(
+        session,
+        turn=turn,
+        workspace="/tmp/workspace",
+        model=session.model,
+        model_provider=session.model_provider,
+        normalized_model=False,
+        diag=None,
+        goal_related=False,
+        source="webui",
+        moa_config=None,
+        backend_is_gateway=False,
+    )
+
+    assert result == {"ok": True}
+    assert captured["journal_required"] is True
+
+
+def test_partial_submitted_journal_is_interrupted_on_strict_failure(transaction_env, monkeypatch):
+    journal = __import__("api.turn_journal", fromlist=["append_turn_journal_event"])
+    real_append = journal.append_turn_journal_event
+
+    def append_then_raise(session_id, event):
+        result = real_append(session_id, event)
+        raise OSError("journal fsync unavailable")
+
+    monkeypatch.setattr(journal, "append_turn_journal_event", append_then_raise)
+    session = new_session(workspace=str(transaction_env.parent))
+
+    with pytest.raises(OSError, match="journal fsync unavailable"):
+        routes._commit_chat_start_admission(
+            session,
+            prepare=lambda _stream_id, _goal_related: ("retry me", []),
+            workspace="/tmp/workspace",
+            model=session.model,
+            model_provider=session.model_provider,
+            normalized_model=False,
+            goal_related=False,
+            backend_is_gateway=False,
+            moa_config=None,
+            diag=None,
+            journal_required=True,
+        )
+
+    events = journal.read_turn_journal(session.session_id)["events"]
+    assert [event["event"] for event in events] == ["submitted", "interrupted"]
 
 
 def test_strict_regeneration_journal_failure_compensates(transaction_env, monkeypatch):
@@ -221,22 +312,20 @@ def test_strict_regeneration_journal_failure_compensates(transaction_env, monkey
 def test_worker_gate_is_untimed_and_does_not_leave_accepted_start_busy(transaction_env, monkeypatch):
     waits = []
     invoked = threading.Event()
+    real_thread = threading.Thread
 
-    class Gate:
-        def __init__(self):
-            self._set = False
+    class DelayedThread:
+        def __init__(self, *, target, args, daemon, kwargs):
+            self._thread = real_thread(target=target, args=args, daemon=daemon)
 
-        def wait(self, *args, **kwargs):
-            waits.append((args, kwargs))
-            return not args and not kwargs
+        def start(self):
+            self._thread.start()
+            time.sleep(5.25)
 
-        def is_set(self):
-            return self._set
+        def join(self, timeout=None):
+            self._thread.join(timeout)
 
-        def set(self):
-            self._set = True
-
-    monkeypatch.setattr(routes, "_ThreadEvent", Gate)
+    monkeypatch.setattr(routes.threading, "Thread", DelayedThread)
     monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: invoked.set())
     session = new_session(workspace=str(transaction_env.parent))
 
@@ -244,7 +333,6 @@ def test_worker_gate_is_untimed_and_does_not_leave_accepted_start_busy(transacti
 
     assert response["session_id"] == session.session_id
     assert invoked.wait(2)
-    assert waits == [((), {})]
     assert config.session_writeback_owner(session.session_id) == session.active_stream_id
 
 
@@ -287,6 +375,8 @@ def test_precommit_launch_then_raise_unconditionally_signals_abort_and_release(t
     monkeypatch.setattr(routes.threading, "Thread", LaunchThenRaiseThread)
     monkeypatch.setattr(routes, "_ThreadEvent", RecordingEvent)
     monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: None)
+    executed = []
+    monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: executed.append(True))
     session = new_session(workspace=str(transaction_env.parent))
 
     with pytest.raises(RuntimeError, match="thread start reported failure after launch"):
@@ -295,6 +385,9 @@ def test_precommit_launch_then_raise_unconditionally_signals_abort_and_release(t
     assert len(events) == 2
     assert all(event.is_set() for event in events)
     assert all(event.set_calls >= 1 for event in events)
+    assert not executed
+    assert not config.STREAMS
+    assert config.session_writeback_owner(session.session_id) is None
 
 
 @pytest.mark.parametrize("backend", [False, True])
@@ -455,7 +548,9 @@ def test_session_list_publication_failure_does_not_reject_durable_start(transact
 
 
 def test_session_index_publication_failure_does_not_reject_durable_start(transaction_env, monkeypatch):
+    done = threading.Event()
     session = new_session(workspace=str(transaction_env.parent))
+    monkeypatch.setattr(routes, "_run_agent_streaming", lambda *args, **kwargs: done.set())
     monkeypatch.setattr(
         routes,
         "_write_session_index",
@@ -464,6 +559,8 @@ def test_session_index_publication_failure_does_not_reject_durable_start(transac
     response = _start(session)
     assert response["session_id"] == session.session_id
     assert session.path.exists()
+    assert done.wait(2)
+    assert config.session_writeback_owner(session.session_id) == response["stream_id"]
 
 
 def test_failed_admission_preserves_successor_owner_and_state(transaction_env, monkeypatch):
