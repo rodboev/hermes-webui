@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import textwrap
 import venv
 from pathlib import Path
@@ -35,6 +36,7 @@ def _write_agent_stubs(venv_python: Path, root: Path) -> None:
     hermes_cli = site_packages / "hermes_cli"
     hermes_cli.mkdir(exist_ok=True)
     (hermes_cli / "__init__.py").write_text("DIRECT_SERVICE_STUB = True\n", encoding="utf-8")
+    (hermes_cli / "main.py").write_text("print('direct service CLI stub')\n", encoding="utf-8")
     (root / "isolated-webui").mkdir()
 
 
@@ -55,6 +57,7 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
         import sys
         from unittest.mock import patch
 
+        sys.path.insert(0, os.environ["ISSUE1019_SHARED_SITE_PACKAGES"])
         import bootstrap
 
         isolated = pathlib.Path(os.environ["ISSUE1019_ISOLATED_ROOT"])
@@ -62,6 +65,9 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
 
         def isolated_exists(path):
             if path == pathlib.Path("/opt/hermes-agent/run_agent.py"):
+                return True
+            local_python = pathlib.Path(os.environ["ISSUE1019_LOCAL_PYTHON"])
+            if path == local_python and os.environ.get("ISSUE1019_SHOW_LOCAL") == "1":
                 return True
             agent_root = pathlib.Path(os.environ["ISSUE1019_AGENT_ROOT"])
             if "hermes-agent" in path.parts and agent_root not in path.parents:
@@ -71,14 +77,31 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
         bootstrap.REPO_ROOT = isolated / "isolated-webui"
         with patch.object(pathlib.Path, "exists", isolated_exists):
             bootstrap_result = bootstrap.discover_agent_dir()
+            os.environ["ISSUE1019_SHOW_LOCAL"] = "1"
             import api.config as config
 
         config.REPO_ROOT = isolated / "isolated-webui"
+        import api.routes as routes
+        real_run = routes.subprocess.run
+        gateway = {"args": None, "error": None}
+
+        def capture_run(args, *run_args, **run_kwargs):
+            gateway["args"] = args
+            return real_run(args, *run_args, **run_kwargs)
+
+        with patch.object(routes.subprocess, "run", capture_run):
+            try:
+                routes._run_gateway_lifecycle_command("start")
+            except FileNotFoundError as exc:
+                gateway["error"] = repr(exc)
         with contextlib.redirect_stdout(io.StringIO()) as captured:
             config.print_startup_config()
         print(json.dumps({
             "bootstrap": str(bootstrap_result) if bootstrap_result else None,
             "config": str(config._AGENT_DIR) if config._AGENT_DIR else None,
+            "python_exe": config.PYTHON_EXE,
+            "gateway_args": gateway["args"],
+            "gateway_error": gateway["error"],
             "found": config._HERMES_FOUND,
             "imports": config.verify_hermes_imports(),
             "banner": captured.getvalue(),
@@ -98,6 +121,8 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
             "PATH": str(tmp_path / "empty-path"),
             "ISSUE1019_ISOLATED_ROOT": str(tmp_path),
             "ISSUE1019_AGENT_ROOT": str(tmp_path / "agent-root-never-used"),
+            "ISSUE1019_LOCAL_PYTHON": str(REPO_ROOT / ".venv" / "Scripts" / "python.exe"),
+            "ISSUE1019_SHARED_SITE_PACKAGES": str(Path(sys.executable).parent.parent / "Lib" / "site-packages"),
         }
     )
     result = _run_hidden([str(venv_python), str(child_script)], cwd=REPO_ROOT, env=env)
@@ -109,6 +134,9 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
     )
     assert json.loads(agent_origin) == observed
     assert observed["bootstrap"] == observed["config"]
+    assert observed["python_exe"] == str(venv_python)
+    assert observed["gateway_args"][0] == str(venv_python)
+    assert observed["gateway_error"] is None
     assert observed["found"] is True
     assert observed["imports"][0] is True
     assert "agent dir   : " in observed["banner"]
@@ -124,6 +152,28 @@ def test_interpreter_only_identity_does_not_authorize_auto_install(monkeypatch, 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "empty-home"))
     monkeypatch.setenv("HERMES_WEBUI_PYTHON", str(tmp_path / "agent-python"))
     assert startup._agent_dir() is None
+
+
+def test_discover_python_precedence_keeps_explicit_nested_and_proven_interpreters(
+    monkeypatch, tmp_path
+):
+    from api import config
+
+    agent_dir = tmp_path / "agent"
+    nested = agent_dir / "venv" / "bin" / "python"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("", encoding="utf-8")
+    local = tmp_path / "webui" / ".venv" / "bin" / "python"
+    local.parent.mkdir(parents=True)
+    local.write_text("", encoding="utf-8")
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path / "webui")
+    monkeypatch.setenv("HERMES_WEBUI_PYTHON", str(tmp_path / "explicit-python"))
+    assert config._discover_python(agent_dir, str(tmp_path / "proven-python")) == str(tmp_path / "explicit-python")
+
+    monkeypatch.delenv("HERMES_WEBUI_PYTHON")
+    assert config._discover_python(agent_dir, str(tmp_path / "proven-python")) == str(nested)
+    nested.unlink()
+    assert config._discover_python(agent_dir, str(tmp_path / "proven-python")) == str(tmp_path / "proven-python")
 
 
 def test_discovery_checks_hermes_home_without_explicit_override(monkeypatch, tmp_path):

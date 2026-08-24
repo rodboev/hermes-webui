@@ -1,6 +1,7 @@
 """Hermes Web UI -- startup helpers."""
 from __future__ import annotations
 import os, re, shutil, stat, subprocess, sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from api.paths import _platform_default_hermes_home
@@ -111,7 +112,13 @@ def _first_valid_agent_candidate(candidates: list[Path | None]) -> Path | None:
     return None
 
 
-def discover_agent_dir(
+@dataclass(frozen=True)
+class _AgentDiscovery:
+    agent_dir: Path | None
+    python_exe: str | None = None
+
+
+def _discover_agent_identity(
     *,
     repo_root: Path | None = None,
     hermes_home: Path | None = None,
@@ -120,8 +127,8 @@ def discover_agent_dir(
     python_exe: str | None = None,
     launcher_finder=_agent_dir_from_hermes_cli,
     python_finder=_agent_dir_from_python,
-) -> Path | None:
-    """Observe the first valid Agent identity without authorizing mutation."""
+) -> _AgentDiscovery:
+    """Observe an Agent root and retain executable provenance when it is proved."""
     repo_root = (repo_root or Path.cwd()).expanduser()
     user_home = (user_home or Path.home()).expanduser()
     hermes_home = Path(
@@ -133,7 +140,7 @@ def discover_agent_dir(
     explicit = os.getenv("HERMES_WEBUI_AGENT_DIR", "").strip()
     explicit_candidate = Path(explicit).expanduser() if explicit else None
     if explicit_candidate is not None and _looks_like_agent_source_root(explicit_candidate):
-        return explicit_candidate.resolve()
+        return _AgentDiscovery(explicit_candidate.resolve())
 
     authoritative_candidates = [
         hermes_home / "hermes-agent",
@@ -146,15 +153,15 @@ def discover_agent_dir(
     ]
     found = _first_valid_agent_candidate(authoritative_candidates)
     if found:
-        return found
+        return _AgentDiscovery(found)
 
     found = launcher_finder()
     if found:
-        return found
+        return _AgentDiscovery(found)
     selected_python = python_exe or os.getenv("HERMES_WEBUI_PYTHON") or sys.executable
     found = python_finder(selected_python)
     if found:
-        return found
+        return _AgentDiscovery(found, selected_python)
 
     fallback_candidates = [
         Path(os.getenv("XDG_DATA_HOME", str(user_home / ".local" / "share"))).expanduser()
@@ -163,7 +170,29 @@ def discover_agent_dir(
         Path("/usr/local/hermes-agent"),
         Path("/usr/local/share/hermes-agent"),
     ]
-    return _first_valid_agent_candidate(fallback_candidates)
+    return _AgentDiscovery(_first_valid_agent_candidate(fallback_candidates))
+
+
+def discover_agent_dir(
+    *,
+    repo_root: Path | None = None,
+    hermes_home: Path | None = None,
+    default_hermes_home: Path | None = None,
+    user_home: Path | None = None,
+    python_exe: str | None = None,
+    launcher_finder=_agent_dir_from_hermes_cli,
+    python_finder=_agent_dir_from_python,
+) -> Path | None:
+    """Observe the first valid Agent identity without authorizing mutation."""
+    return _discover_agent_identity(
+        repo_root=repo_root,
+        hermes_home=hermes_home,
+        default_hermes_home=default_hermes_home,
+        user_home=user_home,
+        python_exe=python_exe,
+        launcher_finder=launcher_finder,
+        python_finder=python_finder,
+    ).agent_dir
 
 
 def fix_credential_permissions() -> None:

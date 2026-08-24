@@ -131,23 +131,30 @@ def _env_mb_bytes(name: str, default_mb: int) -> int:
 
 
 # ── Hermes agent directory discovery ─────────────────────────────────────────
-def _discover_agent_dir() -> Path:
-    return _startup.discover_agent_dir(
+def _discovery_result():
+    return _startup._discover_agent_identity(
         repo_root=REPO_ROOT,
         hermes_home=Path(os.getenv("HERMES_HOME", str(_DEFAULT_HERMES_HOME))),
         default_hermes_home=_DEFAULT_HERMES_HOME,
         user_home=HOME,
         python_exe=os.getenv("HERMES_WEBUI_PYTHON") or sys.executable,
     )
-def _discover_python(agent_dir: Path) -> str:
+
+
+def _discover_agent_dir() -> Path | None:
+    return _discovery_result().agent_dir
+
+
+def _discover_python(agent_dir: Path | None, proven_python: str | None = None) -> str:
     """
     Locate a Python executable that has the Hermes agent dependencies installed.
 
     Priority:
       1. HERMES_WEBUI_PYTHON env var
       2. Agent venv at <agent_dir>/venv/bin/python
-      3. Local .venv inside this repo
-      4. System python3
+      3. Interpreter that proved the Agent root
+      4. Local .venv inside this repo
+      5. System python3
     """
     if os.getenv("HERMES_WEBUI_PYTHON"):
         return os.getenv("HERMES_WEBUI_PYTHON")
@@ -165,10 +172,13 @@ def _discover_python(agent_dir: Path) -> str:
         venv_py_win = agent_dir / "venv" / "Scripts" / "python.exe"
         if venv_py_win.exists():
             return str(venv_py_win)
-        
+
         venv_py_win = agent_dir / ".venv" / "Scripts" / "python.exe"
         if venv_py_win.exists():
             return str(venv_py_win)
+
+    if proven_python:
+        return proven_python
 
     # Local .venv inside this repo
     for subdir, binary in (("bin", "python"), ("Scripts", "python.exe")):
@@ -188,8 +198,9 @@ def _discover_python(agent_dir: Path) -> str:
 
 
 # Run discovery
-_AGENT_DIR = _discover_agent_dir()
-PYTHON_EXE = _discover_python(_AGENT_DIR)
+_DISCOVERY = _discovery_result()
+_AGENT_DIR = _DISCOVERY.agent_dir
+PYTHON_EXE = _discover_python(_AGENT_DIR, _DISCOVERY.python_exe)
 
 # ── Inject agent dir into sys.path so Hermes modules are importable ──────────
 
