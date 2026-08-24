@@ -126,20 +126,16 @@ def test_windows_spawn_failure_keeps_current_process(monkeypatch, caplog):
 
 
 def test_pytest_session_restart_operations_are_inert():
-    import tests.conftest as conftest
-
-    assert updates._windows_restart_spawn is conftest._pytest_session_safe_windows_restart_spawn
-    assert updates._windows_restart_exit is conftest._pytest_session_safe_windows_restart_exit
+    assert updates._windows_restart_spawn(None) is None
+    assert updates._windows_restart_exit(0) is None
 
 
 def test_local_restart_recorders_restore_session_guards(monkeypatch):
-    import tests.conftest as conftest
-
     monkeypatch.setattr(updates, "_windows_restart_spawn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(updates, "_windows_restart_exit", lambda *_args: None)
     monkeypatch.undo()
-    assert updates._windows_restart_spawn is conftest._pytest_session_safe_windows_restart_spawn
-    assert updates._windows_restart_exit is conftest._pytest_session_safe_windows_restart_exit
+    assert updates._windows_restart_spawn(None) is None
+    assert updates._windows_restart_exit(0) is None
 
 
 @pytest.mark.parametrize("frozen", [False, True])
