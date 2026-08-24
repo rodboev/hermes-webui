@@ -99,6 +99,18 @@ def _looks_like_agent_source_root(path: Path) -> bool:
     return (path / "run_agent.py").exists() or _looks_like_pip_style_agent_source_root(path)
 
 
+def _first_valid_agent_candidate(candidates: list[Path | None]) -> Path | None:
+    for marker in ("run_agent.py", "pip"):
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            if marker == "run_agent.py" and (candidate / marker).exists():
+                return candidate.resolve()
+            if marker == "pip" and _looks_like_pip_style_agent_source_root(candidate):
+                return candidate.resolve()
+    return None
+
+
 def discover_agent_dir(
     *,
     repo_root: Path | None = None,
@@ -119,38 +131,39 @@ def discover_agent_dir(
         default_hermes_home = _platform_default_hermes_home()
     default_hermes_home = Path(default_hermes_home).expanduser()
     explicit = os.getenv("HERMES_WEBUI_AGENT_DIR", "").strip()
-    candidates = [
-        Path(explicit).expanduser() if explicit else None,
+    explicit_candidate = Path(explicit).expanduser() if explicit else None
+    if explicit_candidate is not None and _looks_like_agent_source_root(explicit_candidate):
+        return explicit_candidate.resolve()
+
+    authoritative_candidates = [
         hermes_home / "hermes-agent",
         repo_root.parent / "hermes-agent",
         repo_root.parent if _looks_like_agent_source_root(repo_root.parent) else None,
         default_hermes_home / "hermes-agent",
         user_home / ".hermes" / "hermes-agent",
         user_home / "hermes-agent",
-        Path(os.getenv("XDG_DATA_HOME", str(user_home / ".local" / "share"))).expanduser()
-        / "hermes-agent",
-        Path("/opt/hermes-agent"),
-        Path("/usr/local/hermes-agent"),
-        Path("/usr/local/share/hermes-agent"),
         Path("/usr/local/lib/hermes-agent"),
     ]
-    valid = [candidate for candidate in candidates if candidate is not None]
-    if explicit and valid and _looks_like_agent_source_root(valid[0]):
-        return valid[0].resolve()
-    for marker in ("run_agent.py", "pip"):
-        for index, candidate in enumerate(candidates):
-            if candidate is None or (explicit and index == 0):
-                continue
-            if marker == "run_agent.py" and (candidate / marker).exists():
-                return candidate.resolve()
-            if marker == "pip" and _looks_like_pip_style_agent_source_root(candidate):
-                return candidate.resolve()
+    found = _first_valid_agent_candidate(authoritative_candidates)
+    if found:
+        return found
 
     found = launcher_finder()
     if found:
         return found
     selected_python = python_exe or os.getenv("HERMES_WEBUI_PYTHON") or sys.executable
-    return python_finder(selected_python)
+    found = python_finder(selected_python)
+    if found:
+        return found
+
+    fallback_candidates = [
+        Path(os.getenv("XDG_DATA_HOME", str(user_home / ".local" / "share"))).expanduser()
+        / "hermes-agent",
+        Path("/opt/hermes-agent"),
+        Path("/usr/local/hermes-agent"),
+        Path("/usr/local/share/hermes-agent"),
+    ]
+    return _first_valid_agent_candidate(fallback_candidates)
 
 
 def fix_credential_permissions() -> None:

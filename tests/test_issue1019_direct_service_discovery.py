@@ -61,6 +61,8 @@ def test_direct_service_uses_active_agent_venv_identity(tmp_path):
         real_exists = pathlib.Path.exists
 
         def isolated_exists(path):
+            if path == pathlib.Path("/opt/hermes-agent/run_agent.py"):
+                return True
             agent_root = pathlib.Path(os.environ["ISSUE1019_AGENT_ROOT"])
             if "hermes-agent" in path.parts and agent_root not in path.parents:
                 return False
