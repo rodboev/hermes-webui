@@ -3381,6 +3381,7 @@ class OwnerModelState:
     api_key: str | None
     repaired: bool = False
     runtime_fallback_allowed: bool = True
+    runtime_route: dict | None = None
 
 
 def _owner_runtime_fallback_allowed(
@@ -3399,16 +3400,13 @@ def resolve_owner_runtime_state(
     config_obj: dict | None = None,
     owner_env: dict[str, str] | None = None,
     owner_profile: str | None = None,
+    runtime_resolver=None,
 ) -> OwnerModelState:
     """Fill runtime credentials under the owner policy, never ambiently."""
     if not state.runtime_fallback_allowed:
         return state
     try:
         from contextlib import nullcontext
-        import inspect
-
-        from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
-        from hermes_cli.runtime_provider import resolve_runtime_provider
 
         scope = nullcontext()
         if owner_profile and config_obj is not None:
@@ -3419,6 +3417,12 @@ def resolve_owner_runtime_state(
                 "owner runtime provider resolution",
             )
         with scope:
+            from api.oauth import resolve_runtime_provider_with_anthropic_env_lock
+            if runtime_resolver is None:
+                from hermes_cli.runtime_provider import resolve_runtime_provider
+            else:
+                resolve_runtime_provider = runtime_resolver
+
             previous_env = getattr(_thread_ctx, "env", None)
             previous_block = getattr(_thread_ctx, "block_process_env_fallback", False)
             if owner_env is not None and not owner_profile:
@@ -3451,6 +3455,7 @@ def resolve_owner_runtime_state(
             provider=state.provider or runtime.get("provider"),
             base_url=state.base_url or runtime.get("base_url"),
             api_key=runtime.get("api_key") or state.api_key,
+            runtime_route=runtime,
         )
     except Exception:
         logger.debug("owner runtime credential resolution failed", exc_info=True)
@@ -3464,6 +3469,7 @@ def resolve_owner_model_state(
     config_obj: dict | None = None,
     explicitly_picked: bool = False,
     owner_env: dict[str, str] | None = None,
+    resolver=None,
 ) -> OwnerModelState:
     """Resolve model, provider, connection, and catalog ownership together."""
     owner_cfg = config_obj if isinstance(config_obj, dict) else cfg
@@ -3550,9 +3556,10 @@ def resolve_owner_model_state(
                 _owner_runtime_fallback_allowed(config_obj, stored),
             )
 
+    resolver_fn = resolver or resolve_model_provider
     resolver_kwargs = {}
     try:
-        resolver_parameters = inspect.signature(resolve_model_provider).parameters
+        resolver_parameters = inspect.signature(resolver_fn).parameters
     except (TypeError, ValueError):
         resolver_parameters = {}
     accepts_kwargs = any(
@@ -3567,7 +3574,7 @@ def resolve_owner_model_state(
         "explicitly_picked" in resolver_parameters or accepts_kwargs
     ):
         resolver_kwargs["explicitly_picked"] = True
-    resolved_model, resolved_provider, resolved_base = resolve_model_provider(
+    resolved_model, resolved_provider, resolved_base = resolver_fn(
         requested,
         **resolver_kwargs,
     )

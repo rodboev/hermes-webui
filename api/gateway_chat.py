@@ -1019,7 +1019,7 @@ def _run_gateway_chat_streaming(
             model_provider=model_provider,
         )
         base_url = _gateway_base_url(cfg)
-        gateway_api_key = _gateway_api_key()
+        api_key = _gateway_api_key()
         try:
             from api.config import _main_model_request_overrides
             _gw_overrides = _main_model_request_overrides(
@@ -1030,7 +1030,7 @@ def _run_gateway_chat_streaming(
         except Exception:
             _gw_overrides = {}
         _runs_api_enabled = _gateway_use_runs_api_enabled(cfg)
-        _use_runs_api = _runs_api_enabled and gateway_supports_approval(base_url, gateway_api_key)
+        _use_runs_api = _runs_api_enabled and gateway_supports_approval(base_url, api_key)
         if not _use_runs_api and runs_api_pending_marked:
             _finish_gateway_run_starting(stream_id, result="fallback")
             runs_api_pending_marked = False
@@ -1081,7 +1081,7 @@ def _run_gateway_chat_streaming(
             try:
                 final_text, usage = _run_gateway_runs_api_streaming(
                     session_id, msg_text, model, workspace, stream_id,
-                    base_url, gateway_api_key, prefill_messages, body_extras,
+                    base_url, api_key, prefill_messages, body_extras,
                     put_gateway_event=put_gateway_event,
                     cancel_event=cancel_event,
                     attachments=attachments,
@@ -1107,7 +1107,7 @@ def _run_gateway_chat_streaming(
         else:
             # Legacy gateway path: emit unsupported approval notice once per session,
             # but only when the gateway genuinely lacks approval capability.
-            approval_reason = gateway_approval_unavailable_reason(base_url, gateway_api_key)
+            approval_reason = gateway_approval_unavailable_reason(base_url, api_key)
             if approval_reason is not None:
                 if not hasattr(s, "_approval_notice_emitted"):
                     s._approval_notice_emitted = False
@@ -1129,8 +1129,8 @@ def _run_gateway_chat_streaming(
                 "Accept": "text/event-stream",
                 "X-Hermes-Session-Id": session_id,
             }
-            if gateway_api_key:
-                headers["Authorization"] = f"Bearer {gateway_api_key}"
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
                 # Scope Gateway long-term continuity to this WebUI conversation
                 # without exposing the browser's auth cookie or CSRF material.
                 headers["X-Hermes-Session-Key"] = f"webui:{session_id}"

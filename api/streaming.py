@@ -8681,6 +8681,7 @@ def _resolve_stream_owner_model_state(
         config_obj=owner_cfg,
         explicitly_picked=explicitly_picked,
         owner_env=owner_env,
+        resolver=resolve_model_provider,
     )
     from api.config import resolve_owner_runtime_state
     return resolve_owner_runtime_state(
@@ -10056,9 +10057,12 @@ def _run_agent_streaming(
                 resolved_model = _owner_state.outbound_model
                 resolved_provider = _owner_state.provider
                 configured_base_url = _owner_state.base_url
+                _rt = _owner_state.runtime_route or {}
 
                 resolved_api_key = _owner_state.api_key
-                resolved_base_url = configured_base_url
+                resolved_base_url = _runtime_preferred_base_url(
+                    _rt, resolved_provider, configured_base_url
+                )
 
                 # Named custom providers (custom:slug) may not be resolvable by
                 # hermes_cli.runtime_provider directly. Fall back to config.yaml
@@ -10072,8 +10076,6 @@ def _run_agent_streaming(
                         resolved_provider, resolved_api_key, resolved_base_url,
                         profile_name=_resolved_profile_name,
                     )
-                else:
-                    resolved_base_url = configured_base_url
 
             # Read per-profile config at call time (not module-level snapshot).
             # The streaming worker is a detached thread that does NOT inherit the
@@ -10688,7 +10690,12 @@ def _run_agent_streaming(
             # Persist the user message BEFORE streaming starts so it's durable even if
             # the server crashes before the first checkpoint fires (every 15s).
             with _agent_lock:
-                s.save(touch_updated_at=True, skip_index=False)
+                try:
+                    s.save(touch_updated_at=True, skip_index=False)
+                except TypeError as _save_error:
+                    if "skip_index" not in str(_save_error):
+                        raise
+                    s.save(touch_updated_at=True)
 
             _ckpt_thread = threading.Thread(
                 target=_periodic_checkpoint, daemon=True,

@@ -7099,6 +7099,11 @@ def _resolve_persisted_session_owner_state(
     provider: str | None = None,
 ):
     """Resolve a persisted session through its owner snapshot and env."""
+    # resolve_runtime_provider_with_anthropic_env_lock is centralized in the owner-state resolver.
+    try:
+        from hermes_cli.runtime_provider import resolve_runtime_provider as _route_runtime_resolver
+    except ImportError:
+        _route_runtime_resolver = None
     from api.config import resolve_owner_model_state, resolve_owner_runtime_state
 
     if model is None:
@@ -7108,7 +7113,9 @@ def _resolve_persisted_session_owner_state(
     profile = getattr(session, "profile", None)
     if not profile:
         state = resolve_owner_model_state(model, provider, config_obj=None)
-        return resolve_owner_runtime_state(state, config_obj=None), None
+        return resolve_owner_runtime_state(
+            state, config_obj=None, runtime_resolver=_route_runtime_resolver
+        ), None
     from api.profiles import (
         get_hermes_home_for_profile,
         get_profile_runtime_env,
@@ -7128,6 +7135,7 @@ def _resolve_persisted_session_owner_state(
         config_obj=owner_cfg,
         owner_env=owner_env,
         owner_profile=profile,
+        runtime_resolver=_route_runtime_resolver,
     ), owner_cfg
 
 
@@ -7399,7 +7407,7 @@ def _resolve_compatible_session_model_state(
         _owner_model_bare, _owner_explicit_provider = _split_provider_qualified_model(
             model, profile_config
         )
-        if model_provider and not _owner_explicit_provider:
+        if model_provider and not _owner_explicit_provider and not owner_state.repaired:
             requested_provider = _clean_session_model_provider(
                 model_provider, profile_config
             )
