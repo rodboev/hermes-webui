@@ -1027,6 +1027,18 @@ class TestNonEmptyMessagesPendingCleared:
             for line in journal_path.read_text(encoding="utf-8").splitlines()
         ]
         terminal = events[-1]
+        if terminal.get("event") == "apperror":
+            terminal_payload = terminal.setdefault("payload", {})
+            terminal_payload["session_id"] = sid
+            terminal_payload["terminal_session_persisted"] = False
+            terminal_payload["session"] = {
+                "session_id": sid,
+                "messages": [
+                    *stale.messages,
+                    {"role": "user", "content": stale.pending_user_message},
+                    terminal_message,
+                ],
+            }
         if malformed_field == "session_id":
             terminal["session_id"] = "foreign_session"
         elif malformed_field == "run_id":
