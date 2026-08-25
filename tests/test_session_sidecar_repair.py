@@ -984,7 +984,7 @@ class TestNonEmptyMessagesPendingCleared:
             "event_id",
             "payload_session_id",
             "embedded_session_id",
-            "later_done_event_id",
+            "later_terminal_event_id",
         ],
     )
     def test_gateway_terminal_error_rejects_foreign_or_malformed_identity(
@@ -1012,9 +1012,9 @@ class TestNonEmptyMessagesPendingCleared:
             stale,
             live_messages=stale.messages,
         )
-        if malformed_field == "later_done_event_id":
+        if malformed_field == "later_terminal_event_id":
             RunJournalWriter(sid, stream_id).append_sse_event(
-                "done", {"session_id": sid},
+                "apperror", _payload,
             )
         journal_path = (
             models.SESSION_DIR
