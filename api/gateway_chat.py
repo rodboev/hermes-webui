@@ -1283,6 +1283,9 @@ def _run_gateway_chat_streaming(
                     usage.update({k: v for k, v in _gateway_stream_usage(payload).items() if v})
             usage.update({k: v for k, v in _gateway_stream_usage(last_payload).items() if v})
         assistant_text = final_text.strip()
+        if cancel_event.is_set():
+            put_gateway_event("cancel", {"message": "Cancelled by user"})
+            return
         if terminal_error:
             error_payload = _settle_gateway_terminal_error(
                 session_id,

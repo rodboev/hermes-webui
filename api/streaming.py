@@ -11464,13 +11464,17 @@ def _run_agent_streaming(
                             _error_message['provider_details_label'] = 'Interruption details'
                         elif _err_type == 'tool_limit_reached':
                             _error_message['provider_details_label'] = 'Terminal state details'
-                        from api.session_ops import settle_provider_error_session
-                        _terminal_session_persisted = settle_provider_error_session(
-                            s,
-                            _error_message,
-                            snapshot=_settlement_snapshot,
-                        )
-                        if not _terminal_session_persisted:
+                        if ephemeral:
+                            _cleanup_ephemeral_cancelled_turn(s)
+                            _terminal_session_persisted = False
+                        else:
+                            from api.session_ops import settle_provider_error_session
+                            _terminal_session_persisted = settle_provider_error_session(
+                                s,
+                                _error_message,
+                                snapshot=_settlement_snapshot,
+                            )
+                        if not _terminal_session_persisted and not ephemeral:
                             _clear_failed_provider_error_lifecycle(
                                 s,
                                 active_turn_identity=_active_turn_identity,
@@ -12810,13 +12814,17 @@ def _run_agent_streaming(
                     _error_message['provider_details_label'] = 'Cancellation details'
                 elif _exc_type == 'interrupted':
                     _error_message['provider_details_label'] = 'Interruption details'
-                from api.session_ops import settle_provider_error_session
-                _terminal_session_persisted = settle_provider_error_session(
-                    s,
-                    _error_message,
-                    snapshot=_settlement_snapshot,
-                )
-                if not _terminal_session_persisted:
+                if ephemeral:
+                    _cleanup_ephemeral_cancelled_turn(s)
+                    _terminal_session_persisted = False
+                else:
+                    from api.session_ops import settle_provider_error_session
+                    _terminal_session_persisted = settle_provider_error_session(
+                        s,
+                        _error_message,
+                        snapshot=_settlement_snapshot,
+                    )
+                if not _terminal_session_persisted and not ephemeral:
                     _clear_failed_provider_error_lifecycle(
                         s,
                         active_turn_identity=_active_turn_identity,
