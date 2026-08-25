@@ -9182,11 +9182,11 @@ def _run_agent_streaming(
     # Initialised here (before any code that may raise) so the outer `finally`
     # block can safely check `if _checkpoint_stop is not None` even when an
     # exception fires before the checkpoint thread is created (Issue #765).
-    _checkpoint_stop = None
     _ckpt_thread = None
     _agent_lock = None
     _settlement_failed = False
     _terminal_session_persisted = False
+    _checkpoint_stop = None
     try:
         # Register this stream with the global streaming meter and start the 1 Hz
         # metering ticker. Kept INSIDE the outer try so the outer `finally`'s

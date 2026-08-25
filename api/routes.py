@@ -15435,6 +15435,7 @@ def handle_post(handler, parsed) -> bool:
             # `Session.__init__` does `self.messages = messages or []` — plain
             # assignment, no copy. Without deepcopy, both sessions share the same
             # list object in memory; appending to one mutates the other.
+            # Context settings: context_length=getattr(session, "context_length", None), threshold_tokens=getattr(session, "threshold_tokens", None)
             # Items inside `messages` are dicts with mutable values (tool_calls,
             # content arrays), so a shallow `list(...)` is not enough.
             copied_session = Session(
