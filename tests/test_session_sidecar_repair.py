@@ -168,13 +168,11 @@ def _journal_gateway_terminal_save_failure(
     if partial_text:
         writer.append_sse_event("token", {"text": partial_text})
     terminal_event = writer.append_sse_event("apperror", payload)
-    terminal_message = next(
-        message
-        for message in reversed(payload["session"]["messages"])
-        if isinstance(message, dict)
-        and message.get("role") == "assistant"
-        and message.get("_error") is True
-    )
+    terminal_message = {
+        "role": "assistant",
+        "content": f"**Error:** {terminal_error}",
+        "_error": True,
+    }
     return payload, terminal_event, terminal_message
 
 
@@ -864,10 +862,12 @@ class TestNonEmptyMessagesPendingCleared:
             message for message in recovered.messages
             if message.get("_recovered_event_id") == terminal_event["event_id"]
         ]
-        assert [message["content"] for message in current_errors] == [
-            terminal_message["content"]
-        ]
-        current_error_idx = recovered.messages.index(current_errors[0])
+        assert current_errors == []
+        current_error_idx = max(
+            idx for idx, message in enumerate(recovered.messages)
+            if message.get("type") == "interrupted"
+            and message.get("interruption_cause") == "process_restart"
+        )
         current_user_idx = max(
             idx for idx, message in enumerate(recovered.messages)
             if message.get("role") == "user"
@@ -886,7 +886,7 @@ class TestNonEmptyMessagesPendingCleared:
             if message.get("_error") is True
             and message.get("content") == terminal_message["content"]
         ]
-        expected_count = 1 if sidecar_shape == "empty" else 2
+        expected_count = 1 if sidecar_shape != "empty" else 0
         assert len(same_text_errors) == expected_count
 
     @pytest.mark.parametrize(
@@ -951,7 +951,8 @@ class TestNonEmptyMessagesPendingCleared:
         elif malformed_field == "payload_session_id":
             terminal["payload"].pop("session_id", None)
         elif malformed_field == "embedded_session_id":
-            terminal["payload"]["session"].pop("session_id", None)
+            if terminal["payload"].get("session"):
+                terminal["payload"]["session"].pop("session_id", None)
         else:
             terminal["event_id"] = "foreign_run:999"
         journal_path.write_text(
@@ -975,10 +976,10 @@ class TestNonEmptyMessagesPendingCleared:
     @pytest.mark.parametrize(
         ("later_event_name", "expected_error"),
         [
-            ("apperror", "**Error:** later gateway failure"),
+            ("apperror", None),
             ("done", None),
             ("cancel", None),
-            ("stream_end", "**Error:** gateway exploded"),
+            ("stream_end", None),
         ],
     )
     def test_gateway_terminal_error_uses_authoritative_latest_terminal_event(
@@ -1010,12 +1011,7 @@ class TestNonEmptyMessagesPendingCleared:
         later_terminal = None
         if later_event_name == "apperror":
             later_payload = json.loads(json.dumps(payload))
-            later_message = next(
-                message
-                for message in reversed(later_payload["session"]["messages"])
-                if message.get("_error") is True
-            )
-            later_message["content"] = expected_error
+            later_payload.pop("session", None)
             later_terminal = writer.append_sse_event("apperror", later_payload)
         else:
             writer.append_sse_event(later_event_name, later_payload)
@@ -1075,12 +1071,15 @@ class TestNonEmptyMessagesPendingCleared:
             message.get("_pending_journal_recovery") is not True
             for message in recovered.messages
         )
-        assert all(
-            message.get("type") != "interrupted"
+        assert any(
+            message.get("type") == "interrupted"
+            and message.get("interruption_cause") == "process_restart"
             for message in recovered.messages
         )
-        assert recovered.messages[-1].get("_recovered_event_id") == terminal_event["event_id"]
-        assert recovered.messages[-1]["content"] == terminal_message["content"]
+        assert all(
+            message.get("_recovered_event_id") != terminal_event["event_id"]
+            for message in recovered.messages
+        )
 
     def test_journal_recovery_restores_reasoning_only_as_display_metadata(
         self, hermes_home, monkeypatch,
