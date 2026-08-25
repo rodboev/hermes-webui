@@ -7919,6 +7919,7 @@ def _provider_error_cleanup_is_durable(session) -> bool:
             and getattr(persisted, "active_stream_id", None) is None
             and getattr(persisted, "pending_user_message", None) is None
             and getattr(persisted, "pending_started_at", None) is None
+            and getattr(persisted, "pending_user_source", None) is None
             and not getattr(persisted, "pending_attachments", None)
         )
     except Exception:
@@ -9185,6 +9186,7 @@ def _run_agent_streaming(
     _ckpt_thread = None
     _agent_lock = None
     _settlement_failed = False
+    _terminal_session_persisted = False
     try:
         # Register this stream with the global streaming meter and start the 1 Hz
         # metering ticker. Kept INSIDE the outer try so the outer `finally`'s

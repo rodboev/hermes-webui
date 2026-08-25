@@ -102,7 +102,7 @@ def _provider_error_stable_id_conflicted(row) -> bool:
         return False
     values = set()
     for key in ("id", "_stable_id", "stable_id", "message_id"):
-        if key not in row or row[key] in (None, ""):
+        if key not in row or row[key] is None:
             continue
         if not isinstance(row[key], (str, int)) or isinstance(row[key], bool):
             return True
@@ -110,6 +110,14 @@ def _provider_error_stable_id_conflicted(row) -> bool:
             return True
         values.add(str(row[key]))
     return len(values) > 1
+
+
+def _provider_error_api_content_matches(left, right) -> bool:
+    left_present = isinstance(left, dict) and left.get("api_content") not in (None, "")
+    right_present = isinstance(right, dict) and right.get("api_content") not in (None, "")
+    if left_present != right_present:
+        return False
+    return not left_present or left.get("api_content") == right.get("api_content")
 
 
 def _provider_error_row_is_dismissible(row) -> bool:
@@ -221,8 +229,6 @@ def _provider_error_lineage_sessions(session) -> list:
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
     if not _provider_error_session_is_idle(session):
         raise ProviderErrorDismissalUnavailable("session_active", 409)
-    if source == "fork":
-        return [session]
 
     sessions = [session]
     seen = {str(getattr(session, "session_id", "") or "")}
@@ -250,7 +256,9 @@ def _provider_error_lineage_sessions(session) -> list:
         ):
             raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
         parent_source = _provider_error_session_source(parent)
-        if parent_source not in {"webui", "fork"}:
+        if source == "fork" and parent_source != "fork":
+            break
+        if source != "fork" and parent_source not in {"webui", "fork"}:
             raise ProviderErrorDismissalUnavailable("lineage_unavailable", 409)
         if not _provider_error_session_is_idle(parent):
             raise ProviderErrorDismissalUnavailable("session_active", 409)
@@ -536,6 +544,7 @@ def project_provider_error_dismissal_capabilities(session, projected: dict) -> d
             and _provider_error_row_is_dismissible(entry["row"])
             and entry["row_digest"] == digest
             and entry["stable_id"] == stable_id
+            and _provider_error_api_content_matches(message, entry["row"])
         ]
         if not candidates:
             continue
@@ -850,7 +859,10 @@ def _provider_error_sidecar_contains_new_dismissed_row(snapshot, row) -> bool:
                 )
             )
 
-        original_count = dismissed_count(original_contents) if original_contents is not None else 0
+        try:
+            original_count = dismissed_count(original_contents) if original_contents is not None else 0
+        except (TypeError, ValueError, json.JSONDecodeError):
+            original_count = 0
         current_count = dismissed_count(path.read_bytes())
         return current_count > original_count
     except (OSError, TypeError, ValueError, json.JSONDecodeError):

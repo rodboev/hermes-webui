@@ -186,6 +186,22 @@ def test_conflicting_stable_id_aliases_fail_closed():
     assert "_provider_error_dismiss_ref" not in projected["messages"][0]
 
 
+@pytest.mark.parametrize("row", [
+    _message(id="", message_id="valid"),
+    _message(id="   "),
+    _message(id=1, message_id=True),
+])
+def test_malformed_stable_id_aliases_fail_closed(row):
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    session = _FakeSession([row])
+    projected = project_provider_error_dismissal_capabilities(
+        session,
+        {"messages": copy.deepcopy(session.messages)},
+    )
+    assert "_provider_error_dismiss_ref" not in projected["messages"][0]
+
+
 def test_anchor_scene_transport_fields_do_not_change_owner_digest():
     from api.session_ops import project_provider_error_dismissal_capabilities
 
@@ -200,12 +216,23 @@ def test_anchor_scene_transport_fields_do_not_change_owner_digest():
 def test_state_db_api_content_does_not_change_owner_digest():
     from api.session_ops import project_provider_error_dismissal_capabilities
 
-    session = _FakeSession([_message()])
+    session = _FakeSession([_message(api_content={"private": True})])
     projected = project_provider_error_dismissal_capabilities(
         session,
         {"messages": [{**copy.deepcopy(session.messages[0]), "api_content": {"private": True}}]},
     )
     assert projected["messages"][0]["_provider_error_dismiss_ref"]
+
+
+def test_conflicting_state_db_api_content_fails_closed():
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    session = _FakeSession([_message()])
+    projected = project_provider_error_dismissal_capabilities(
+        session,
+        {"messages": [{**copy.deepcopy(session.messages[0]), "api_content": {"private": True}}]},
+    )
+    assert "_provider_error_dismiss_ref" not in projected["messages"][0]
 
 
 def test_dismissed_projection_uses_existing_marker_and_reference_only():
@@ -303,6 +330,26 @@ def test_compression_lineage_deduplicates_aliased_agent_locks():
                 config.SESSION_AGENT_LOCKS.pop(parent.session_id, None)
                 config.SESSION_AGENT_LOCKS.pop(child.session_id, None)
     assert plan.owner_session_id == parent.session_id
+
+
+def test_compressed_fork_continuation_keeps_fork_parent_owner():
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    parent = _FakeSession([_message("parent")], session_id="fork-parent")
+    parent.pre_compression_snapshot = True
+    parent.session_source = parent.raw_source = parent.source_tag = "fork"
+    child = _FakeSession(
+        [_message("child")],
+        session_id="fork-child",
+        parent_session_id=parent.session_id,
+    )
+    child.session_source = child.raw_source = child.source_tag = "fork"
+    with patch("api.session_ops.get_session", return_value=parent):
+        projected = project_provider_error_dismissal_capabilities(
+            child,
+            {"messages": copy.deepcopy(parent.messages + child.messages)},
+        )
+    assert projected["messages"][0]["_provider_error_dismiss_ref"]
 
 
 def test_settlement_restores_producer_snapshot_before_a_later_unrelated_save():
@@ -451,6 +498,34 @@ def test_dismissal_replace_then_raise_returns_success_when_disk_commit_survives(
         result = apply_provider_error_dismissal(loaded, plan.dismiss_ref)
     assert result.dismiss_ref == plan.dismiss_ref
     assert models.Session.load(session.session_id).messages[0]["_dismissed"] is True
+
+
+def test_dismissal_corrupt_original_can_confirm_a_committed_marker(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import apply_provider_error_dismissal, provider_error_dismissal_plan
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-dismiss-corrupt",
+        workspace=tmp_path,
+        messages=[_message()],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    plan = provider_error_dismissal_plan(loaded, 0)
+    session.path.write_text("{broken", encoding="utf-8")
+    original_replace = models._safe_replace
+
+    def replace_then_raise(src, dst):
+        original_replace(src, dst)
+        raise OSError("post-replace failure")
+
+    with patch.object(models, "_safe_replace", side_effect=replace_then_raise), \
+         patch("api.session_ops._restore_provider_error_sidecar", return_value=False):
+        result = apply_provider_error_dismissal(loaded, plan.dismiss_ref)
+    assert result.dismiss_ref == plan.dismiss_ref
+
 
 def test_settlement_keeps_committed_sidecar_when_rollback_is_unavailable(tmp_path, monkeypatch):
     from api import models
