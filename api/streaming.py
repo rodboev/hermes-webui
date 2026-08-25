@@ -12822,6 +12822,7 @@ def _run_agent_streaming(
                     _cleanup_ephemeral_cancelled_turn(s)
                     _terminal_session_persisted = False
                 else:
+                    # The settlement helper owns the former s.messages.append(_error_message) write.
                     from api.session_ops import settle_provider_error_session
                     _terminal_session_persisted = settle_provider_error_session(
                         s,
