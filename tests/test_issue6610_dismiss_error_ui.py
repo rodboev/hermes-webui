@@ -54,9 +54,11 @@ def test_only_server_reference_renders_without_content_or_index():
 global.S={session:{session_id:'s1'},busy:false,activeStreamId:null};
 const ref='a'.repeat(64);
 const button=_providerErrorDismissalButtonHtml({_provider_error_dismiss_ref:ref},0,false);
-console.log(JSON.stringify({button,hasContent:button.includes('provider failed'),hasIndex:button.includes('message-index'),hasRef:button.includes('data-dismiss-ref')}));
+const invalid='Z'.repeat(64);
+console.log(JSON.stringify({button,invalid:_isProviderErrorCardMessage({_provider_error_dismiss_ref:invalid}),invalidButton:_providerErrorDismissalButtonHtml({_provider_error_dismiss_ref:invalid},0,false),hasContent:button.includes('provider failed'),hasIndex:button.includes('message-index'),hasRef:button.includes('data-dismiss-ref')}));
 """)
     assert result["hasContent"] is False and result["hasIndex"] is False and result["hasRef"] is True
+    assert result["invalid"] is False and result["invalidButton"] == ""
 
 
 def test_dismissed_provider_marker_hides_only_marked_row_and_ordinary_tombstone_survives():

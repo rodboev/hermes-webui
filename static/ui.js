@@ -11163,11 +11163,11 @@ function _isRecoveryControlMessage(m){
   return _isRecoveryControlMessageText(msgContent(m)||String(m.content||''));
 }
 function _isProviderErrorCardMessage(m){
-  return !!(m&&typeof m._provider_error_dismiss_ref==='string'&&m._provider_error_dismiss_ref.length===64);
+  return !!(m&&typeof m._provider_error_dismiss_ref==='string'&&/^[0-9a-f]{64}$/.test(m._provider_error_dismiss_ref));
 }
 function _providerErrorDismissalButtonHtml(message, rawIdx, readOnlySession){
   const dismissRef=message&&typeof message._provider_error_dismiss_ref==='string' ? message._provider_error_dismiss_ref : '';
-  if(readOnlySession||!dismissRef||message._dismissed===true) return '';
+  if(readOnlySession||!/^[0-9a-f]{64}$/.test(dismissRef)||message._dismissed===true) return '';
   const session=S&&S.session||{};
   if(!!S.busy||!!S.activeStreamId||!!session.active_stream_id||!!session.pending_user_message||!!session.pending_started_at||!!session.has_pending_user_message) return '';
   const label=esc(t('dismiss_error_card'));

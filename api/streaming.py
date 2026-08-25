@@ -7908,6 +7908,23 @@ def _materialize_pending_user_turn_before_error(
     return True
 
 
+def _provider_error_cleanup_is_durable(session) -> bool:
+    try:
+        from api.models import Session
+
+        persisted = Session.load(str(getattr(session, "session_id", "") or ""))
+        return bool(
+            persisted is not None
+            and persisted.messages == getattr(session, "messages", None)
+            and getattr(persisted, "active_stream_id", None) is None
+            and getattr(persisted, "pending_user_message", None) is None
+            and getattr(persisted, "pending_started_at", None) is None
+            and not getattr(persisted, "pending_attachments", None)
+        )
+    except Exception:
+        return False
+
+
 def _clear_failed_provider_error_lifecycle(session, *, active_turn_identity=None) -> None:
     """Leave a failed terminal write retryable without retaining stream state."""
     cleanup_snapshot = copy.deepcopy(session.__dict__)
@@ -7927,6 +7944,8 @@ def _clear_failed_provider_error_lifecycle(session, *, active_turn_identity=None
         session.save(skip_index=True)
     except Exception:
         logger.debug("Failed to persist lifecycle cleanup after provider-error write failure", exc_info=True)
+        if _provider_error_cleanup_is_durable(session):
+            return
         session.__dict__.clear()
         session.__dict__.update(copy.deepcopy(cleanup_snapshot))
 

@@ -920,6 +920,9 @@ def _clear_gateway_pending_state(session: Any, stream_id: str) -> None:
         try:
             session.save(skip_index=True)
         except Exception:
+            from api.streaming import _provider_error_cleanup_is_durable
+            if _provider_error_cleanup_is_durable(session):
+                return
             session.__dict__.clear()
             session.__dict__.update(copy.deepcopy(cleanup_snapshot))
             logger.debug("Gateway sidecar-only cleanup save failed", exc_info=True)

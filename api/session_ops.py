@@ -33,6 +33,7 @@ _PROVIDER_ERROR_PUBLIC_ONLY_FIELDS = {
     "_provider_error_dismissed",
     "_anchor_activity_scene",
     "_anchor_stream_id",
+    "api_content",
 }
 
 _PROVIDER_ERROR_PROJECTION_CACHE: dict[tuple, tuple[list[dict], str]] = {}
@@ -104,6 +105,8 @@ def _provider_error_stable_id_conflicted(row) -> bool:
         if key not in row or row[key] in (None, ""):
             continue
         if not isinstance(row[key], (str, int)) or isinstance(row[key], bool):
+            return True
+        if isinstance(row[key], str) and not row[key].strip():
             return True
         values.add(str(row[key]))
     return len(values) > 1
@@ -490,10 +493,16 @@ def apply_provider_error_dismissal(session, dismiss_ref: str, *, lock_held: bool
     if current.get("_dismissed") is True:
         return plan
     snapshot = copy.deepcopy(owner.__dict__)
+    sidecar_snapshot = _provider_error_sidecar_snapshot(owner)
+    if sidecar_snapshot is not None and not sidecar_snapshot[2]:
+        raise ProviderErrorDismissalUnavailable("persistence_failed", 409)
     try:
         current["_dismissed"] = True
         owner.save(touch_updated_at=False, skip_index=True)
     except Exception as exc:
+        restored = _restore_provider_error_sidecar(sidecar_snapshot)
+        if not restored and _provider_error_sidecar_contains_new_dismissed_row(sidecar_snapshot, current):
+            return plan
         restore_regeneration_state(owner, snapshot)
         raise ProviderErrorDismissalUnavailable("persistence_failed", 409) from exc
     return plan
@@ -545,6 +554,8 @@ def project_provider_error_dismissal_capabilities(session, projected: dict) -> d
         message["_provider_error_dismiss_ref"] = _provider_error_reference(**payload)
         if source_row.get("_dismissed") is True:
             message["_dismissed"] = True
+        else:
+            message.pop("_dismissed", None)
     return result
 
 
@@ -805,8 +816,42 @@ def _provider_error_sidecar_contains_row(snapshot, row) -> bool:
                 )
             )
 
-        original_count = matching_count(original_contents) if original_contents is not None else 0
+        try:
+            original_count = matching_count(original_contents) if original_contents is not None else 0
+        except (TypeError, ValueError, json.JSONDecodeError):
+            original_count = 0
         current_count = matching_count(path.read_bytes())
+        return current_count > original_count
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _provider_error_sidecar_contains_new_dismissed_row(snapshot, row) -> bool:
+    if snapshot is None or row is None:
+        return False
+    path, original_contents, readable = snapshot
+    if not readable:
+        return False
+    try:
+        expected_digest = _provider_error_reference_digest(row)
+        expected_stable_id = _provider_error_stable_id(row)
+
+        def dismissed_count(contents) -> int:
+            payload = json.loads(contents)
+            rows = payload.get("messages") if isinstance(payload, dict) else None
+            return sum(
+                1
+                for candidate in rows or []
+                if (
+                    isinstance(candidate, dict)
+                    and candidate.get("_dismissed") is True
+                    and _provider_error_reference_digest(candidate) == expected_digest
+                    and _provider_error_stable_id(candidate) == expected_stable_id
+                )
+            )
+
+        original_count = dismissed_count(original_contents) if original_contents is not None else 0
+        current_count = dismissed_count(path.read_bytes())
         return current_count > original_count
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False

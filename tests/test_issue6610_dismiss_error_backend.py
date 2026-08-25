@@ -1,6 +1,7 @@
 """Production-composed contract tests for issue #6610 RESPEC-4."""
 
 import copy
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlparse
@@ -196,6 +197,17 @@ def test_anchor_scene_transport_fields_do_not_change_owner_digest():
     assert projected["messages"][0]["_provider_error_dismiss_ref"]
 
 
+def test_state_db_api_content_does_not_change_owner_digest():
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    session = _FakeSession([_message()])
+    projected = project_provider_error_dismissal_capabilities(
+        session,
+        {"messages": [{**copy.deepcopy(session.messages[0]), "api_content": {"private": True}}]},
+    )
+    assert projected["messages"][0]["_provider_error_dismiss_ref"]
+
+
 def test_dismissed_projection_uses_existing_marker_and_reference_only():
     from api.session_ops import project_provider_error_dismissal_capabilities
 
@@ -208,6 +220,28 @@ def test_dismissed_projection_uses_existing_marker_and_reference_only():
     assert row["_dismissed"] is True
     assert row["_provider_error_dismiss_ref"]
     assert "_provider_error_dismissed" not in row
+
+
+def test_unsaved_dismissed_marker_is_not_projected(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-unsaved-marker",
+        workspace=tmp_path,
+        messages=[_message()],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    loaded.messages[0]["_dismissed"] = True
+    projected = project_provider_error_dismissal_capabilities(
+        loaded,
+        {"messages": copy.deepcopy(loaded.messages)},
+    )
+    assert projected["messages"][0].get("_dismissed") is None
+    assert projected["messages"][0]["_provider_error_dismiss_ref"]
 
 
 def test_compression_lineage_projects_and_mutates_the_physical_owner():
@@ -375,6 +409,48 @@ def test_settlement_does_not_confuse_preexisting_duplicate_with_new_commit(tmp_p
         assert settle_provider_error_session(loaded, _message(id="same-row")) is False
     assert len(loaded.messages) == 1
 
+
+def test_corrupt_original_sidecar_can_confirm_a_committed_producer_row(tmp_path, monkeypatch):
+    from api.session_ops import settle_provider_error_session
+
+    class _PersistingFailure(_FakeSession):
+        def save(self, **kwargs):
+            self.path.write_text(json.dumps({"messages": self.messages}), encoding="utf-8")
+            raise OSError("post-replace failure")
+
+    session = _PersistingFailure([])
+    session.path = tmp_path / "corrupt-original.json"
+    session.path.write_text("{broken", encoding="utf-8")
+    with patch("api.session_ops._restore_provider_error_sidecar", return_value=False):
+        assert settle_provider_error_session(session, _message()) is True
+    assert len(json.loads(session.path.read_text(encoding="utf-8"))["messages"]) == 1
+
+
+def test_dismissal_replace_then_raise_returns_success_when_disk_commit_survives(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import apply_provider_error_dismissal, provider_error_dismissal_plan
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-dismiss-partial",
+        workspace=tmp_path,
+        messages=[_message()],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    plan = provider_error_dismissal_plan(loaded, 0)
+    original_replace = models._safe_replace
+
+    def replace_then_raise(src, dst):
+        original_replace(src, dst)
+        raise OSError("post-replace failure")
+
+    with patch.object(models, "_safe_replace", side_effect=replace_then_raise), \
+         patch("api.session_ops._restore_provider_error_sidecar", return_value=False):
+        result = apply_provider_error_dismissal(loaded, plan.dismiss_ref)
+    assert result.dismiss_ref == plan.dismiss_ref
+    assert models.Session.load(session.session_id).messages[0]["_dismissed"] is True
 
 def test_settlement_keeps_committed_sidecar_when_rollback_is_unavailable(tmp_path, monkeypatch):
     from api import models
