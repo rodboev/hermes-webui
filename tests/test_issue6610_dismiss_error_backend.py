@@ -129,6 +129,66 @@ def test_sidecar_source_conflict_with_state_db_fails_closed():
         assert provider_error_dismissal_ref(session, 0) is None
 
 
+def test_webui_sidecar_source_is_compatible_with_gateway_state_db_source():
+    from api.session_ops import provider_error_dismissal_ref
+
+    session = _FakeSession([_message()])
+    with patch("api.routes._state_db_session_source", return_value="api_server"):
+        assert provider_error_dismissal_ref(session, 0)
+
+
+def test_gateway_state_db_source_without_webui_sidecar_provenance_fails_closed():
+    from api.session_ops import provider_error_dismissal_ref
+
+    session = _FakeSession([_message()])
+    session.session_source = session.raw_source = session.source_tag = None
+    with patch("api.routes._state_db_session_source", return_value="api_server"):
+        assert provider_error_dismissal_ref(session, 0) is None
+
+
+def test_webui_chat_start_persists_gateway_ownership_marker(tmp_path, monkeypatch):
+    from api import models
+    from api.models import Session
+    import api.routes as routes
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    monkeypatch.setattr(models, "SESSION_INDEX_FILE", tmp_path / "index.json")
+    monkeypatch.setattr(routes, "register_session_writeback_owner", lambda *args, **kwargs: None)
+    session = Session(session_id="issue6610-gateway-marker", workspace=tmp_path)
+    routes._prepare_chat_start_session_for_stream(
+        session,
+        msg="gateway marker",
+        attachments=[],
+        workspace=str(tmp_path),
+        model="test-model",
+        model_provider=None,
+        stream_id="issue6610-gateway-stream",
+        started_at=123.0,
+    )
+    assert session.session_source == session.raw_source == session.source_tag == "webui"
+    assert session.source_label == "WebUI"
+    reloaded = models.Session.load(session.session_id)
+    assert reloaded is not None
+    assert reloaded.session_source == reloaded.raw_source == reloaded.source_tag == "webui"
+    assert reloaded.source_label == "WebUI"
+
+
+def test_dismiss_route_accepts_webui_sidecar_over_gateway_state_source():
+    import api.routes as routes
+
+    session = _FakeSession([_message()])
+    with (
+        patch.object(routes, "get_session", return_value=session),
+        patch.object(routes, "_lookup_cli_session_metadata", return_value={
+            "source_tag": "api_server",
+            "raw_source": "api_server",
+            "session_source": "api",
+        }),
+        patch.object(routes, "_state_db_session_source", return_value="api_server"),
+    ):
+        assert routes._dismiss_error_source_rejection(session.session_id, None) is None
+
+
 def test_fork_source_remains_authoritative_over_webui_state_mirror():
     from api.session_ops import provider_error_dismissal_ref
 

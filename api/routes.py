@@ -3970,9 +3970,15 @@ def _dismiss_error_source_rejection(sid: str, handler):
     if existing is not None:
         if not _session_visible_to_active_profile(getattr(existing, "profile", None), handler):
             return "Session not found", 404
+        existing_sources = {
+            str(getattr(existing, key, None) or "").strip().lower()
+            for key in ("session_source", "raw_source", "source_tag")
+            if str(getattr(existing, key, None) or "").strip()
+        }
+        gateway_webui_source = state_source in {"api", "api_server"} and existing_sources == {"webui"}
         if (
-            (cli_meta and not _session_source_is_webui(cli_meta))
-            or state_source not in {"", "webui", "fork"}
+            (cli_meta and not _session_source_is_webui(cli_meta) and not gateway_webui_source)
+            or (state_source not in {"", "webui", "fork"} and not gateway_webui_source)
         ):
             return "Read-only imported sessions cannot be modified", 403
         if _session_is_subagent_view_only(sid):
@@ -22650,6 +22656,23 @@ def _prepare_chat_start_session_for_stream(
         if str(getattr(s, "session_source", None) or "").strip().lower() == "fork"
         else source
     )
+    existing_sources = {
+        str(getattr(s, key, None) or "").strip().lower()
+        for key in ("session_source", "raw_source", "source_tag")
+        if str(getattr(s, key, None) or "").strip()
+    }
+    if (
+        effective_source == "webui"
+        and not existing_sources
+        and not getattr(s, "is_cli_session", False)
+        and not getattr(s, "read_only", False)
+    ):
+        # Gateway state.db rows are labelled api; the sidecar marker is the
+        # durable proof that this WebUI session owns the shared id.
+        s.session_source = "webui"
+        s.raw_source = "webui"
+        s.source_tag = "webui"
+        s.source_label = "WebUI"
     s.workspace = workspace
     s.model = model
     s.model_provider = model_provider

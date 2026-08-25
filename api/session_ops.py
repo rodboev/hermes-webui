@@ -169,14 +169,18 @@ def _provider_error_session_source(session) -> str:
         )
     except Exception:
         state_source = ""
-    if state_source and state_source not in {"webui", "fork"}:
+    gateway_webui_source = values == {"webui"} and state_source == "api"
+    if state_source and state_source not in {"webui", "fork"} and not gateway_webui_source:
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
     explicit_source = next(iter(values)) if values else ""
     source_conflict = bool(
         values
         and state_source
         and explicit_source != state_source
-        and not (explicit_source == "fork" and state_source == "webui")
+        and not (
+            (explicit_source == "fork" and state_source == "webui")
+            or (explicit_source == "webui" and state_source == "api")
+        )
     )
     if len(values) > 1 or source_conflict:
         raise ProviderErrorDismissalUnavailable("ambiguous_source", 403)
