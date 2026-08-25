@@ -1138,6 +1138,7 @@ class TestNonEmptyMessagesPendingCleared:
         )
         stale.pending_user_message = "Current gateway request"
         stale.pending_started_at = time.time() - 120
+        monkeypatch.setattr(config, "SERVER_START_TIME", stale.pending_started_at + 1)
         stale.active_stream_id = stream_id
         stale.save()
         models.SESSIONS.pop(sid, None)
