@@ -816,6 +816,7 @@ def _settle_gateway_terminal_error(
     model_provider,
     terminal_error,
     *,
+    cancel_event=None,
     error_type_override=None,
     error_classification_override=None,
 ):
@@ -829,6 +830,8 @@ def _settle_gateway_terminal_error(
     )
 
     with _get_session_agent_lock(session_id):
+        if cancel_event is not None and cancel_event.is_set():
+            return None
         session = get_session(session_id)
         if not _stream_writeback_is_current(session, stream_id):
             return None
@@ -1117,6 +1120,7 @@ def _run_gateway_chat_streaming(
                     model,
                     model_provider,
                     str(exc),
+                    cancel_event=cancel_event,
                 )
                 if error_payload is None:
                     return
@@ -1294,6 +1298,7 @@ def _run_gateway_chat_streaming(
                 model,
                 model_provider,
                 terminal_error,
+                cancel_event=cancel_event,
             )
             if error_payload is None:
                 return
@@ -1304,6 +1309,7 @@ def _run_gateway_chat_streaming(
                 session_id, stream_id, workspace, model, model_provider,
                 "Gateway returned no assistant message for this turn.",
                 error_type_override="gateway_empty_response",
+                cancel_event=cancel_event,
             )
             if error_payload is not None:
                 put_gateway_event("apperror", error_payload)
@@ -1504,12 +1510,16 @@ def _run_gateway_chat_streaming(
                 model,
                 model_provider,
                 fallback.get("message") or str(exc),
+                cancel_event=cancel_event,
                 error_classification_override=fallback,
             )
         except Exception:
             logger.debug("Gateway HTTP error settlement failed", exc_info=True)
             settled = None
-        put_gateway_event("apperror", settled or fallback)
+        if cancel_event.is_set():
+            put_gateway_event("cancel", {"message": "Cancelled by user"})
+        else:
+            put_gateway_event("apperror", settled or fallback)
     except Exception as exc:
         safe = _redact_text(str(exc))[:500]
         fallback = {
@@ -1526,12 +1536,16 @@ def _run_gateway_chat_streaming(
                 model,
                 model_provider,
                 fallback["message"],
+                cancel_event=cancel_event,
                 error_classification_override=fallback,
             )
         except Exception:
             logger.debug("Gateway error settlement failed", exc_info=True)
             settled = None
-        put_gateway_event("apperror", settled or fallback)
+        if cancel_event.is_set():
+            put_gateway_event("cancel", {"message": "Cancelled by user"})
+        else:
+            put_gateway_event("apperror", settled or fallback)
     finally:
         mapped_run_id = str(_STREAM_RUN_IDS.get(stream_id) or "").strip()
         if mapped_run_id:

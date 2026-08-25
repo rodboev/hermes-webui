@@ -12033,7 +12033,11 @@ def _run_agent_streaming(
             # is still settling as a normal completion. The pause re-read, clear,
             # restore, and save must stay under the session lock so a concurrent
             # suppression cannot observe stale pause state or lose its update.
-            _lock_ctx = _agent_lock if _agent_lock is not None else contextlib.nullcontext()
+            if _agent_lock is None:
+                _agent_lock = _get_session_agent_lock(
+                    str(getattr(s, "session_id", None) or session_id)
+                )
+            _lock_ctx = _agent_lock
             with _lock_ctx:
                 if cancel_event.is_set():
                     _finalize_cancelled_turn(s, ephemeral=False, stream_id=stream_id)
