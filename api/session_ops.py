@@ -99,14 +99,13 @@ def _provider_error_stable_id(row) -> str | None:
 def _provider_error_stable_id_conflicted(row) -> bool:
     if not isinstance(row, dict):
         return False
-    values = {
-        str(row[key])
-        for key in ("id", "_stable_id", "stable_id", "message_id")
-        if key in row
-        and row[key] not in (None, "")
-        and isinstance(row[key], (str, int))
-        and not isinstance(row[key], bool)
-    }
+    values = set()
+    for key in ("id", "_stable_id", "stable_id", "message_id"):
+        if key not in row or row[key] in (None, ""):
+            continue
+        if not isinstance(row[key], (str, int)) or isinstance(row[key], bool):
+            return True
+        values.add(str(row[key]))
     return len(values) > 1
 
 
@@ -161,7 +160,14 @@ def _provider_error_session_source(session) -> str:
         state_source = ""
     if state_source and state_source not in {"webui", "fork"}:
         raise ProviderErrorDismissalUnavailable("read_only_session", 403)
-    if len(values) > 1 or (values and state_source and next(iter(values)) != state_source):
+    explicit_source = next(iter(values)) if values else ""
+    source_conflict = bool(
+        values
+        and state_source
+        and explicit_source != state_source
+        and not (explicit_source == "fork" and state_source == "webui")
+    )
+    if len(values) > 1 or source_conflict:
         raise ProviderErrorDismissalUnavailable("ambiguous_source", 403)
     if values:
         return next(iter(values))
@@ -269,6 +275,21 @@ def _provider_error_lineage_sessions(session) -> list:
 
 def _provider_error_owner_entries(session, *, projection_cache: bool = False) -> tuple[list[dict], str]:
     owners = _provider_error_lineage_sessions(session)
+    if projection_cache and any(hasattr(owner, "path") for owner in owners):
+        try:
+            from api.models import Session
+
+            persisted_owners = []
+            for owner in owners:
+                persisted = Session.load(str(getattr(owner, "session_id", "") or ""))
+                if persisted is None:
+                    raise ProviderErrorDismissalUnavailable("owner_unavailable", 409)
+                persisted_owners.append(persisted)
+            owners = persisted_owners
+        except ProviderErrorDismissalUnavailable:
+            raise
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            raise ProviderErrorDismissalUnavailable("owner_unavailable", 409) from exc
     cache_key = None
     cache_requires_signature = projection_cache and any(
         hasattr(owner, "path") for owner in owners
@@ -766,19 +787,27 @@ def _restore_provider_error_sidecar(snapshot) -> bool:
 def _provider_error_sidecar_contains_row(snapshot, row) -> bool:
     if snapshot is None or row is None:
         return False
-    path, _contents, readable = snapshot
+    path, original_contents, readable = snapshot
     if not readable:
         return False
     try:
-        payload = json.loads(path.read_bytes())
-        rows = payload.get("messages") if isinstance(payload, dict) else None
         expected_digest = _provider_error_reference_digest(row)
-        return any(
-            isinstance(candidate, dict)
-            and _provider_error_reference_digest(candidate) == expected_digest
-            and _provider_error_stable_id(candidate) == _provider_error_stable_id(row)
-            for candidate in rows or []
-        )
+        def matching_count(contents) -> int:
+            payload = json.loads(contents)
+            rows = payload.get("messages") if isinstance(payload, dict) else None
+            return sum(
+                1
+                for candidate in rows or []
+                if (
+                    isinstance(candidate, dict)
+                    and _provider_error_reference_digest(candidate) == expected_digest
+                    and _provider_error_stable_id(candidate) == _provider_error_stable_id(row)
+                )
+            )
+
+        original_count = matching_count(original_contents) if original_contents is not None else 0
+        current_count = matching_count(path.read_bytes())
+        return current_count > original_count
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
 

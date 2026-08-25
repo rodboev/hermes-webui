@@ -11163,8 +11163,7 @@ function _isRecoveryControlMessage(m){
   return _isRecoveryControlMessageText(msgContent(m)||String(m.content||''));
 }
 function _isProviderErrorCardMessage(m){
-  return !!(m&&(m._error===true&&m._provider_error_type)
-    || (m&&typeof m._provider_error_dismiss_ref==='string'&&m._provider_error_dismiss_ref.length===64));
+  return !!(m&&typeof m._provider_error_dismiss_ref==='string'&&m._provider_error_dismiss_ref.length===64);
 }
 function _providerErrorDismissalButtonHtml(message, rawIdx, readOnlySession){
   const dismissRef=message&&typeof message._provider_error_dismiss_ref==='string' ? message._provider_error_dismiss_ref : '';

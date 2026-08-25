@@ -62,9 +62,10 @@ console.log(JSON.stringify({button,hasContent:button.includes('provider failed')
 def test_dismissed_provider_marker_hides_only_marked_row_and_ordinary_tombstone_survives():
     result = _run(_preamble() + """
 global.S={session:{session_id:'s1'},busy:false,activeStreamId:null};
-console.log(JSON.stringify({provider:_messageIsRenderable({role:'assistant',content:'provider failed',_error:true,_provider_error_type:'error',_dismissed:true}),ordinary:_messageIsRenderable({_dismissed:true,role:'assistant',content:'answer'}),button:_providerErrorDismissalButtonHtml({_error:true,_provider_error_type:'error',_dismissed:true},0,false)}));
+const ref='c'.repeat(64);
+console.log(JSON.stringify({provider:_messageIsRenderable({role:'assistant',content:'provider failed',_provider_error_dismiss_ref:ref,_dismissed:true}),ordinary:_messageIsRenderable({_dismissed:true,role:'assistant',content:'answer'}),imported:_messageIsRenderable({role:'assistant',content:'provider failed',_error:true,_provider_error_type:'error',_dismissed:true}),button:_providerErrorDismissalButtonHtml({_provider_error_dismiss_ref:ref,_dismissed:true},0,false)}));
 """)
-    assert result == {"provider": False, "ordinary": True, "button": ""}
+    assert result == {"provider": False, "ordinary": True, "imported": True, "button": ""}
 
 
 def test_real_dom_dismissal_posts_only_reference_and_honors_localized_focus_contract():

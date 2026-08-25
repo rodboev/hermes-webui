@@ -128,6 +128,15 @@ def test_sidecar_source_conflict_with_state_db_fails_closed():
         assert provider_error_dismissal_ref(session, 0) is None
 
 
+def test_fork_source_remains_authoritative_over_webui_state_mirror():
+    from api.session_ops import provider_error_dismissal_ref
+
+    session = _FakeSession([_message()])
+    session.session_source = session.raw_source = session.source_tag = "fork"
+    with patch("api.routes._state_db_session_source", return_value="webui"):
+        assert provider_error_dismissal_ref(session, 0)
+
+
 def test_missing_compression_parent_fails_closed_without_key_error():
     from api.session_ops import provider_error_dismissal_ref
 
@@ -347,6 +356,26 @@ def test_settlement_rolls_back_sidecar_when_index_write_fails(tmp_path, monkeypa
     assert models.Session.load(session.session_id).messages == [{"role": "user", "content": "prompt"}]
 
 
+def test_settlement_does_not_confuse_preexisting_duplicate_with_new_commit(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import settle_provider_error_session
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    row = _message(id="same-row")
+    session = models.Session(
+        session_id="issue6610-preexisting-duplicate",
+        workspace=tmp_path,
+        messages=[row],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    with patch.object(loaded, "save", side_effect=OSError("save unavailable")), \
+         patch("api.session_ops._restore_provider_error_sidecar", return_value=False):
+        assert settle_provider_error_session(loaded, _message(id="same-row")) is False
+    assert len(loaded.messages) == 1
+
+
 def test_settlement_keeps_committed_sidecar_when_rollback_is_unavailable(tmp_path, monkeypatch):
     from api import models
     from api.session_ops import settle_provider_error_session
@@ -452,6 +481,27 @@ def test_projection_cache_returns_detached_rows(tmp_path, monkeypatch):
     first[0]["row"]["content"] = "mutated"
     second, _ = _provider_error_owner_entries(session, projection_cache=True)
     assert second[0]["row"]["content"] == "provider failed"
+
+
+def test_projection_ignores_unsaved_in_memory_provider_error(tmp_path, monkeypatch):
+    from api import models
+    from api.session_ops import project_provider_error_dismissal_capabilities
+
+    monkeypatch.setattr(models, "SESSION_DIR", tmp_path)
+    session = models.Session(
+        session_id="issue6610-unsaved-projection",
+        workspace=tmp_path,
+        messages=[],
+        source_tag="webui",
+    )
+    session.save(touch_updated_at=False, skip_index=True)
+    loaded = models.Session.load(session.session_id)
+    loaded.messages.append(_message())
+    projected = project_provider_error_dismissal_capabilities(
+        loaded,
+        {"messages": copy.deepcopy(loaded.messages)},
+    )
+    assert "_provider_error_dismiss_ref" not in projected["messages"][0]
 
 
 def test_route_accepts_only_capability_reference():
