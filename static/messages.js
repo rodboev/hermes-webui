@@ -6983,13 +6983,14 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
             _markSessionViewed(activeSid, S.messages.length);
           }
         }finally{
-          _dispatchExtensionTurnLifecycle('turn:cancel',activeSid,streamId,{
-            status:_cancelData.status||_cancelData.type||'cancelled',
-            endedAt:Date.now()/1000,
-          });
-        }
-        finally{
-          _setActivePaneIdleIfOwner();
+          try{
+            _dispatchExtensionTurnLifecycle('turn:cancel',activeSid,streamId,{
+              status:_cancelData.status||_cancelData.type||'cancelled',
+              endedAt:Date.now()/1000,
+            });
+          }finally{
+            _setActivePaneIdleIfOwner();
+          }
         }
       })();
       renderSessionList();
