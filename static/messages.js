@@ -5271,9 +5271,10 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     // Delivery-only identities share the SSE event-id field but must never
     // advance the durable replay cursor.
     if(streamId&&raw.startsWith(`${prefix}delivery:`)) return;
-    const tail=streamId&&raw.startsWith(prefix)
-      ? raw.slice(prefix.length)
-      : raw.slice(raw.lastIndexOf(':')+1);
+    const canonical=!!streamId&&raw.startsWith(prefix);
+    const opaqueRunner=/^event:[1-9]\d*$/.test(raw);
+    if(!canonical&&!opaqueRunner) return;
+    const tail=canonical?raw.slice(prefix.length):raw.slice(raw.lastIndexOf(':')+1);
     if(!/^[1-9]\d*$/.test(tail)) return;
     const seq=Number(tail);
     if(Number.isFinite(seq)&&seq>_lastRunJournalSeq){
