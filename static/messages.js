@@ -5268,8 +5268,12 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     const raw=String(e&&e.lastEventId||'').trim();
     if(!raw) return;
     const prefix=`${String(streamId||'')}:`;
-    if(!streamId||!raw.startsWith(prefix)) return;
-    const tail=raw.slice(prefix.length);
+    // Delivery-only identities share the SSE event-id field but must never
+    // advance the durable replay cursor.
+    if(streamId&&raw.startsWith(`${prefix}delivery:`)) return;
+    const tail=streamId&&raw.startsWith(prefix)
+      ? raw.slice(prefix.length)
+      : raw.slice(raw.lastIndexOf(':')+1);
     if(!/^[1-9]\d*$/.test(tail)) return;
     const seq=Number(tail);
     if(Number.isFinite(seq)&&seq>_lastRunJournalSeq){
