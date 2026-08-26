@@ -138,6 +138,9 @@ def test_issue4085_force_terminal_matrix_preserves_sibling_action():
     action_model = extract_js_function(ui, '_updateActionModel')
     dirty_classifier = extract_js_function(ui, '_updateTargetRecoverableDirty')
     action_applier = extract_js_function(ui, '_applyUpdateActionModel')
+    current_model = extract_js_function(ui, '_updateCurrentActionModel')
+    acquire_transaction = extract_js_function(ui, '_acquireUpdateTransaction')
+    release_transaction = extract_js_function(ui, '_releaseUpdateTransaction')
     show_banner = extract_js_function(ui, '_showUpdateBanner')
     i18n_helper = extract_js_function(ui, '_i18nUpdateText')
     status_fn = extract_js_function(ui, '_formatUpdateTargetStatus')
@@ -152,7 +155,7 @@ const state = {{
   updateBanner: {{ classList: {{ add() {{}}, remove() {{}} }} }},
   updateError: {{ style:{{display:'none'}}, textContent:'' }},
 }};
-global.window = {{ _updateData:null, _updateApplyInFlight:true, _whatsNewSummaryEnabled:false }};
+global.window = {{ _updateData:null, _updateApplyInFlight:false, _updateRetiredTargets:[], _updateForceErrorTarget:null, _whatsNewSummaryEnabled:false }};
 global.$ = (id) => state[id] || null;
 global.t = (key) => ({{ update_local_changes:'Local changes detected', update_force_target:'Force update {{0}}', update_apply_target:'Update {{0}}', update_force:'Force update', update_no_target:'No update target selected.' }}[key] || key);
 global._renderUpdateWhatsNewLinks = () => {{}};
@@ -178,6 +181,9 @@ global.sessionStorage = {{ removeItem: () => {{ sessionRemovals += 1; }} }};
 {dirty_classifier}
 {action_model}
 {action_applier}
+{current_model}
+{acquire_transaction}
+{release_transaction}
 {show_banner}
 {force_fn}
 (async()=>{{
@@ -191,14 +197,16 @@ global.sessionStorage = {{ removeItem: () => {{ sessionRemovals += 1; }} }};
     state.updateError.style.display='none';
     state.updateError.textContent='';
     calls=0; restarts=0; toasts=0; sessionRemovals=0;
-    window._updateApplyInFlight=true;
+    window._updateApplyInFlight=false;
+    window._updateRetiredTargets=[];
+    window._updateForceErrorTarget=null;
     window._updateData=test.data;
     window._expectedTarget=test.attempted;
     const before=JSON.stringify(test.data);
     response = test.response==='up_to_date' ? {{ok:true,up_to_date:true,message:'{{0}} settled'.replace('{{0}}',test.attempted)}} : {{ok:false,refused_rewind:true,message:'{{0}} refused'.replace('{{0}}',test.attempted)}};
     await forceUpdate(state.btnForceUpdate);
     if(calls!==1) throw new Error(test.response+'/'+test.attempted+'/'+test.mode+': expected one request, got '+calls);
-    if(window._updateApplyInFlight!==true) throw new Error(test.response+'/'+test.attempted+'/'+test.mode+': unrelated Apply in-flight state changed');
+    if(window._updateApplyInFlight!==false) throw new Error(test.response+'/'+test.attempted+'/'+test.mode+': terminal Force did not release ownership');
     if(JSON.stringify(window._updateData)!==before) throw new Error(test.response+'/'+test.attempted+'/'+test.mode+': payload mutated');
     if(state.updateError.textContent.indexOf(test.attempted+' ')===-1) throw new Error(test.response+'/'+test.attempted+'/'+test.mode+': response detail missing: '+state.updateError.textContent);
     if(restarts!==0||toasts!==0||sessionRemovals!==0) throw new Error(test.response+'/'+test.attempted+'/'+test.mode+': terminal no-op restarted or cleaned up');
@@ -219,6 +227,255 @@ global.sessionStorage = {{ removeItem: () => {{ sessionRemovals += 1; }} }};
 """
     result = subprocess.run(['node', '-e', script], check=False, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_issue4085_action_renderer_respects_shared_transaction_owner():
+    """A render during either update request cannot re-enable either action."""
+    ui = read('static/ui.js')
+    classifier_fn = extract_js_function(ui, '_updateTargetRecoverableDirty')
+    model_fn = extract_js_function(ui, '_updateActionModel')
+    applier_fn = extract_js_function(ui, '_applyUpdateActionModel')
+    script = f"""
+const state = {{
+  btnApplyUpdate: {{disabled:false,style:{{display:'none'}}}},
+  btnForceUpdate: {{disabled:false,style:{{display:'none'}},dataset:{{target:''}}}},
+}};
+global.window = {{_updateApplyInFlight:true}};
+global.$ = (id) => state[id] || null;
+{classifier_fn}
+{model_fn}
+{applier_fn}
+_applyUpdateActionModel(_updateActionModel({{agent:{{behind:2,dirty:true}},webui:{{behind:2,dirty:false}}}}));
+if(state.btnApplyUpdate.disabled!==true||state.btnForceUpdate.disabled!==true) throw new Error('active render re-enabled an update action: '+JSON.stringify(state));
+"""
+    result = subprocess.run(['node', '-e', script], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_issue4085_force_releases_non_restart_paths_and_holds_restart_lock():
+    """Force owns both controls through restart and releases every other exit."""
+    ui = read('static/ui.js')
+    pieces = [
+        extract_js_function(ui, name) for name in (
+            '_updateTargetRecoverableDirty', '_updateActionModel',
+            '_applyUpdateActionModel', '_updateCurrentActionModel',
+            '_acquireUpdateTransaction', '_releaseUpdateTransaction',
+            '_i18nUpdateText', 'forceUpdate',
+        )
+    ]
+    script = f"""
+const state = {{
+  btnApplyUpdate: {{disabled:false,textContent:'Update Now',style:{{display:'none'}}}},
+  btnForceUpdate: {{disabled:false,textContent:'Force update',style:{{display:'inline-block'}},dataset:{{target:'webui'}}}},
+  updateError: {{style:{{display:'none'}},textContent:''}},
+}};
+const labels = {{
+  update_force:'FORCE', update_force_confirm_title:'CONFIRM {{0}}',
+  update_force_confirm_message:'MESSAGE {{0}}', update_force_updating:'UPDATING',
+  update_force_failed:'FAILED: ', update_force_noop:'NOOP',
+  update_force_applied_restarting:'SUCCESS', update_no_target:'NONE',
+}};
+global.window = {{_updateData:{{webui:{{dirty:true,behind:0,channel:'experimental'}},agent:{{dirty:false,behind:0}}}},_updateApplyInFlight:false,_updateRetiredTargets:[],_updateForceErrorTarget:null}};
+global.$ = (id) => state[id] || null;
+global.t = (key,...args) => String(labels[key] || key).replace(/\\{{(\\d+)\\}}/g,(match,index)=>args[index]===undefined?match:String(args[index]));
+global._readHealthServerIdentity = async () => null;
+global._showUpdateBanner = () => ({{forceTarget:null,applyTargets:[]}});
+global.sessionStorage = {{removeItem(){{sessionRemovals += 1;}}}};
+global._waitForServerThenReload = () => {{reloads += 1;}};
+global.showToast = (message) => {{toast = message;}};
+let mode='cancel';
+let calls=0;
+let reloads=0;
+let sessionRemovals=0;
+let toast=null;
+let dialog=null;
+global.showConfirmDialog = async (options) => {{ dialog=options; return mode!=='cancel'; }};
+global.api = async (url,options) => {{
+  calls += 1;
+  const body=JSON.parse(options.body);
+  if(body.target!=='webui'||body.channel!=='experimental') throw new Error('captured request changed: '+JSON.stringify(body));
+  if(mode==='noop') return {{ok:true,up_to_date:true}};
+  if(mode==='failure') return {{ok:false,message:'backend rejected'}};
+  if(mode==='exception') throw new Error('transport failed');
+  return {{ok:true}};
+}};
+{''.join(pieces)}
+async function run(nextMode) {{
+  mode=nextMode; calls=0; reloads=0; sessionRemovals=0; toast=null; dialog=null;
+  state.btnApplyUpdate.disabled=false; state.btnApplyUpdate.style.display='none';
+  state.btnForceUpdate.disabled=false; state.btnForceUpdate.style.display='inline-block'; state.btnForceUpdate.dataset.target='webui';
+  state.updateError.style.display='none'; state.updateError.textContent='';
+  window._updateApplyInFlight=false; window._updateRetiredTargets=[]; window._updateForceErrorTarget=null;
+  await forceUpdate(state.btnForceUpdate);
+  if(!dialog||dialog.title!=='CONFIRM WebUI'||dialog.message!=='MESSAGE WebUI') throw new Error(nextMode+': localized confirmation missing: '+JSON.stringify(dialog));
+  if(nextMode==='cancel') {{
+    if(calls!==0||window._updateApplyInFlight!==false) throw new Error('cancel did not leave idle state');
+    return;
+  }}
+  if(calls!==1) throw new Error(nextMode+': expected one force request');
+  if(nextMode==='success') {{
+    if(window._updateApplyInFlight!==true||state.btnApplyUpdate.disabled!==true||state.btnForceUpdate.disabled!==true) throw new Error('restart success released or exposed an action');
+    if(toast!=='SUCCESS'||reloads!==1||sessionRemovals!==2) throw new Error('localized success or restart lifecycle missing');
+    return;
+  }}
+  if(window._updateApplyInFlight!==false||state.btnForceUpdate.disabled!==false||state.btnForceUpdate.style.display!=='inline-block') throw new Error(nextMode+': non-restart exit did not release enabled Force');
+  if(nextMode==='noop'&&state.updateError.textContent.indexOf('NOOP')===-1) throw new Error('no-op did not use localized detail');
+  if(nextMode==='failure'&&state.updateError.textContent.indexOf('FAILED: backend rejected')===-1) throw new Error('failure did not use localized prefix');
+  if(nextMode==='exception'&&state.updateError.textContent.indexOf('FAILED: transport failed')===-1) throw new Error('exception did not use localized prefix');
+}}
+(async()=>{{ for(const nextMode of ['cancel','noop','failure','exception','success']) await run(nextMode); }})().catch(e=>{{console.error(e.message);process.exit(1);}});
+"""
+    result = subprocess.run(['node', '-e', script], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_issue4085_apply_and_force_share_one_transaction_owner():
+    """Apply-held and Force-held sequences exclude the opposite endpoint."""
+    ui = read('static/ui.js')
+    pieces = [
+        extract_js_function(ui, name) for name in (
+            '_updateTargetRecoverableDirty', '_updateActionModel',
+            '_applyUpdateActionModel', '_updateCurrentActionModel',
+            '_acquireUpdateTransaction', '_releaseUpdateTransaction',
+            '_i18nUpdateText', 'forceUpdate', 'applyUpdates',
+        )
+    ]
+    script = f"""
+const state = {{
+  btnApplyUpdate: {{disabled:false,textContent:'Update Now',style:{{display:''}}}},
+  btnForceUpdate: {{disabled:false,textContent:'Force update',style:{{display:'inline-block'}},dataset:{{target:'webui'}}}},
+  updateError: {{style:{{display:'none'}},textContent:''}},
+}};
+const data = {{agent:{{behind:1,dirty:false,channel:'stable'}},webui:{{behind:0,dirty:true,channel:'experimental'}}}};
+global.window = {{_updateData:data,_updateApplyInFlight:false,_updateRetiredTargets:[],_updateForceErrorTarget:null}};
+global.$ = (id) => state[id] || null;
+global.t = (key) => ({{update_now:'Update Now',update_updating:'Updating…',update_force:'Force update',update_force_updating:'Force updating…',update_force_target:'Force update {{0}}',update_apply_target:'Update {{0}}',update_no_target:'No update target selected.'}}[key] || key);
+global._readHealthServerIdentity = async () => null;
+global._showUpdateBanner = () => ({{applyTargets:[],dirtyTargets:[],forceTarget:null,hasApply:false,hasForce:false}});
+global._showUpdateError = () => {{}};
+global._formatUpdateApplyExceptionMessage = (e) => e.message;
+global.showToast = () => {{}};
+global.sessionStorage = {{removeItem(){{}}}};
+global._waitForServerThenReload = () => {{}};
+global.showConfirmDialog = async () => true;
+let calls=[];
+let pendingResolve=null;
+global.api = (url) => {{
+  calls.push(url);
+  return new Promise((resolve) => {{ pendingResolve=()=>resolve(url.endsWith('/force') ? {{ok:true,up_to_date:true,message:'force current'}} : {{ok:true,up_to_date:true,message:'apply current'}}); }});
+}};
+{''.join(pieces)}
+(async()=>{{
+  const applyPromise=applyUpdates();
+  while(calls.length===0) await Promise.resolve();
+  await forceUpdate(state.btnForceUpdate);
+  if(calls.length!==1||calls[0]!=='/api/updates/apply') throw new Error('Force overlapped Apply: '+JSON.stringify(calls));
+  pendingResolve();
+  await applyPromise;
+  if(window._updateApplyInFlight!==false) throw new Error('Apply did not release ownership');
+
+  calls=[]; pendingResolve=null; window._updateApplyInFlight=false;
+  const forcePromise=forceUpdate(state.btnForceUpdate);
+  while(calls.length===0) await Promise.resolve();
+  await applyUpdates();
+  if(calls.length!==1||calls[0]!=='/api/updates/force') throw new Error('Apply overlapped Force: '+JSON.stringify(calls));
+  pendingResolve();
+  await forcePromise;
+  if(window._updateApplyInFlight!==false) throw new Error('Force did not release terminal ownership');
+}})().catch(e=>{{console.error(e.message);process.exit(1);}});
+"""
+    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+
+
+def test_issue4085_apply_conflict_releases_enabled_targeted_force():
+    """An Apply conflict releases ownership and exposes Force for that target."""
+    ui = read('static/ui.js')
+    pieces = [
+        extract_js_function(ui, name) for name in (
+            '_updateTargetRecoverableDirty', '_updateActionModel',
+            '_applyUpdateActionModel', '_updateCurrentActionModel',
+            '_acquireUpdateTransaction', '_releaseUpdateTransaction',
+            '_i18nUpdateText', '_showUpdateError', 'applyUpdates',
+        )
+    ]
+    script = f"""
+const state = {{
+  btnApplyUpdate: {{disabled:false,textContent:'Update Now',style:{{display:''}}}},
+  btnForceUpdate: {{disabled:true,style:{{display:'none'}},dataset:{{target:''}}}},
+  updateError: {{style:{{display:'none'}},textContent:''}},
+}};
+global.window = {{_updateData:{{webui:{{behind:2,dirty:true,channel:'experimental'}}}},_updateApplyInFlight:false,_updateRetiredTargets:[],_updateForceErrorTarget:null}};
+global.$ = (id) => state[id] || null;
+global.t = (key) => ({{update_now:'Update Now',update_updating:'Updating…',update_force:'Force update'}}[key] || key);
+global._readHealthServerIdentity = async () => null;
+global._formatUpdateApplyExceptionMessage = (e) => e.message;
+global._showUpdateError = _showUpdateError;
+global.showToast = () => {{}};
+global.sessionStorage = {{removeItem(){{}}}};
+global._waitForServerThenReload = () => {{}};
+global.api = async () => ({{ok:false,conflict:true,message:'working tree conflict'}});
+{''.join(pieces)}
+(async()=>{{
+  await applyUpdates();
+  if(window._updateApplyInFlight!==false) throw new Error('conflict left shared ownership set');
+  if(state.btnForceUpdate.style.display!=='inline-block'||state.btnForceUpdate.disabled!==false||state.btnForceUpdate.dataset.target!=='webui') throw new Error('conflict Force was not enabled for webui: '+JSON.stringify(state.btnForceUpdate));
+  if(state.updateError.textContent.indexOf('working tree conflict')===-1) throw new Error('conflict detail missing');
+}})().catch(e=>{{console.error(e.message);process.exit(1);}});
+"""
+    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+
+
+def test_issue4085_force_captures_target_and_channel_before_confirmation():
+    """The confirmed request keeps the offered target/channel pair immutable."""
+    ui = read('static/ui.js')
+    pieces = [
+        extract_js_function(ui, name) for name in (
+            '_updateTargetRecoverableDirty', '_updateActionModel',
+            '_applyUpdateActionModel', '_updateCurrentActionModel',
+            '_acquireUpdateTransaction', '_releaseUpdateTransaction',
+            '_i18nUpdateText', 'forceUpdate',
+        )
+    ]
+    script = f"""
+const state = {{
+  btnForceUpdate: {{disabled:false,textContent:'Force update',style:{{display:'inline-block'}},dataset:{{target:'webui'}}}},
+  updateError: {{style:{{display:'none'}},textContent:''}},
+}};
+global.window = {{_updateData:{{webui:{{dirty:true,channel:'experimental'}}}},_updateApplyInFlight:false,_updateRetiredTargets:[],_updateForceErrorTarget:null}};
+global.$ = (id) => state[id] || null;
+global.t = (key) => ({{update_force:'Force update',update_force_updating:'Force updating…',update_force_confirm_title:'Force update {{0}}?',update_force_confirm_message:'Discard changes in {{0}}?'}}[key] || key);
+global._readHealthServerIdentity = async () => null;
+global._showUpdateBanner = () => ({{applyTargets:[],dirtyTargets:[],forceTarget:null,hasApply:false,hasForce:false}});
+global.showToast = () => {{}};
+global.sessionStorage = {{removeItem(){{}}}};
+global._waitForServerThenReload = () => {{}};
+global.showConfirmDialog = async () => {{
+  state.btnForceUpdate.dataset.target='agent';
+  window._updateData={{agent:{{dirty:true,channel:'stable'}}}};
+  return true;
+}};
+let request=null;
+global.api = async (url,opts) => {{ request={{url,body:JSON.parse(opts.body)}}; return {{ok:true,up_to_date:true,message:'webui current'}}; }};
+{''.join(pieces)}
+(async()=>{{
+  await forceUpdate(state.btnForceUpdate);
+  if(!request||request.body.target!=='webui'||request.body.channel!=='experimental') throw new Error('confirmation mutation changed request: '+JSON.stringify(request));
+  if(window._updateApplyInFlight!==false) throw new Error('terminal Force did not release ownership');
+}})().catch(e=>{{console.error(e.message);process.exit(1);}});
+"""
+    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+
+
+def test_issue4085_force_lifecycle_keys_cover_all_locales():
+    """Every locale block carries the Force confirmation and outcome copy."""
+    src = read('static/i18n.js')
+    keys = (
+        'update_force_confirm_title', 'update_force_confirm_message',
+        'update_force_updating', 'update_force_failed',
+        'update_force_noop', 'update_force_applied_restarting',
+    )
+    for key in keys:
+        assert len(re.findall(rf'^\s*{re.escape(key)}\s*:', src, re.MULTILINE)) == 15, key
 
 
 def test_issue4085_action_model_fails_closed_for_type_punned_flags():
@@ -288,12 +545,16 @@ function clearTimeout() {{}}
 {classifier_fn}
 {model_fn}
 {applier_fn}
+{extract_js_function(ui, '_updateCurrentActionModel')}
+{extract_js_function(ui, '_acquireUpdateTransaction')}
+{extract_js_function(ui, '_releaseUpdateTransaction')}
 {show_fn}
 {apply_fn}
 (async()=>{{
   await applyUpdates();
   if(JSON.stringify(calls)!=='["agent","webui"]') throw new Error('Apply order changed: '+JSON.stringify(calls));
-  if(window._updateApplyInFlight!==false) throw new Error('Apply no-op did not release its own in-flight state');
+  if(window._updateApplyInFlight!==true) throw new Error('Apply restart path released its in-flight state');
+  if(state.btnApplyUpdate.disabled!==true||state.btnForceUpdate.disabled!==true) throw new Error('restart-held Apply re-enabled an update action');
   if(state.btnApplyUpdate.style.display!=='none'||state.btnApplyUpdate.textContent!=='Update Now') throw new Error('completed Agent was re-offered: '+JSON.stringify(state.btnApplyUpdate));
   if(state.updateError.textContent.indexOf('WebUI is already current')===-1) throw new Error('WebUI detail missing: '+state.updateError.textContent);
   if(waits!==1||toasts!==0) throw new Error('A prior successful Apply did not schedule its required reload');
