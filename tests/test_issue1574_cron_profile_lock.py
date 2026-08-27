@@ -5,6 +5,8 @@ import threading
 import types
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 from conftest import requires_fork
 
@@ -209,15 +211,159 @@ def _selected_profile_home_runner(profile_home, result_queue):
 
 def test_manual_cron_subprocess_uses_spawn_context():
     """Manual cron subprocesses must avoid fork-from-threaded-WebUI hazards."""
-    routes_src = (Path(__file__).resolve().parent.parent / "api" / "routes.py").read_text(
+    routes_src = (Path(__file__).resolve().parent.parent / "api" / "cron_runtime.py").read_text(
         encoding="utf-8"
     )
-    start = routes_src.find("def _run_cron_job_in_profile_subprocess")
-    assert start != -1, "_run_cron_job_in_profile_subprocess not found"
+    start = routes_src.find("def run_cron_in_profile_subprocess")
+    assert start != -1, "run_cron_in_profile_subprocess not found"
     body = routes_src[start : start + 1200]
 
     assert 'multiprocessing.get_context("spawn")' in body
     assert 'multiprocessing.get_context("fork")' not in body
+
+
+def test_cron_subprocess_no_payload_and_crash_cleanup_are_bounded(monkeypatch):
+    import queue
+
+    from api import cron_runtime
+
+    class FakeQueue:
+        def __init__(self):
+            self.closed = False
+            self.joined = False
+
+        def get(self, timeout):
+            raise queue.Empty
+
+        def close(self):
+            self.closed = True
+
+        def join_thread(self):
+            self.joined = True
+
+    class FakeProcess:
+        def __init__(self, alive, exitcode):
+            self.alive = alive
+            self.exitcode = exitcode
+            self.terminated = False
+            self.joins = 0
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.terminated = True
+            self.alive = False
+
+        def join(self, timeout=None):
+            self.joins += 1
+
+    class FakeContext:
+        def __init__(self, process):
+            self.process = process
+            self.result_queue = FakeQueue()
+
+        def Queue(self, maxsize=1):
+            return self.result_queue
+
+        def Process(self, **kwargs):
+            return self.process
+
+    for process, expected in (
+        (FakeProcess(True, None), "produced no result"),
+        (FakeProcess(False, 17), "exited with code 17"),
+    ):
+        context = FakeContext(process)
+        monkeypatch.setattr(cron_runtime.multiprocessing, "get_context", lambda name: context)
+        monkeypatch.setattr(cron_runtime, "_cron_subprocess_result_timeout_seconds", lambda job: 0.01)
+
+        with pytest.raises(RuntimeError, match=expected):
+            cron_runtime.run_cron_in_profile_subprocess({}, None, "run_job")
+
+        assert context.result_queue.closed
+        assert context.result_queue.joined
+        if process.exitcode is None:
+            assert process.terminated
+        assert process.joins
+
+
+def test_shared_cron_subprocess_contract_executes_requested_operation(monkeypatch, tmp_path):
+    """The shared transport invokes one explicit operation and returns its value."""
+    import types
+
+    from api import cron_runtime
+
+    cron_pkg = types.ModuleType("cron")
+    cron_pkg.__path__ = []
+    scheduler = types.ModuleType("cron.scheduler")
+    scheduler.run_one_job = lambda job, suffix="": (job["id"], suffix)
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
+
+    class FakeQueue:
+        def __init__(self):
+            self.items = []
+
+        def get(self, timeout):
+            if not self.items:
+                raise queue.Empty
+            return self.items.pop(0)
+
+        def put(self, item):
+            self.items.append(item)
+
+        def close(self):
+            return None
+
+        def join_thread(self):
+            return None
+
+    class FakeProcess:
+        exitcode = 0
+
+        def __init__(self, target, args):
+            self.target = target
+            self.args = args
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+            self.target(*self.args)
+            self.alive = False
+
+        def is_alive(self):
+            return self.alive
+
+        def join(self, timeout=None):
+            return None
+
+        def terminate(self):
+            self.alive = False
+
+    class FakeContext:
+        def __init__(self):
+            self.queue = FakeQueue()
+
+        def Queue(self, maxsize=1):
+            return self.queue
+
+        def Process(self, target, args):
+            def target_with_queue(*target_args):
+                target(*target_args[:-1], self.queue)
+
+            return FakeProcess(target_with_queue, args)
+
+    context = FakeContext()
+
+    monkeypatch.setattr(cron_runtime.multiprocessing, "get_context", lambda name: context)
+    result = cron_runtime.run_cron_in_profile_subprocess(
+        {"id": "contract"}, tmp_path, "run_one_job", kwargs={"suffix": "ok"}
+    )
+
+    assert result == ("contract", "ok")
 
 
 def _run_lock_probe_with_context(context_name, target, result_queue):
