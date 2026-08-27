@@ -21761,6 +21761,7 @@ def _handle_cron_run_detail(handler, parsed):
         job = get_job(job_id) if get_job else None
         job_mode = "unknown" if job is None else ("script" if job.get("no_agent") else "agent")
         projection = parse_cron_output_artifact(content, job_mode=job_mode)
+        projection.pop("raw", None)
         snippet = _cron_output_snippet(content, job_mode=job_mode)
         usage = _cron_output_usage_metadata(content, job_mode=job_mode)
         return j(handler, {"job_id": job_id, "filename": filename,

@@ -134,7 +134,7 @@ def test_run_detail_returns_shared_projection_and_exact_content(monkeypatch, tmp
     body = json.loads(handler.wfile.getvalue())
     assert handler.status == 200 and body["content"] == raw
     assert body["projection"]["response"] == "literal <b>response</b>"
-    assert body["projection"]["raw"] == raw
+    assert "raw" not in body["projection"]
 
 
 def _load_run_function():
