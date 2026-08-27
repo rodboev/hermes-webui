@@ -57,7 +57,7 @@ def _write_spawn_fake_agent(root: Path, *, run_job_body: str):
         "_LOCK_DIR = _hermes_home / 'cron'\n"
         "_LOCK_FILE = _LOCK_DIR / '.tick.lock'\n"
         "def run_job(job):\n"
-        f"{run_job_body}",
+        f"{run_job_body}"
         "def run_one_job(job, **kwargs):\n"
         "    return run_job(job)\n",
         encoding="utf-8",
@@ -280,7 +280,11 @@ def test_cron_subprocess_no_payload_and_crash_cleanup_are_bounded(monkeypatch):
         (FakeProcess(False, 17), "exited with code 17"),
     ):
         context = FakeContext(process)
-        monkeypatch.setattr(cron_runtime.multiprocessing, "get_context", lambda name: context)
+        monkeypatch.setattr(
+            cron_runtime.multiprocessing,
+            "get_context",
+            lambda name, context=context: context,
+        )
         monkeypatch.setattr(cron_runtime, "_cron_subprocess_result_timeout_seconds", lambda job: 0.01)
 
         with pytest.raises(RuntimeError, match=expected):
