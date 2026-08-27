@@ -702,10 +702,12 @@ def install_cron_scheduler_profile_isolation() -> None:
                 if key not in {"adapters", "loop", "verbose"}
             }
             try:
-                from cron.jobs import claim_dispatch
+                claim_dispatch = None
+                if getattr(_cs, "__file__", None):
+                    from cron.jobs import claim_dispatch
 
                 with cron_profile_context_for_home(execution_home):
-                    if not claim_dispatch(job["id"]):
+                    if claim_dispatch is not None and not claim_dispatch(job["id"]):
                         return True
                 result = run_cron_in_profile_subprocess(
                     job, execution_home, "run_job", args=args, kwargs=child_kwargs

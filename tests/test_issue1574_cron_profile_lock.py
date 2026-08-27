@@ -1,5 +1,6 @@
 import multiprocessing
 import os
+import queue
 import sys
 import threading
 import types
@@ -57,6 +58,8 @@ def _write_spawn_fake_agent(root: Path, *, run_job_body: str):
         "_LOCK_FILE = _LOCK_DIR / '.tick.lock'\n"
         "def run_job(job):\n"
         f"{run_job_body}",
+        "def run_one_job(job, **kwargs):\n"
+        "    return run_job(job)\n",
         encoding="utf-8",
     )
 
