@@ -1420,19 +1420,7 @@ def _is_cron_running(job_id: str) -> tuple[bool, float]:
         return True, time.time() - t
 
 
-def _cron_response_marker_index(text: str) -> int:
-    """Return the start index of a markdown Response heading, if present."""
-    candidates = []
-    for heading in ("## Response", "# Response"):
-        if text.startswith(heading):
-            candidates.append(0)
-        idx = text.find(f"\n{heading}")
-        if idx >= 0:
-            candidates.append(idx + 1)
-    return min(candidates) if candidates else -1
-
-
-def _cron_output_content_window(text: str, limit: int = _CRON_OUTPUT_CONTENT_LIMIT) -> str:
+def _cron_output_content_window(text: str, limit: int = _CRON_OUTPUT_CONTENT_LIMIT, *, job_mode: str = "agent") -> str:
     """Return a bounded cron output window that preserves useful response text.
 
     Cron output files can contain large skill dumps in the Prompt section. The
@@ -1444,11 +1432,14 @@ def _cron_output_content_window(text: str, limit: int = _CRON_OUTPUT_CONTENT_LIM
     if len(text) <= limit:
         return text
 
-    response_idx = _cron_response_marker_index(text)
-    if response_idx >= 0:
-        header = text[:min(_CRON_OUTPUT_HEADER_CONTEXT, response_idx)].rstrip()
-        response = text[response_idx:].lstrip("\n")
-        content = f"{header}\n...\n{response}" if header else response
+    from api.cron_output import bounded_cron_projection, parse_cron_output_artifact
+
+    projection = parse_cron_output_artifact(text, job_mode=job_mode)
+    bounded = bounded_cron_projection(projection, limit)
+    if bounded["kind"] == "agent":
+        header = bounded["diagnostics"][:_CRON_OUTPUT_HEADER_CONTEXT].rstrip()
+        response = bounded["response"] or ""
+        content = f"{header}\n...\n## Response\n{response}" if header else response
         return content[:limit]
 
     return text[-limit:]
@@ -21723,9 +21714,11 @@ def _handle_cron_history(handler, parsed):
         for f in page:
             try:
                 st = f.stat()
-                usage = _cron_output_usage_metadata(
-                    f.read_text(encoding="utf-8", errors="replace")
-                )
+                content = f.read_text(encoding="utf-8", errors="replace")
+                get_job = getattr(__import__("cron.jobs", fromlist=["get_job"]), "get_job", None)
+                job = get_job(job_id) if get_job else None
+                job_mode = "script" if job and job.get("no_agent") else ("agent" if job else "unknown")
+                usage = _cron_output_usage_metadata(content, job_mode=job_mode)
                 runs.append({
                     "filename": f.name,
                     "size": st.st_size,
@@ -21760,21 +21753,35 @@ def _handle_cron_run_detail(handler, parsed):
     if not fpath.exists():
         return j(handler, {"error": "run not found"}, status=404)
     try:
-        content = fpath.read_text(encoding="utf-8", errors="replace")
-        snippet = _cron_output_snippet(content)
-        usage = _cron_output_usage_metadata(content)
+        content = fpath.read_bytes().decode("utf-8", errors="replace")
+        import cron.jobs as cron_jobs
+        from api.cron_output import parse_cron_output_artifact
+
+        get_job = getattr(cron_jobs, "get_job", None)
+        job = get_job(job_id) if get_job else None
+        job_mode = "unknown" if job is None else ("script" if job.get("no_agent") else "agent")
+        projection = parse_cron_output_artifact(content, job_mode=job_mode)
+        snippet = _cron_output_snippet(content, job_mode=job_mode)
+        usage = _cron_output_usage_metadata(content, job_mode=job_mode)
         return j(handler, {"job_id": job_id, "filename": filename,
                            "content": content, "snippet": snippet,
+                           "projection": projection,
                            "usage": usage})
     except Exception as e:
         return j(handler, {"error": str(e)}, status=500)
 
 
-def _cron_output_usage_metadata(text: str) -> dict:
+def _cron_output_usage_metadata(text: str, *, job_mode: str = "unknown") -> dict:
     """Extract optional token/cost metadata from a cron output markdown file."""
     import re as _re
 
-    head = text.split("## Response", 1)[0].split("# Response", 1)[0]
+    head = text
+    if job_mode == "agent":
+        from api.cron_output import parse_cron_output_artifact
+
+        projection = parse_cron_output_artifact(text, job_mode=job_mode)
+        if projection["kind"] == "agent":
+            head = projection["diagnostics"]
     usage: dict = {}
 
     def _intish(value: str):
@@ -21789,23 +21796,23 @@ def _cron_output_usage_metadata(text: str) -> dict:
         line = raw_line.strip()
         model_match = _re.match(r"\*\*(?:Model|Model Used):\*\*\s*(.+)$", line, _re.I)
         if model_match:
-            usage["model"] = model_match.group(1).strip()
+            usage.setdefault("model", model_match.group(1).strip())
             continue
         provider_match = _re.match(r"\*\*Provider:\*\*\s*(.+)$", line, _re.I)
         if provider_match:
-            usage["provider"] = provider_match.group(1).strip()
+            usage.setdefault("provider", provider_match.group(1).strip())
             continue
         cost_match = _re.match(r"\*\*(?:Estimated cost|Cost):\*\*\s*(.+)$", line, _re.I)
         if cost_match:
             cost = _floatish(cost_match.group(1))
             if cost is not None:
-                usage["estimated_cost_usd"] = cost
+                usage.setdefault("estimated_cost_usd", cost)
             continue
         duration_match = _re.match(r"\*\*(?:Duration|Elapsed):\*\*\s*(.+)$", line, _re.I)
         if duration_match:
             seconds = _floatish(duration_match.group(1))
             if seconds is not None:
-                usage["duration_seconds"] = seconds
+                usage.setdefault("duration_seconds", seconds)
             continue
         tokens_match = _re.match(r"\*\*Tokens:\*\*\s*(.+)$", line, _re.I)
         if tokens_match:
@@ -21814,9 +21821,9 @@ def _cron_output_usage_metadata(text: str) -> dict:
             output_match = _re.search(r"([0-9][0-9,]*)\s*(?:output|out)\b", value, _re.I)
             total_match = _re.search(r"([0-9][0-9,]*)\s*(?:total\s*)?tokens?\b", value, _re.I)
             if input_match:
-                usage["input_tokens"] = _intish(input_match.group(1))
+                usage.setdefault("input_tokens", _intish(input_match.group(1)))
             if output_match:
-                usage["output_tokens"] = _intish(output_match.group(1))
+                usage.setdefault("output_tokens", _intish(output_match.group(1)))
             if total_match and "total_tokens" not in usage:
                 usage["total_tokens"] = _intish(total_match.group(1))
 
@@ -21827,7 +21834,7 @@ def _cron_output_usage_metadata(text: str) -> dict:
     return usage
 
 
-def _cron_output_snippet(text: str, limit: int = 600) -> str:
+def _cron_output_snippet(text: str, limit: int = 600, *, job_mode: str = "agent") -> str:
     """Extract the response body from a cron output .md file for preview.
 
     Contract: cron output files use markdown front-matter followed by a
@@ -21837,19 +21844,20 @@ def _cron_output_snippet(text: str, limit: int = 600) -> str:
     is returned — callers should be aware that front-matter fields (model,
     timestamp, …) may appear in the snippet.
     """
-    lines = text.split("\n")
-    response_idx = -1
-    for i, line in enumerate(lines):
-        if line.startswith("## Response") or line.startswith("# Response"):
-            response_idx = i
-            break
-    body = ("\n".join(lines[response_idx + 1:]) if response_idx >= 0 else "\n".join(lines)).strip()
+    from api.cron_output import bounded_cron_projection, parse_cron_output_artifact
+
+    projection = parse_cron_output_artifact(text, job_mode=job_mode)
+    projection = bounded_cron_projection(projection, limit)
+    body = projection["response"] if projection["kind"] == "agent" else text
+    body = (body or "").strip()
     return body[:limit] or "(empty)"
 
 
 def _handle_cron_output(handler, parsed):
-    from cron.jobs import OUTPUT_DIR as CRON_OUT
+    import cron.jobs as cron_jobs
     import re as _re
+
+    CRON_OUT = cron_jobs.OUTPUT_DIR
 
     qs = parse_qs(parsed.query)
     job_id = qs.get("job_id", [""])[0]
@@ -21871,13 +21879,16 @@ def _handle_cron_output(handler, parsed):
     except (ValueError, TypeError):
         limit = 5
     out_dir = CRON_OUT / job_id
+    get_job = getattr(cron_jobs, "get_job", None)
+    job = get_job(job_id) if get_job else None
+    job_mode = "script" if job and job.get("no_agent") else ("agent" if job else "unknown")
     outputs = []
     if out_dir.exists():
         files = sorted(out_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)[:limit]
         for f in files:
             try:
                 txt = f.read_text(encoding="utf-8", errors="replace")
-                outputs.append({"filename": f.name, "content": _cron_output_content_window(txt)})
+                outputs.append({"filename": f.name, "content": _cron_output_content_window(txt, job_mode=job_mode)})
             except Exception:
                 logger.debug("Failed to read cron output file %s", f)
     return j(handler, {"job_id": job_id, "outputs": outputs})
