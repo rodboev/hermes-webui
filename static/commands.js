@@ -1311,9 +1311,11 @@ async function cmdGoal(args){
     const priorDeliveredSteers=INFLIGHT[activeSid]&&Array.isArray(INFLIGHT[activeSid].deliveredSteers)
       ? INFLIGHT[activeSid].deliveredSteers
       : [];
-    INFLIGHT[activeSid]={messages:[...S.messages],uploaded:[],toolCalls:[],deliveredSteers:priorDeliveredSteers};
+    const priorDeliveredSteerRecovery=INFLIGHT[activeSid]&&Array.isArray(INFLIGHT[activeSid].deliveredSteerRecovery)
+      ? INFLIGHT[activeSid].deliveredSteerRecovery : [];
+    INFLIGHT[activeSid]={messages:[...S.messages],uploaded:[],toolCalls:[],deliveredSteers:priorDeliveredSteers,deliveredSteerRecovery:priorDeliveredSteerRecovery};
     if(typeof markInflight==='function')markInflight(activeSid,r.stream_id);
-    if(typeof saveInflightState==='function')saveInflightState(activeSid,{streamId:r.stream_id,messages:INFLIGHT[activeSid].messages,uploaded:[],toolCalls:[],deliveredSteers:priorDeliveredSteers});
+    if(typeof saveInflightState==='function')saveInflightState(activeSid,{streamId:r.stream_id,messages:INFLIGHT[activeSid].messages,uploaded:[],toolCalls:[],deliveredSteers:priorDeliveredSteers,deliveredSteerRecovery:priorDeliveredSteerRecovery});
     startApprovalPolling(activeSid);
     startClarifyPolling(activeSid);
     if(typeof _fetchYoloState==='function')_fetchYoloState(activeSid);
@@ -1471,6 +1473,20 @@ function _showSteerRecovery(msg, explicitSteer, fallback) {
   el.appendChild(dismissBtn);
   inner.appendChild(el);
   if (typeof scrollToBottom === 'function') scrollToBottom();
+}
+function _showDeliveredSteerRecoveryNotice(record){
+  const inner=document.getElementById('msgInner');
+  if(!inner||!record) return;
+  const node=document.createElement('div');
+  node.className='steer-recovery delivered-steer-recovery';
+  node.dataset.deliveryOnly='1';
+  node.textContent=t('steer_delivered_recovery')||'Steer delivered, but its original turn could not be restored.';
+  const dismiss=document.createElement('button');
+  dismiss.type='button';
+  dismiss.textContent=t('dismiss')||'Dismiss';
+  dismiss.addEventListener('click',()=>node.remove());
+  node.appendChild(dismiss);
+  inner.appendChild(node);
 }
 
 /**
@@ -1648,11 +1664,22 @@ function _nextSteerDeliveredOrdinal(ownerSid, ownerStreamId){
   _steerDeliveredOrdinalByStream.set(key,next);
   return next;
 }
-function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapshot){
+function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapshot, ownerEnvelope){
   if(!ownerSid||!ownerStreamId||typeof window==='undefined') return false;
   const anchorApi=window.HermesAssistantTurnAnchors;
   const registries=window._liveAnchorRegistries;
   const registry=registries&&typeof registries.get==='function'?registries.get(ownerStreamId):null;
+  const capturedOwner=typeof _normalizeDeliveredSteerOwner==='function'
+    ? _normalizeDeliveredSteerOwner({...ownerEnvelope,profile:ownerEnvelope&&ownerEnvelope.profile,session_id:ownerSid,stream_id:ownerStreamId})
+    : {profile:String(ownerEnvelope&&ownerEnvelope.profile||''),session_id:String(ownerSid),stream_id:String(ownerStreamId)};
+  const registryIdentity=registry&&registry.anchor&&registry.anchor.identity||{};
+  const registryOwner=typeof _normalizeDeliveredSteerOwner==='function'
+    ? _normalizeDeliveredSteerOwner({...registryIdentity,session_id:ownerSid,stream_id:ownerStreamId})
+    : {};
+  const ownerComparison=typeof _compareDeliveredSteerOwners==='function'
+    ? _compareDeliveredSteerOwners(capturedOwner,registryOwner,false)
+    : 'unknown';
+  const recoveryOnly=ownerComparison==='unknown'||!capturedOwner.user_message_id&&!capturedOwner.turn_id;
   const ordinal=_nextSteerDeliveredOrdinal(ownerSid,ownerStreamId);
   const text=_steerIndicatorText(originalMsg,filesSnapshot);
   const files=(Array.isArray(filesSnapshot)?filesSnapshot:[])
@@ -1663,8 +1690,11 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
     seq:`steer-${ordinal}`,
     created_at:Date.now()/1000,
     session_id:String(ownerSid),
-    turn_id:String((registry&&registry.anchor&&registry.anchor.identity&&registry.anchor.identity.turn_id)||''),
-    run_id:String((registry&&registry.anchor&&registry.anchor.identity&&registry.anchor.identity.run_id)||''),
+    ...capturedOwner,
+    turn_id:capturedOwner.turn_id||String(registryIdentity.turn_id||''),
+    run_id:capturedOwner.run_id||String(registryIdentity.run_id||''),
+    recovery_only:recoveryOnly,
+    recovery_reason:recoveryOnly?(ownerComparison==='unknown'?'conflicting_or_incomplete_owner':'missing_user_turn_owner'):'',
     payload:{
       // local_id is the run-owned ordinal identity required by the anchor
       // contract. The ordinal is reseeded from both INFLIGHT and the live
@@ -1679,12 +1709,19 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
       files,
       delivered:true,
       origin:'webui',
+      profile:capturedOwner.profile,
+      session_id:String(ownerSid),
+      user_message_id:capturedOwner.user_message_id,
+      turn_id:capturedOwner.turn_id||String(registryIdentity.turn_id||''),
+      run_id:capturedOwner.run_id||String(registryIdentity.run_id||''),
+      recovery_only:recoveryOnly,
     },
   };
+  window._lastDeliveredSteerRecovery=recoveryOnly?sourceEvent:null;
   let accepted=false;
   // The seal is a best-effort rendering boundary. A DOM or teardown race must
   // not prevent the registry from recording the accepted delivery.
-  if(registry&&anchorApi&&typeof anchorApi.applyAssistantTurnAnchorSourceEvent==='function'){
+  if(!recoveryOnly&&registry&&anchorApi&&typeof anchorApi.applyAssistantTurnAnchorSourceEvent==='function'){
     try{
       // Seal the in-flight prose segment first, so the settled scene reads
       // assistant -> steer -> assistant instead of merging the steer into the run
@@ -1719,6 +1756,7 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
       // session cache; reattach and settlement filter by each record's stream.
       const cache=existing||{streamId:String(ownerStreamId),deliveredSteers:[]};
       const cached=Array.isArray(cache.deliveredSteers)?cache.deliveredSteers:[];
+      const recovery=Array.isArray(cache.deliveredSteerRecovery)?cache.deliveredSteerRecovery:[];
       const sourceLocalId=String(sourceEvent.local_id||sourceEvent.payload&&sourceEvent.payload.local_id||'');
       const duplicate=cached.some(record=>{
         const recordLocalId=String(record&&(
@@ -1726,9 +1764,12 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
         ));
         return sourceLocalId&&recordLocalId===sourceLocalId;
       });
-      if(!duplicate) cached.push(sourceEvent);
+      if(recoveryOnly){
+        if(!recovery.some(record=>String(record&&record.local_id||record&&record.payload&&record.payload.local_id||'')===sourceLocalId)) recovery.push(sourceEvent);
+      }else if(!duplicate) cached.push(sourceEvent);
       if(!cache.streamId) cache.streamId=String(ownerStreamId);
       cache.deliveredSteers=cached;
+      cache.deliveredSteerRecovery=recovery.slice(-50);
       INFLIGHT[ownerSid]=cache;
       if(typeof saveInflightState==='function') saveInflightState(ownerSid,cache);
       mirrored=true;
@@ -1756,6 +1797,13 @@ async function _trySteer(msg, explicitSteer){
   const ownerStreamId=(typeof S!=='undefined'&&(S.activeStreamId||(S.session&&S.session.active_stream_id)))||null;
   const pendingFilesSnapshot=typeof S!=='undefined'&&Array.isArray(S.pendingFiles)?[...S.pendingFiles]:[];
   const ownerProfile=typeof S!=='undefined'&&(S.activeProfile||'default');
+  const initiatingUser=typeof _findDeliveredSteerOwnerUser==='function'
+    ? _findDeliveredSteerOwnerUser(S&&S.messages)
+    : null;
+  const ownerEnvelope={profile:ownerProfile,session_id:ownerSid,stream_id:ownerStreamId,
+    user_message_id:initiatingUser&&initiatingUser.user_message_id,
+    turn_id:initiatingUser&&initiatingUser.turn_id,
+    run_id:initiatingUser&&initiatingUser.run_id};
   const ownerModelState=typeof _chatPayloadModelState==='function'
     ? _chatPayloadModelState()
     : {model:(typeof S!=='undefined'&&S.session&&S.session.model)||'',model_provider:(typeof S!=='undefined'&&S.session&&S.session.model_provider)||''};
@@ -1811,7 +1859,8 @@ async function _trySteer(msg, explicitSteer){
     // owner-scoped, not viewer-scoped: it runs even when the user switched away
     // during the await, because the row belongs to the owner's turn either way.
     const acceptedStreamId=String(result.stream_id||result.streamId||ownerStreamId||'');
-    const recorded=_recordDeliveredSteer(ownerSid,acceptedStreamId,originalMsg,pendingFilesSnapshot);
+    const recorded=_recordDeliveredSteer(ownerSid,acceptedStreamId,originalMsg,pendingFilesSnapshot,ownerEnvelope);
+    if(typeof window!=='undefined'&&window._lastDeliveredSteerRecovery&&_steerOwnerIsCurrent(ownerSid)) _showDeliveredSteerRecoveryNotice(window._lastDeliveredSteerRecovery);
     // Only mutate the visible tray/DOM if the user is still looking at the owning
     // session.
     if(_steerOwnerIsCurrent(ownerSid)){

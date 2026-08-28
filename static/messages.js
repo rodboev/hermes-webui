@@ -2008,7 +2008,8 @@ const _STREAM_NOTIFICATION_BACKGROUND={};
 function _preserveDeliveredSteerCacheForNewInflight(sid, entry){
   const existing=typeof INFLIGHT!=='undefined'&&INFLIGHT?INFLIGHT[sid]:null;
   const records=existing&&Array.isArray(existing.deliveredSteers)?existing.deliveredSteers:[];
-  return records.length?{...entry,deliveredSteers:records}:entry;
+  const recovery=existing&&Array.isArray(existing.deliveredSteerRecovery)?existing.deliveredSteerRecovery:[];
+  return records.length||recovery.length?{...entry,deliveredSteers:records,deliveredSteerRecovery:recovery}:entry;
 }
 
 function _saveInflightWithDeliveredSteerCache(sid, state){
@@ -2017,7 +2018,52 @@ function _saveInflightWithDeliveredSteerCache(sid, state){
   const records=Array.isArray(state&&state.deliveredSteers)
     ? state.deliveredSteers
     : (existing&&Array.isArray(existing.deliveredSteers)?existing.deliveredSteers:[]);
-  saveInflightState(sid,{...(state||{}),deliveredSteers:records});
+  const recovery=Array.isArray(state&&state.deliveredSteerRecovery)
+    ? state.deliveredSteerRecovery
+    : (existing&&Array.isArray(existing.deliveredSteerRecovery)?existing.deliveredSteerRecovery:[]);
+  saveInflightState(sid,{...(state||{}),deliveredSteers:records,deliveredSteerRecovery:recovery});
+}
+
+function _normalizeDeliveredSteerOwner(value){
+  const source=value&&typeof value==='object'?value:{};
+  const read=(...keys)=>{for(const key of keys){const value=String(source[key]||'').trim();if(value)return value;}return '';};
+  return {profile:read('profile','ownerProfile')||'default',session_id:read('session_id','sid','sessionId'),
+    stream_id:read('stream_id','streamId'),user_message_id:read('user_message_id','userMessageId','message_id','messageId','id','local_id'),
+    run_id:read('run_id','runId'),turn_id:read('turn_id','turnId')};
+}
+function _compareDeliveredSteerOwners(left,right,requireComplete=true){
+  const a=_normalizeDeliveredSteerOwner(left),b=_normalizeDeliveredSteerOwner(right);
+  if(['profile','session_id'].some(key=>!a[key]||!b[key])) return 'unknown';
+  if(requireComplete&&['user_message_id','turn_id'].some(key=>!a[key]||!b[key])) return 'unknown';
+  for(const key of ['profile','session_id','user_message_id','turn_id','run_id']) if(a[key]&&b[key]&&a[key]!==b[key]) return 'unknown';
+  return 'match';
+}
+function _findDeliveredSteerOwnerUser(messages){
+  if(!Array.isArray(messages)) return null;
+  for(let i=messages.length-1;i>=0;i-=1){
+    const message=messages[i];
+    if(!message||message.role!=='user') continue;
+    const scene=message._anchor_activity_scene&&message._anchor_activity_scene.identity||{};
+    const owner=_normalizeDeliveredSteerOwner({...scene,...message});
+    if(owner.user_message_id||owner.turn_id) return owner;
+  }
+  return null;
+}
+function _deliveredSteerRecoveryRecord(record,reason){
+  return {...(record&&typeof record==='object'?record:{}),recovery_only:true,recovery_reason:String(reason||'unplaceable_delivery')};
+}
+function _deliveredSteerRecordEligible(record,sid,streamId){
+  if(!record||record.recovery_only) return false;
+  const payload=record.payload&&typeof record.payload==='object'?record.payload:{};
+  const owner=_normalizeDeliveredSteerOwner({...record,...payload,session_id:sid,stream_id:streamId});
+  if(_compareDeliveredSteerOwners(owner,owner)!=='match') return false;
+  const currentProfile=String((typeof S!=='undefined'&&S&&S.activeProfile)||'default');
+  if(owner.profile!==currentProfile||owner.session_id!==String(sid)) return false;
+  if(String(owner.stream_id)===String(streamId)) return true;
+  const registries=typeof window!=='undefined'&&window._liveAnchorRegistries;
+  const registry=registries&&typeof registries.get==='function'?registries.get(String(streamId)):null;
+  const identity=registry&&registry.anchor&&registry.anchor.identity;
+  return !!identity&&_compareDeliveredSteerOwners(owner,{...identity,session_id:sid,stream_id:streamId})==='match';
 }
 
 function _deliveredSteerStreamId(record){
@@ -2059,54 +2105,34 @@ function _restoreDeliveredSteersIntoSettledMessages(messages, sid, records, onRe
     groups.get(streamId).push(record);
   }
   if(!groups.size) return false;
-  const assistants=[];
+  const users=[];
   for(let i=0;i<messages.length;i+=1){
-    const message=messages[i];
-    if(message&&message.role==='assistant') assistants.push({message,index:i});
+    if(messages[i]&&messages[i].role==='user') users.push({message:messages[i],index:i,owner:_normalizeDeliveredSteerOwner({...messages[i],session_id:sid})});
   }
-  let lastUserIndex=-1;
-  for(let i=messages.length-1;i>=0;i-=1){
-    if(messages[i]&&messages[i].role==='user'){
-      lastUserIndex=i;
-      break;
-    }
-  }
-  const currentAssistants=assistants.filter(({index})=>index>lastUserIndex);
   let changed=false;
   for(const [streamId,streamRecords] of groups){
-    let target=assistants.slice().reverse().find(({message})=>{
-      const scene=message._anchor_activity_scene;
-      const identity=scene&&scene.identity&&typeof scene.identity==='object'?scene.identity:{};
-      const sceneStreamId=String(message._anchor_stream_id||scene&&scene.stream_id||identity.stream_id||'');
-      const sceneRunId=String(message.run_id||message._run_id||scene&&scene.run_id||identity.run_id||'');
-      const sceneTurnId=String(message.turn_id||message._turn_id||scene&&scene.turn_id||identity.turn_id||'');
-      const recordRunId=String(streamRecords[0]&&streamRecords[0].run_id||streamRecords[0]&&streamRecords[0].payload&&streamRecords[0].payload.run_id||'');
-      const recordTurnId=String(streamRecords[0]&&streamRecords[0].turn_id||streamRecords[0]&&streamRecords[0].payload&&streamRecords[0].payload.turn_id||'');
-      if(sceneStreamId) return sceneStreamId===streamId;
-      if(recordRunId&&sceneRunId) return recordRunId===sceneRunId;
-      if(recordTurnId&&sceneTurnId) return recordTurnId===sceneTurnId;
-      return false;
-    });
-    // One assistant after the latest user message is the only safe current-turn
-    // fallback, including replacement-stream records that share that turn.
-    if(!target&&currentAssistants.length===1) target=currentAssistants[0];
-    if(!target&&lastUserIndex>=0&&!currentAssistants.length){
-      messages.push({role:'assistant',content:''});
-      target={message:messages[messages.length-1],index:messages.length-1};
-      assistants.push(target);
-      currentAssistants.push(target);
+    const firstRecord=streamRecords[0];
+    const payload=firstRecord&&firstRecord.payload&&typeof firstRecord.payload==='object'?firstRecord.payload:{};
+    const recordOwner=_normalizeDeliveredSteerOwner({...firstRecord,...payload,session_id:sid,stream_id:streamId});
+    const user=users.slice().reverse().find(candidate=>_compareDeliveredSteerOwners(recordOwner,candidate.owner)==='match');
+    if(!user) continue;
+    const nextAssistant=messages.slice(user.index+1).findIndex(message=>message&&message.role==='assistant');
+    let target=nextAssistant>=0?{message:messages[user.index+1+nextAssistant],index:user.index+1+nextAssistant}:null;
+    if(!target){
+      messages.splice(user.index+1,0,{role:'assistant',content:'',_deliveredSteerOwner:recordOwner});
+      target={message:messages[user.index+1],index:user.index+1};
     }
     if(!target) continue;
     const existing=target.message._anchor_activity_scene&&typeof target.message._anchor_activity_scene==='object'
       ? target.message._anchor_activity_scene
       : null;
     const existingIdentity=existing&&existing.identity&&typeof existing.identity==='object'?existing.identity:{};
-    const runId=String((existing&&(existing.run_id||existingIdentity.run_id))||streamRecords[0].run_id||'').trim()||null;
+    const runId=String((existing&&(existing.run_id||existingIdentity.run_id))||recordOwner.run_id||streamRecords[0].run_id||'').trim()||null;
     const registry=api.createAssistantTurnAnchorRegistry({
       session_id:sid,
       stream_id:streamId,
       run_id:runId,
-      turn_id:String((existing&&existing.turn_id)||target.message.local_id||`settled:${sid}:${streamId}`),
+      turn_id:String((existing&&existing.turn_id)||recordOwner.turn_id||target.message.local_id||`settled:${sid}:${streamId}`),
     });
     const events=[];
     const pushEvents=(items, layer)=>{

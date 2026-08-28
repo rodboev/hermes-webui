@@ -335,6 +335,10 @@ class TestFrontendWiring:
         assert idx >= 0
         body = _source_between(cmds, "async function _trySteer(", "\nasync function cmdTitle")
         assert "const ownerSid=(typeof S!=='undefined'&&S.session&&S.session.session_id)||null;" in body
+        assert "const ownerProfile=typeof S!=='undefined'&&(S.activeProfile||'default');" in body
+        assert "const initiatingUser=typeof _findDeliveredSteerOwnerUser==='function'" in body
+        assert "const ownerEnvelope={profile:ownerProfile,session_id:ownerSid,stream_id:ownerStreamId," in body
+        assert "_recordDeliveredSteer(ownerSid,acceptedStreamId,originalMsg,pendingFilesSnapshot,ownerEnvelope)" in body
         assert "const pendingFilesSnapshot=typeof S!=='undefined'&&Array.isArray(S.pendingFiles)?[...S.pendingFiles]:[];" in body
         assert "steerText=await _steerTextWithPendingFiles(originalMsg,ownerSid,pendingFilesSnapshot)" in body
         assert "body:JSON.stringify({session_id:ownerSid,text:steerText})" in body, (

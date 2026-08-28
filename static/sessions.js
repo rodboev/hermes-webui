@@ -1108,15 +1108,16 @@ function _selectLiveRecoveryInflight(localInflight, serverLiveSnapshot, activeSt
   const activeId=requestedActiveId||serverId;
   const selectDurableSnapshot=()=>{
     const carried={};
-    // Delivered steers are browser-observed and can belong to a replaced
-    // stream, so carry every local record even when the journal snapshot owns
-    // a different active stream. Reattach filters records by stream later.
+    // Carry only records whose complete owner matches this profile and stream;
+    // uncertain records remain recovery-only and never enter anchor replay.
     if(Array.isArray(localInflight.deliveredSteers)&&localInflight.deliveredSteers.length){
-      const hasActiveDelivery=!activeId||localInflight.deliveredSteers.some(record=>{
-        const payload=record&&record.payload&&typeof record.payload==='object'?record.payload:{};
-        return String(record&&record.stream_id||payload.stream_id||'')===activeId;
-      });
-      if(hasActiveDelivery) carried.deliveredSteers=localInflight.deliveredSteers;
+      const eligible=typeof _deliveredSteerRecordEligible==='function'
+        ? localInflight.deliveredSteers.filter(record=>_deliveredSteerRecordEligible(record,(typeof S!=='undefined'&&S.session&&S.session.session_id)||'',activeId))
+        : localInflight.deliveredSteers.filter(record=>String(record&&record.stream_id||record&&record.payload&&record.payload.stream_id||'')===activeId);
+      if(eligible.length) carried.deliveredSteers=eligible;
+    }
+    if(Array.isArray(localInflight.deliveredSteerRecovery)&&localInflight.deliveredSteerRecovery.length){
+      carried.deliveredSteerRecovery=localInflight.deliveredSteerRecovery.slice(-50);
     }
     if(activeId&&localId===activeId){
       if(Array.isArray(localInflight.todos)&&localInflight.todoStateMeta){
@@ -2402,14 +2403,25 @@ async function loadSession(sid){
           const key=`${String(record&&record.stream_id||payload.stream_id||'')}|${String(record&&record.local_id||payload.local_id||record&&record.event_id||payload.event_id||'')}`;
           return !restoredKeys.has(key);
         });
+        const recovery=remaining.map(record=>typeof _deliveredSteerRecoveryRecord==='function'
+          ? _deliveredSteerRecoveryRecord(record,'exact_owner_turn_not_found') : record);
         if(remaining.length){
-          INFLIGHT[sid]={streamId:null,deliveredSteers:remaining};
+          INFLIGHT[sid]={streamId:null,deliveredSteers:[],deliveredSteerRecovery:recovery};
           if(typeof saveInflightState==='function') saveInflightState(sid,INFLIGHT[sid]);
         }else{
           delete INFLIGHT[sid];
           if(typeof clearInflightState==='function') clearInflightState(sid);
         }
       }
+      if(!restoredSettledSteers&&settledDeliveredSteers.length){
+        const recovery=settledDeliveredSteers.map(record=>typeof _deliveredSteerRecoveryRecord==='function'
+          ? _deliveredSteerRecoveryRecord(record,'exact_owner_turn_not_found') : record);
+        INFLIGHT[sid]={streamId:null,deliveredSteers:[],deliveredSteerRecovery:recovery.slice(-50)};
+        if(typeof saveInflightState==='function') saveInflightState(sid,INFLIGHT[sid]);
+      }
+      const recoveryRecords=INFLIGHT[sid]&&Array.isArray(INFLIGHT[sid].deliveredSteerRecovery)
+        ? INFLIGHT[sid].deliveredSteerRecovery : [];
+      if(typeof _showDeliveredSteerRecoveryNotice==='function') recoveryRecords.slice(-50).forEach(_showDeliveredSteerRecoveryNotice);
     }
 
     if(activeStreamId){

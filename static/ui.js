@@ -9403,6 +9403,13 @@ function _compactInflightState(state){
   // stringChars truncation in _truncateInflightValue.
   const todos=Array.isArray(state.todos)?state.todos:null;
   const todoStateMeta=(state.todoStateMeta&&typeof state.todoStateMeta==='object')?state.todoStateMeta:null;
+  const deliveredSteersByProfile={};
+  for(const [profile,scoped] of Object.entries(state.deliveredSteersByProfile&&typeof state.deliveredSteersByProfile==='object'?state.deliveredSteersByProfile:{})){
+    deliveredSteersByProfile[profile]={
+      deliveredSteers:Array.isArray(scoped&&scoped.deliveredSteers)?scoped.deliveredSteers.slice(-50).map(record=>_compactDeliveredSteerForStorage(record)):[],
+      deliveredSteerRecovery:Array.isArray(scoped&&scoped.deliveredSteerRecovery)?scoped.deliveredSteerRecovery.slice(-50).map(record=>_compactDeliveredSteerForStorage(record)):[],
+    };
+  }
   return _truncateInflightValue({
     streamId:state.streamId||null,
     messages,
@@ -9418,7 +9425,10 @@ function _compactInflightState(state){
     activityBurstAnchors:Array.isArray(state.activityBurstAnchors)?state.activityBurstAnchors.slice(-50):[],
     // #3058: pre-settlement recovery cache for delivered steers. The durable copy
     // is the anchor activity scene written at settlement; this only covers the gap.
+    profile:String(state.profile||((typeof S!=='undefined'&&S&&S.activeProfile)||'default')),
     deliveredSteers:Array.isArray(state.deliveredSteers)?state.deliveredSteers:[],
+    deliveredSteerRecovery:Array.isArray(state.deliveredSteerRecovery)?state.deliveredSteerRecovery.slice(-50):[],
+    deliveredSteersByProfile,
     todos,
     todoStateMeta,
   }, limits.stringChars);
@@ -9441,6 +9451,12 @@ function _compactDeliveredSteerForStorage(record, maxTextChars=12000){
     files:Array.isArray(payload.files)?payload.files.slice(-20):[],
     delivered:true,
     origin:payload.origin||source.origin||'webui',
+    profile:String(source.profile||payload.profile||''),
+    session_id:String(source.session_id||payload.session_id||''),
+    user_message_id:String(source.user_message_id||payload.user_message_id||''),
+    run_id:String(source.run_id||payload.run_id||''),
+    turn_id:String(source.turn_id||payload.turn_id||''),
+    recovery_only:!!(source.recovery_only||payload.recovery_only),
   };
   return {
     source_event_type:'steer_delivered',
@@ -9449,6 +9465,13 @@ function _compactDeliveredSteerForStorage(record, maxTextChars=12000){
     event_id:source.event_id||payload.event_id||null,
     status:'delivered',
     created_at:source.created_at??payload.created_at??undefined,
+    profile:String(source.profile||payload.profile||''),
+    session_id:String(source.session_id||payload.session_id||''),
+    user_message_id:String(source.user_message_id||payload.user_message_id||''),
+    run_id:String(source.run_id||payload.run_id||''),
+    turn_id:String(source.turn_id||payload.turn_id||''),
+    recovery_only:!!(source.recovery_only||payload.recovery_only),
+    recovery_reason:source.recovery_reason||payload.recovery_reason||'',
     payload:compactPayload,
   };
 }
@@ -9511,7 +9534,11 @@ function _writeInflightStateMap(all){
 }
 function saveInflightState(sid, state){
   if(!sid||!state) return;
-  const entry={..._compactInflightState(state),updated_at:Date.now()};
+  const profile=String(state.profile||((typeof S!=='undefined'&&S&&S.activeProfile)||'default'));
+  const existing=_readInflightStateMap()[sid]||{};
+  const byProfile={...(existing.deliveredSteersByProfile||{}),...(state.deliveredSteersByProfile||{})};
+  byProfile[profile]={deliveredSteers:Array.isArray(state.deliveredSteers)?state.deliveredSteers:(byProfile[profile]&&byProfile[profile].deliveredSteers)||[],deliveredSteerRecovery:Array.isArray(state.deliveredSteerRecovery)?state.deliveredSteerRecovery:(byProfile[profile]&&byProfile[profile].deliveredSteerRecovery)||[]};
+  const entry={..._compactInflightState({...state,profile,deliveredSteers:byProfile[profile].deliveredSteers,deliveredSteerRecovery:byProfile[profile].deliveredSteerRecovery,deliveredSteersByProfile:byProfile}),updated_at:Date.now()};
   try{
     const all=_readInflightStateMap();
     all[sid]=entry;
@@ -9530,8 +9557,12 @@ function saveInflightState(sid, state){
 function loadInflightState(sid, streamId){
   if(!sid) return null;
   const all=_readInflightStateMap();
-  const entry=all[sid];
-  if(!entry) return null;
+  const raw=all[sid];
+  if(!raw) return null;
+  const profile=String((typeof S!=='undefined'&&S&&S.activeProfile)||raw.profile||'default');
+  const scoped=raw.deliveredSteersByProfile&&raw.deliveredSteersByProfile[profile]||{};
+  const ownsLegacyRecords=raw.profile===profile||(!raw.profile&&profile==='default');
+  const entry={...raw,profile,deliveredSteers:Array.isArray(scoped.deliveredSteers)?scoped.deliveredSteers:(ownsLegacyRecords?raw.deliveredSteers:[]),deliveredSteerRecovery:Array.isArray(scoped.deliveredSteerRecovery)?scoped.deliveredSteerRecovery:(ownsLegacyRecords?raw.deliveredSteerRecovery:[])};
   if(streamId&&entry.streamId&&entry.streamId!==streamId) return null;
   const retainsDeliveredSteers=Array.isArray(entry.deliveredSteers)&&entry.deliveredSteers.length>0;
   if(entry.updated_at&&Date.now()-entry.updated_at>10*60*1000&&!retainsDeliveredSteers){
@@ -9545,7 +9576,14 @@ function clearInflightState(sid){
   try{
     const all=_readInflightStateMap();
     if(!(sid in all)) return;
-    delete all[sid];
+    const entry=all[sid];
+    const profile=String((typeof S!=='undefined'&&S&&S.activeProfile)||entry.profile||'default');
+    if(entry.deliveredSteersByProfile&&entry.deliveredSteersByProfile[profile]){
+      const byProfile={...entry.deliveredSteersByProfile};
+      delete byProfile[profile];
+      const next={...entry,deliveredSteersByProfile:byProfile,deliveredSteers:[],deliveredSteerRecovery:[]};
+      if(Object.keys(byProfile).length||next.streamId||next.messages?.length||next.toolCalls?.length) all[sid]=next; else delete all[sid];
+    }else delete all[sid];
     if(Object.keys(all).length) localStorage.setItem(INFLIGHT_STATE_KEY, JSON.stringify(all));
     else localStorage.removeItem(INFLIGHT_STATE_KEY);
   }catch(_){ }
