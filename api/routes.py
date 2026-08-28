@@ -1420,7 +1420,7 @@ def _is_cron_running(job_id: str) -> tuple[bool, float]:
         return True, time.time() - t
 
 
-def _cron_output_content_window(text: str, limit: int = _CRON_OUTPUT_CONTENT_LIMIT, *, job_mode: str = "agent") -> str:
+def _cron_output_content_window(text: str, limit: int = _CRON_OUTPUT_CONTENT_LIMIT, *, job_mode: str = "agent", legacy: bool = False) -> str:
     """Return a bounded cron output window that preserves useful response text.
 
     Cron output files can contain large skill dumps in the Prompt section. The
@@ -1434,7 +1434,7 @@ def _cron_output_content_window(text: str, limit: int = _CRON_OUTPUT_CONTENT_LIM
 
     from api.cron_output import bounded_cron_projection, parse_cron_output_artifact
 
-    projection = parse_cron_output_artifact(text, job_mode=job_mode)
+    projection = parse_cron_output_artifact(text, job_mode=job_mode, legacy=legacy)
     bounded = bounded_cron_projection(projection, limit)
     if bounded["kind"] == "agent":
         header = bounded["diagnostics"][:_CRON_OUTPUT_HEADER_CONTEXT].rstrip()
@@ -21717,8 +21717,8 @@ def _handle_cron_history(handler, parsed):
             try:
                 st = f.stat()
                 content = f.read_text(encoding="utf-8", errors="replace")
-                job_mode = _resolve_cron_artifact_mode(content, get_job, job_id, legacy_job_mode)
-                usage = _cron_output_usage_metadata(content, job_mode=job_mode)
+                job_mode, legacy = _resolve_cron_artifact_mode(content, get_job, job_id, legacy_job_mode)
+                usage = _cron_output_usage_metadata(content, job_mode=job_mode, legacy=legacy)
                 runs.append({
                     "filename": f.name,
                     "size": st.st_size,
@@ -21758,11 +21758,11 @@ def _handle_cron_run_detail(handler, parsed):
         from api.cron_output import parse_cron_output_artifact
 
         get_job = getattr(cron_jobs, "get_job", None)
-        job_mode = _resolve_cron_artifact_mode(content, get_job, job_id, [None])
-        projection = parse_cron_output_artifact(content, job_mode=job_mode)
+        job_mode, legacy = _resolve_cron_artifact_mode(content, get_job, job_id, [None])
+        projection = parse_cron_output_artifact(content, job_mode=job_mode, legacy=legacy)
         projection.pop("raw", None)
-        snippet = _cron_output_snippet(content, job_mode=job_mode)
-        usage = _cron_output_usage_metadata(content, job_mode=job_mode)
+        snippet = _cron_output_snippet(content, job_mode=job_mode, legacy=legacy)
+        usage = _cron_output_usage_metadata(content, job_mode=job_mode, legacy=legacy)
         return j(handler, {"job_id": job_id, "filename": filename,
                            "content": content, "snippet": snippet,
                            "projection": projection,
@@ -21771,7 +21771,7 @@ def _handle_cron_run_detail(handler, parsed):
         return j(handler, {"error": str(e)}, status=500)
 
 
-def _cron_output_usage_metadata(text: str, *, job_mode: str = "unknown") -> dict:
+def _cron_output_usage_metadata(text: str, *, job_mode: str = "unknown", legacy: bool = False) -> dict:
     """Extract optional token/cost metadata from a cron output markdown file."""
     import re as _re
 
@@ -21779,7 +21779,7 @@ def _cron_output_usage_metadata(text: str, *, job_mode: str = "unknown") -> dict
     if job_mode == "agent":
         from api.cron_output import parse_cron_output_artifact
 
-        projection = parse_cron_output_artifact(text, job_mode=job_mode)
+        projection = parse_cron_output_artifact(text, job_mode=job_mode, legacy=legacy)
         if projection["kind"] == "agent":
             head = projection["diagnostics"]
     usage: dict = {}
@@ -21840,19 +21840,21 @@ def _cron_legacy_job_mode(get_job, job_id: str) -> str:
     return "script" if job and job.get("no_agent") else ("agent" if job else "unknown")
 
 
-def _resolve_cron_artifact_mode(content, get_job, job_id: str, legacy_mode) -> str:
+def _resolve_cron_artifact_mode(content, get_job, job_id: str, legacy_mode) -> tuple[str, bool]:
     """Classify artifact metadata before consulting mutable legacy job state."""
-    from api.cron_output import resolve_cron_artifact_mode
+    from api.cron_output import is_legacy_cron_artifact, resolve_cron_artifact_mode
 
     mode = resolve_cron_artifact_mode(content)
     if mode != "unknown":
-        return mode
+        return mode, False
+    if not is_legacy_cron_artifact(content):
+        return "unknown", False
     if legacy_mode[0] is None:
         legacy_mode[0] = _cron_legacy_job_mode(get_job, job_id)
-    return resolve_cron_artifact_mode(content, legacy_job_mode=legacy_mode[0])
+    return legacy_mode[0], legacy_mode[0] == "agent"
 
 
-def _cron_output_snippet(text: str, limit: int = 600, *, job_mode: str = "agent") -> str:
+def _cron_output_snippet(text: str, limit: int = 600, *, job_mode: str = "agent", legacy: bool = False) -> str:
     """Extract the response body from a cron output .md file for preview.
 
     Contract: cron output files use markdown front-matter followed by a
@@ -21864,7 +21866,7 @@ def _cron_output_snippet(text: str, limit: int = 600, *, job_mode: str = "agent"
     """
     from api.cron_output import bounded_cron_projection, parse_cron_output_artifact
 
-    projection = parse_cron_output_artifact(text, job_mode=job_mode)
+    projection = parse_cron_output_artifact(text, job_mode=job_mode, legacy=legacy)
     projection = bounded_cron_projection(projection, limit)
     body = projection["response"] if projection["kind"] == "agent" else text
     body = (body or "").strip()
@@ -21905,8 +21907,8 @@ def _handle_cron_output(handler, parsed):
         for f in files:
             try:
                 txt = f.read_text(encoding="utf-8", errors="replace")
-                job_mode = _resolve_cron_artifact_mode(txt, get_job, job_id, legacy_job_mode)
-                outputs.append({"filename": f.name, "content": _cron_output_content_window(txt, job_mode=job_mode)})
+                job_mode, legacy = _resolve_cron_artifact_mode(txt, get_job, job_id, legacy_job_mode)
+                outputs.append({"filename": f.name, "content": _cron_output_content_window(txt, job_mode=job_mode, legacy=legacy)})
             except Exception:
                 logger.debug("Failed to read cron output file %s", f)
     return j(handler, {"job_id": job_id, "outputs": outputs})

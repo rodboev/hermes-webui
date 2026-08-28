@@ -14,17 +14,37 @@ _JOB_ID_LINE = re.compile(r"^\*\*Job ID:\*\*[ \t]*[^\r\n]+\r?$")
 _RUN_TIME_LINE = re.compile(r"^\*\*Run Time:\*\*[ \t]*[^\r\n]+\r?$")
 _SCHEDULE_LINE = re.compile(r"^\*\*Schedule:\*\*[ \t]*[^\r\n]+\r?$")
 _MODE_SCRIPT_LINE = re.compile(r"^\*\*Mode:\*\*[ \t]*no_agent \(script\)[ \t]*\r?$")
+_FENCE_LINE = re.compile(r"^(`{3,}|~{3,})(?:[^`~]*)$")
 
 
 def _opening_lines(text: str):
     """Yield only top-level metadata lines before artifact content begins."""
+    fence_char = None
+    fence_length = 0
     for line in text.splitlines(keepends=True):
         stripped = line.rstrip("\r\n")
+        fence = _FENCE_LINE.fullmatch(stripped.strip())
+        if fence:
+            delimiter = fence.group(1)
+            if fence_char is None:
+                fence_char, fence_length = delimiter[0], len(delimiter)
+            elif delimiter[0] == fence_char and len(delimiter) >= fence_length:
+                fence_char = None
+                fence_length = 0
+            continue
+        if fence_char is not None:
+            continue
         if stripped == "---" or stripped in ("## Prompt", "## Response", "## Error"):
             if stripped == "## Prompt":
                 yield stripped
             break
         yield stripped
+
+
+def is_legacy_cron_artifact(text: str) -> bool:
+    """Return whether an artifact has no producer-owned cron envelope."""
+    lines = list(_opening_lines(text if isinstance(text, str) else str(text or "")))
+    return not lines or not _CRON_JOB_LINE.fullmatch(lines[0])
 
 
 def resolve_cron_artifact_mode(text: str, *, legacy_job_mode: str = "unknown") -> str:
@@ -73,7 +93,7 @@ def _outside_fence_and_quote(text: str, index: int) -> bool:
     return fence_char is None and not text[line_start:index].lstrip().startswith(">")
 
 
-def parse_cron_output_artifact(text: str, *, job_mode: str = "unknown") -> dict:
+def parse_cron_output_artifact(text: str, *, job_mode: str = "unknown", legacy: bool = False) -> dict:
     """Return one fail-closed, raw-preserving projection for a cron artifact."""
     raw = text if isinstance(text, str) else str(text or "")
     base = {"kind": "raw", "response": None, "diagnostics": raw,
@@ -89,8 +109,27 @@ def parse_cron_output_artifact(text: str, *, job_mode: str = "unknown") -> dict:
                          if _outside_fence_and_quote(raw, m.start())]
     prompt = prompt_candidates[0] if len(prompt_candidates) == 1 else None
     if not preamble or not prompt or prompt.start() <= preamble.end():
-        base["fallback_reason"] = "malformed_preamble"
-        return base
+        if not legacy:
+            base["fallback_reason"] = "malformed_preamble"
+            return base
+        errors = [m for m in _ERROR.finditer(raw)
+                  if _outside_fence_and_quote(raw, m.start())]
+        if errors:
+            base["fallback_reason"] = "error_output"
+            return base
+        candidates = [m for m in _HEADING.finditer(raw)
+                      if _outside_fence_and_quote(raw, m.start())]
+        if len(candidates) != 1:
+            base["fallback_reason"] = "missing_marker" if not candidates else "ambiguous_marker"
+            return base
+        marker = candidates[0]
+        response = raw[marker.end():].lstrip("\r\n")
+        if not response:
+            base["fallback_reason"] = "empty_response"
+            return base
+        return {"kind": "agent", "response": response,
+                "diagnostics": raw[:marker.start()].rstrip(), "raw": raw,
+                "fallback_reason": None}
     errors = [m for m in _ERROR.finditer(raw)
               if _outside_fence_and_quote(raw, m.start())]
     if errors:
