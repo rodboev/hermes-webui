@@ -38,7 +38,7 @@ def _opening_lines(text: str):
             continue
         if fence_char is not None:
             continue
-        if stripped == "---" or stripped in ("## Prompt", "## Response", "## Error"):
+        if stripped == "---" or stripped in ("## Prompt", "## Response", "## Error", "# Response", "# Error"):
             if stripped == "## Prompt":
                 yield stripped
             break
@@ -102,22 +102,34 @@ def cron_artifact_metadata_head(text: str) -> str:
     return "\n".join(metadata)
 
 
-def _outside_fence_and_quote(text: str, index: int) -> bool:
+def _top_level_marker_spans(text: str, start: int = 0) -> dict[str, list[tuple[int, int]]]:
+    """Collect bounded top-level marker spans in one forward scan."""
     fence_char = None
     fence_length = 0
-    for line in text[:index].splitlines():
-        stripped = line.strip()
-        match = re.match(r"(`{3,}|~{3,})(?:[^`~]*)$", stripped)
-        if not match:
+    spans: dict[str, list[tuple[int, int]]] = {"prompt": [], "response": [], "error": []}
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        line_start = offset
+        offset += len(line)
+        stripped = line.rstrip("\n")
+        fence = _FENCE_LINE.fullmatch(stripped.strip())
+        if fence:
+            delimiter = fence.group(1)
+            if fence_char is None:
+                fence_char, fence_length = delimiter[0], len(delimiter)
+            elif delimiter[0] == fence_char and len(delimiter) >= fence_length:
+                fence_char = None
+                fence_length = 0
             continue
-        delimiter = match.group(1)
-        if fence_char is None:
-            fence_char, fence_length = delimiter[0], len(delimiter)
-        elif delimiter[0] == fence_char and len(delimiter) >= fence_length:
-            fence_char = None
-            fence_length = 0
-    line_start = text.rfind("\n", 0, index) + 1
-    return fence_char is None and not text[line_start:index].lstrip().startswith(">")
+        if fence_char is not None or line_start < start:
+            continue
+        for name, pattern in (("prompt", _PROMPT), ("response", _HEADING), ("error", _ERROR)):
+            if len(spans[name]) >= 2:
+                continue
+            match = pattern.fullmatch(stripped)
+            if match and not stripped.lstrip().startswith(">"):
+                spans[name].append((line_start + match.start(), line_start + match.end()))
+    return spans
 
 
 def parse_cron_output_artifact(text: str, *, job_mode: str = "unknown", legacy: bool = False) -> dict:
@@ -132,48 +144,44 @@ def parse_cron_output_artifact(text: str, *, job_mode: str = "unknown", legacy: 
         base["fallback_reason"] = "unknown_mode"
         return base
     preamble = _PREAMBLE.match(raw)
-    prompt_candidates = [m for m in _PROMPT.finditer(raw, preamble.end() if preamble else 0)
-                         if _outside_fence_and_quote(raw, m.start())]
+    marker_spans = _top_level_marker_spans(raw, preamble.end() if preamble else 0)
+    prompt_candidates = marker_spans["prompt"]
     prompt = prompt_candidates[0] if len(prompt_candidates) == 1 else None
-    if not preamble or not prompt or prompt.start() <= preamble.end():
+    if not preamble or not prompt or prompt[0] <= preamble.end():
         if not legacy:
             base["fallback_reason"] = "malformed_preamble"
             return base
-        errors = [m for m in _ERROR.finditer(raw)
-                  if _outside_fence_and_quote(raw, m.start())]
+        errors = marker_spans["error"]
         if errors:
             base["fallback_reason"] = "error_output"
             return base
-        candidates = [m for m in _HEADING.finditer(raw)
-                      if _outside_fence_and_quote(raw, m.start())]
+        candidates = marker_spans["response"]
         if len(candidates) != 1:
             base["fallback_reason"] = "missing_marker" if not candidates else "ambiguous_marker"
             return base
-        marker = candidates[0]
-        response = raw[marker.end():].lstrip("\r\n")
+        marker_start, marker_end = candidates[0]
+        response = raw[marker_end:].lstrip("\r\n")
         if not response:
             base["fallback_reason"] = "empty_response"
             return base
         return {"kind": "agent", "response": response,
-                "diagnostics": raw[:marker.start()].rstrip(), "raw": raw,
+                "diagnostics": raw[:marker_start].rstrip(), "raw": raw,
                 "fallback_reason": None}
-    errors = [m for m in _ERROR.finditer(raw)
-              if _outside_fence_and_quote(raw, m.start())]
+    errors = marker_spans["error"]
     if errors:
         base["fallback_reason"] = "error_output"
         return base
-    candidates = [m for m in _HEADING.finditer(raw, prompt.end())
-                  if _outside_fence_and_quote(raw, m.start())]
+    candidates = [span for span in marker_spans["response"] if span[0] >= prompt[1]]
     if len(candidates) != 1:
         base["fallback_reason"] = "missing_marker" if not candidates else "ambiguous_marker"
         return base
-    marker = candidates[0]
-    response = raw[marker.end():].lstrip("\r\n")
+    marker_start, marker_end = candidates[0]
+    response = raw[marker_end:].lstrip("\r\n")
     if not response:
         base["fallback_reason"] = "empty_response"
         return base
     return {"kind": "agent", "response": response,
-            "diagnostics": raw[:marker.start()].rstrip(), "raw": raw,
+            "diagnostics": raw[:marker_start].rstrip(), "raw": raw,
             "fallback_reason": None}
 
 
