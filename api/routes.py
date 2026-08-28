@@ -21746,9 +21746,10 @@ def _handle_cron_run_detail(handler, parsed):
     # the path resolver).
     if not _re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}", job_id) or job_id in (".", ".."):
         return j(handler, {"error": "invalid job_id"}, status=400)
-    # Prevent path traversal — resolve and verify it stays within the job's output dir
-    fpath = (CRON_OUT / job_id / filename).resolve()
-    if not fpath.is_relative_to(CRON_OUT.resolve()):
+    # Prevent path traversal, resolve and verify it stays within this job's directory
+    job_dir = (CRON_OUT / job_id).resolve()
+    fpath = (job_dir / filename).resolve()
+    if not fpath.is_relative_to(job_dir):
         return j(handler, {"error": "invalid filename"}, status=400)
     if not fpath.exists():
         return j(handler, {"error": "run not found"}, status=404)
@@ -21771,17 +21772,18 @@ def _handle_cron_run_detail(handler, parsed):
         return j(handler, {"error": str(e)}, status=500)
 
 
-def _cron_output_usage_metadata(text: str, *, job_mode: str = "unknown", legacy: bool = False) -> dict:
+def _cron_output_usage_metadata(text: str, *, job_mode: str = "agent", legacy: bool = False) -> dict:
     """Extract optional token/cost metadata from a cron output markdown file."""
     import re as _re
 
+    if job_mode != "agent":
+        return {}
     head = text
-    if job_mode == "agent":
-        from api.cron_output import parse_cron_output_artifact
+    from api.cron_output import parse_cron_output_artifact
 
-        projection = parse_cron_output_artifact(text, job_mode=job_mode, legacy=legacy)
-        if projection["kind"] == "agent":
-            head = projection["diagnostics"]
+    projection = parse_cron_output_artifact(text, job_mode=job_mode, legacy=legacy)
+    if projection["kind"] == "agent":
+        head = projection["diagnostics"]
     usage: dict = {}
 
     def _intish(value: str):

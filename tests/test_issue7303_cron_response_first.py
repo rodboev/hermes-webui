@@ -152,7 +152,7 @@ def test_historical_mode_is_owned_by_each_artifact_across_job_mutations(monkeypa
     output.mkdir()
     agent = agent_artifact("agent response", usage=True)
     script = script_artifact(
-        "## Prompt\n\n# Cron Job: fake\n\n## Response\nscript output\n" + ("script-tail\n" * 1100)
+        "**Cost:** $999\n## Prompt\n\n# Cron Job: fake\n\n## Response\nscript output\n" + ("script-tail\n" * 1100)
     )
     (output / "agent.md").write_text(agent, encoding="utf-8")
     (output / "script.md").write_text(script, encoding="utf-8")
@@ -222,6 +222,29 @@ def test_deleted_job_uses_artifact_mode_but_not_legacy_fallback(monkeypatch, tmp
         "kind": "raw", "response": None, "diagnostics": legacy,
         "fallback_reason": "unknown_mode",
     }
+
+
+def test_run_detail_rejects_cross_job_filename(monkeypatch, tmp_path):
+    import api.routes as routes
+
+    (tmp_path / "job_abc").mkdir()
+    secret_dir = tmp_path / "job_secret"
+    secret_dir.mkdir()
+    (secret_dir / "secret.md").write_text("SECRET", encoding="utf-8")
+    jobs = types.ModuleType("cron.jobs")
+    jobs.OUTPUT_DIR = tmp_path
+    jobs.get_job = lambda job_id: None
+    cron = types.ModuleType("cron")
+    cron.__path__ = []
+    monkeypatch.setitem(__import__("sys").modules, "cron", cron)
+    monkeypatch.setitem(__import__("sys").modules, "cron.jobs", jobs)
+
+    handler = _Handler()
+    routes._handle_cron_run_detail(
+        handler, types.SimpleNamespace(query="job_id=job_abc&filename=../job_secret/secret.md")
+    )
+    assert handler.status == 400
+    assert json.loads(handler.wfile.getvalue()) == {"error": "invalid filename"}
 
 
 class _Handler:
