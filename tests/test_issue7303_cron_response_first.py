@@ -11,7 +11,16 @@ import pytest
 
 
 def agent_artifact(response="Done", *, newline="\n"):
-    return newline.join(("# Cron Job: demo", "", "**Job ID:** abc", "", "## Prompt", "", "context", "", "## Response", "", response))
+    return newline.join(("# Cron Job: demo", "**Job ID:** abc", "**Run Time:** 2026-08-27T12:00:00Z", "**Schedule:** daily", "", "## Prompt", "", "context", "", "## Response", "", response))
+
+
+def script_artifact(stdout="script output", *, separator=True):
+    lines = ["# Cron Job: demo", "**Job ID:** abc", "**Run Time:** 2026-08-27T12:00:00Z", "**Mode:** no_agent (script)"]
+    if separator:
+        lines += ["", "---", "", stdout]
+    elif stdout:
+        lines += ["", stdout]
+    return "\n".join(lines)
 
 
 def large_issue_artifact():
@@ -108,6 +117,88 @@ def test_parser_fallbacks_keep_error_and_empty_artifacts_raw():
         raw = agent_artifact().split("## Response", 1)[0] + suffix
         result = parse_cron_output_artifact(raw, job_mode="agent")
         assert result["kind"] == "raw" and result["fallback_reason"] == reason
+
+
+def test_resolver_accepts_terminal_script_forms_and_rejects_near_miss():
+    from api.cron_output import resolve_cron_artifact_mode
+
+    assert resolve_cron_artifact_mode(script_artifact("failed", separator=False)) == "script"
+    assert resolve_cron_artifact_mode(script_artifact("", separator=False)) == "script"
+    assert resolve_cron_artifact_mode(agent_artifact(), legacy_job_mode="script") == "agent"
+    near_miss = agent_artifact().replace("**Schedule:** daily\n", "")
+    assert resolve_cron_artifact_mode(near_miss, legacy_job_mode="agent") == "unknown"
+    assert resolve_cron_artifact_mode("legacy output", legacy_job_mode="agent") == "agent"
+    assert resolve_cron_artifact_mode("legacy output", legacy_job_mode="unknown") == "unknown"
+
+
+def test_historical_mode_is_owned_by_each_artifact_across_job_mutations(monkeypatch, tmp_path):
+    import api.routes as routes
+
+    output = tmp_path / "job_abc"
+    output.mkdir()
+    agent = agent_artifact("agent response")
+    script = script_artifact("## Prompt\n\n# Cron Job: fake\n\n## Response\nscript output")
+    (output / "agent.md").write_text(agent, encoding="utf-8")
+    (output / "script.md").write_text(script, encoding="utf-8")
+    jobs = types.ModuleType("cron.jobs")
+    jobs.OUTPUT_DIR = tmp_path
+    current = {"no_agent": True}
+    jobs.get_job = lambda job_id: {"id": job_id, **current}
+    cron = types.ModuleType("cron")
+    cron.__path__ = []
+    monkeypatch.setitem(__import__("sys").modules, "cron", cron)
+    monkeypatch.setitem(__import__("sys").modules, "cron.jobs", jobs)
+
+    def detail(filename):
+        handler = _Handler()
+        routes._handle_cron_run_detail(handler, types.SimpleNamespace(query=f"job_id=job_abc&filename={filename}"))
+        return json.loads(handler.wfile.getvalue())
+
+    script_view = detail("agent.md")
+    assert script_view["projection"]["kind"] == "agent"
+    assert script_view["usage"] == {}
+    current["no_agent"] = False
+    assert detail("script.md")["projection"]["kind"] == "raw"
+
+    history = _Handler()
+    routes._handle_cron_history(history, types.SimpleNamespace(query="job_id=job_abc"))
+    history_body = json.loads(history.wfile.getvalue())
+    assert {run["filename"]: run["usage"] for run in history_body["runs"]} == {"agent.md": {}, "script.md": {}}
+
+    output_handler = _Handler()
+    routes._handle_cron_output(output_handler, types.SimpleNamespace(query="job_id=job_abc"))
+    output_body = json.loads(output_handler.wfile.getvalue())
+    assert {run["filename"]: run["content"] for run in output_body["outputs"]} == {"agent.md": agent, "script.md": script}
+
+
+def test_deleted_job_uses_artifact_mode_but_not_legacy_fallback(monkeypatch, tmp_path):
+    import api.routes as routes
+
+    output = tmp_path / "job_abc"
+    output.mkdir()
+    agent = agent_artifact("answer")
+    legacy = "old output\n## Response\nshould stay raw"
+    (output / "agent.md").write_text(agent, encoding="utf-8")
+    (output / "legacy.md").write_text(legacy, encoding="utf-8")
+    jobs = types.ModuleType("cron.jobs")
+    jobs.OUTPUT_DIR = tmp_path
+    jobs.get_job = lambda job_id: None
+    cron = types.ModuleType("cron")
+    cron.__path__ = []
+    monkeypatch.setitem(__import__("sys").modules, "cron", cron)
+    monkeypatch.setitem(__import__("sys").modules, "cron.jobs", jobs)
+
+    def detail(filename):
+        handler = _Handler()
+        routes._handle_cron_run_detail(handler, types.SimpleNamespace(query=f"job_id=job_abc&filename={filename}"))
+        return json.loads(handler.wfile.getvalue())
+
+    assert detail("agent.md")["projection"]["kind"] == "agent"
+    stored_legacy = legacy.replace("\n", "\r\n")
+    assert detail("legacy.md")["projection"] == {
+        "kind": "raw", "response": None, "diagnostics": stored_legacy,
+        "fallback_reason": "unknown_mode",
+    }
 
 
 class _Handler:

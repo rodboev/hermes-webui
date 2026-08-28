@@ -21707,6 +21707,8 @@ def _handle_cron_history(handler, parsed):
     out_dir = CRON_OUT / job_id
     runs = []
     total = 0
+    get_job = getattr(__import__("cron.jobs", fromlist=["get_job"]), "get_job", None)
+    legacy_job_mode = [None]
     if out_dir.exists():
         all_files = sorted(out_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)
         total = len(all_files)
@@ -21715,9 +21717,7 @@ def _handle_cron_history(handler, parsed):
             try:
                 st = f.stat()
                 content = f.read_text(encoding="utf-8", errors="replace")
-                get_job = getattr(__import__("cron.jobs", fromlist=["get_job"]), "get_job", None)
-                job = get_job(job_id) if get_job else None
-                job_mode = "script" if job and job.get("no_agent") else ("agent" if job else "unknown")
+                job_mode = _resolve_cron_artifact_mode(content, get_job, job_id, legacy_job_mode)
                 usage = _cron_output_usage_metadata(content, job_mode=job_mode)
                 runs.append({
                     "filename": f.name,
@@ -21758,8 +21758,7 @@ def _handle_cron_run_detail(handler, parsed):
         from api.cron_output import parse_cron_output_artifact
 
         get_job = getattr(cron_jobs, "get_job", None)
-        job = get_job(job_id) if get_job else None
-        job_mode = "unknown" if job is None else ("script" if job.get("no_agent") else "agent")
+        job_mode = _resolve_cron_artifact_mode(content, get_job, job_id, [None])
         projection = parse_cron_output_artifact(content, job_mode=job_mode)
         projection.pop("raw", None)
         snippet = _cron_output_snippet(content, job_mode=job_mode)
@@ -21835,6 +21834,24 @@ def _cron_output_usage_metadata(text: str, *, job_mode: str = "unknown") -> dict
     return usage
 
 
+def _cron_legacy_job_mode(get_job, job_id: str) -> str:
+    """Return mutable job mode only as fallback for unclassified legacy artifacts."""
+    job = get_job(job_id) if get_job else None
+    return "script" if job and job.get("no_agent") else ("agent" if job else "unknown")
+
+
+def _resolve_cron_artifact_mode(content, get_job, job_id: str, legacy_mode) -> str:
+    """Classify artifact metadata before consulting mutable legacy job state."""
+    from api.cron_output import resolve_cron_artifact_mode
+
+    mode = resolve_cron_artifact_mode(content)
+    if mode != "unknown":
+        return mode
+    if legacy_mode[0] is None:
+        legacy_mode[0] = _cron_legacy_job_mode(get_job, job_id)
+    return resolve_cron_artifact_mode(content, legacy_job_mode=legacy_mode[0])
+
+
 def _cron_output_snippet(text: str, limit: int = 600, *, job_mode: str = "agent") -> str:
     """Extract the response body from a cron output .md file for preview.
 
@@ -21881,14 +21898,14 @@ def _handle_cron_output(handler, parsed):
         limit = 5
     out_dir = CRON_OUT / job_id
     get_job = getattr(cron_jobs, "get_job", None)
-    job = get_job(job_id) if get_job else None
-    job_mode = "script" if job and job.get("no_agent") else ("agent" if job else "unknown")
+    legacy_job_mode = [None]
     outputs = []
     if out_dir.exists():
         files = sorted(out_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)[:limit]
         for f in files:
             try:
                 txt = f.read_text(encoding="utf-8", errors="replace")
+                job_mode = _resolve_cron_artifact_mode(txt, get_job, job_id, legacy_job_mode)
                 outputs.append({"filename": f.name, "content": _cron_output_content_window(txt, job_mode=job_mode)})
             except Exception:
                 logger.debug("Failed to read cron output file %s", f)
