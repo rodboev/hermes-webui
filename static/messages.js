@@ -1198,8 +1198,16 @@ function _clearStaleBusyStateBeforeSend({compressionRunning=false}={}){
   );
   if(hasRuntimeConfirmation) return false;
   if(typeof INFLIGHT==='object'&&INFLIGHT&&sid&&INFLIGHT[sid]){
-    delete INFLIGHT[sid];
-    if(typeof clearInflightState==='function') clearInflightState(sid);
+    const pending=INFLIGHT[sid];
+    const delivered=Array.isArray(pending.deliveredSteers)?pending.deliveredSteers:[];
+    const recovery=Array.isArray(pending.deliveredSteerRecovery)?pending.deliveredSteerRecovery:[];
+    if(delivered.length||recovery.length){
+      INFLIGHT[sid]={profile:pending.profile||S.activeProfile||session.profile||'default',streamId:null,deliveredSteers:delivered,deliveredSteerRecovery:recovery};
+      if(typeof saveInflightState==='function') saveInflightState(sid,INFLIGHT[sid]);
+    }else{
+      delete INFLIGHT[sid];
+      if(typeof clearInflightState==='function') clearInflightState(sid);
+    }
   }
   S.activeStreamId=null;
   if(session) session.active_stream_id=null;
@@ -1706,8 +1714,9 @@ async function send(){
       }
     });
     optimisticMessages=[...S.messages];
+    const priorInflight=INFLIGHT[activeSid];
     INFLIGHT[activeSid]={messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]};
-    INFLIGHT[activeSid]=_preserveDeliveredSteerCacheForNewInflight(activeSid,INFLIGHT[activeSid]);
+    INFLIGHT[activeSid]=_preserveDeliveredSteerCacheForNewInflight(activeSid,INFLIGHT[activeSid],priorInflight);
     if(typeof saveInflightState==='function'){
       saveInflightState(activeSid,{streamId:null,messages:INFLIGHT[activeSid].messages,uploaded:uploadedNames,toolCalls:[],deliveredSteers:INFLIGHT[activeSid].deliveredSteers||[],deliveredSteerRecovery:INFLIGHT[activeSid].deliveredSteerRecovery||[],profile:S.activeProfile||S.session&&S.session.profile||'default'});
     }
@@ -1755,8 +1764,9 @@ async function send(){
     try{console.warn('[webui] pre-start optimistic UI failed; continuing to /api/chat/start', message);}catch(_){ }
     if(!S.messages.includes(userMsg)) S.messages.push(userMsg);
     optimisticMessages=[...S.messages];
+    const priorInflight=INFLIGHT[activeSid];
     INFLIGHT[activeSid]={messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]};
-    INFLIGHT[activeSid]=_preserveDeliveredSteerCacheForNewInflight(activeSid,INFLIGHT[activeSid]);
+    INFLIGHT[activeSid]=_preserveDeliveredSteerCacheForNewInflight(activeSid,INFLIGHT[activeSid],priorInflight);
     try{setBusy(true);}catch(_){S.busy=true;}
     if(S.session&&!S.session.pending_started_at) S.session.pending_started_at=Date.now()/1000;
     S.activeStreamId=null;
@@ -2005,8 +2015,9 @@ async function startRegeneration(sessionId, regenerationRevision){
 const LIVE_STREAMS={};
 const _STREAM_NOTIFICATION_BACKGROUND={};
 
-function _preserveDeliveredSteerCacheForNewInflight(sid, entry){
-  const existing=typeof INFLIGHT!=='undefined'&&INFLIGHT?INFLIGHT[sid]:null;
+function _preserveDeliveredSteerCacheForNewInflight(sid, entry, existingOverride){
+  const existing=arguments.length>2?existingOverride:
+    (typeof INFLIGHT!=='undefined'&&INFLIGHT?INFLIGHT[sid]:null);
   const entryProfile=String(entry&&entry.profile||
     ((typeof S!=='undefined'&&S&&S.activeProfile)||
       (typeof S!=='undefined'&&S&&S.session&&S.session.profile)||'default'));

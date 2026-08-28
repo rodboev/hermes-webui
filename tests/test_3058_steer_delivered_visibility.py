@@ -277,6 +277,24 @@ def test_3058_new_profile_send_does_not_inherit_an_old_profile_cache():
     assert out == {"profile": "beta", "steers": [], "recovery": []}
 
 
+def test_3058_stale_busy_cleanup_retains_accepted_delivery_cache():
+    cleanup_source = _read(MESSAGES_JS).replace(
+        "function _clearStaleBusyStateBeforeSend({compressionRunning=false}={})",
+        "function _clearStaleBusyStateBeforeSend()",
+    )
+    cleanup = _function(cleanup_source, "_clearStaleBusyStateBeforeSend")
+    out = _run_node(
+        "const S={busy:true,activeStreamId:null,activeProfile:'alpha',session:{session_id:'sid-3058',profile:'alpha'}};"
+        "const INFLIGHT={'sid-3058':{profile:'alpha',deliveredSteers:[{local_id:'alpha-steer'}],deliveredSteerRecovery:[{local_id:'alpha-recovery'}]}};"
+        "const saved=[];function saveInflightState(sid,state){saved.push([sid,state]);}function clearInflightState(){}"
+        "function setBusy(value){S.busy=value;}function setComposerStatus(){}function setStatus(){}function updateSendBtn(){}function clearOptimisticSessionStreaming(){}"
+        "const compressionRunning=false;"
+        + cleanup
+        + "\nconst changed=_clearStaleBusyStateBeforeSend();console.log(JSON.stringify({changed,busy:S.busy,profile:INFLIGHT['sid-3058'].profile,steers:INFLIGHT['sid-3058'].deliveredSteers.map(r=>r.local_id),recovery:INFLIGHT['sid-3058'].deliveredSteerRecovery.map(r=>r.local_id),saved:saved.length}));"
+    )
+    assert out == {"changed": True, "busy": False, "profile": "alpha", "steers": ["alpha-steer"], "recovery": ["alpha-recovery"], "saved": 1}
+
+
 # -------------------------------------------------------------------- ordering
 
 

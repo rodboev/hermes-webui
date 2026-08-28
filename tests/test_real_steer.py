@@ -348,6 +348,17 @@ class TestFrontendWiring:
         assert "if(_steerOwnerIsCurrent(ownerSid))" in body
         assert "S.pendingFiles=_remaining" in body, "accepted steer should clear the delivered files (by identity) after paths are injected"
 
+    def test_send_snapshots_inflight_delivery_before_replacing_the_entry(self):
+        start = self.msgs.find("async function send(")
+        assert start >= 0
+        end = self.msgs.find("\nasync function ", start + 1)
+        assert end > start
+        body = self.msgs[start:end]
+        prior_idx = body.find("const priorInflight=INFLIGHT[activeSid];")
+        assign_idx = body.find("INFLIGHT[activeSid]={messages:optimisticMessages")
+        assert 0 <= prior_idx < assign_idx, "send must snapshot the previous inflight cache before replacing it"
+        assert "_preserveDeliveredSteerCacheForNewInflight(activeSid,INFLIGHT[activeSid],priorInflight)" in body
+
     def test_file_steer_does_not_read_live_session_after_upload_await(self):
         cmds = self.cmds
         idx = cmds.find("async function _trySteer(")
