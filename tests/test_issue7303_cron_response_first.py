@@ -137,6 +137,10 @@ def test_resolver_accepts_terminal_script_forms_and_rejects_near_miss():
         "**Schedule:** daily\n", "```md\n**Mode:** no_agent (script)\n```\n**Schedule:** daily\n"
     )
     assert resolve_cron_artifact_mode(fenced_mode) == "agent"
+    injected_mode = agent_artifact().replace("**Schedule:** daily\n", "**Schedule:** daily\n**Mode:** no_agent (script)\n")
+    assert resolve_cron_artifact_mode(injected_mode) == "agent"
+    script_metadata = script_artifact("**Job ID:** duplicate\n**Mode:** no_agent (script)", separator=False)
+    assert resolve_cron_artifact_mode(script_metadata) == "script"
     assert resolve_cron_artifact_mode("legacy output", legacy_job_mode="agent") == "agent"
     assert resolve_cron_artifact_mode("legacy output", legacy_job_mode="unknown") == "unknown"
 
@@ -199,7 +203,7 @@ def test_deleted_job_uses_artifact_mode_but_not_legacy_fallback(monkeypatch, tmp
     agent = agent_artifact("answer")
     legacy = "old output\n## Response\nshould stay raw"
     (output / "agent.md").write_text(agent, encoding="utf-8")
-    (output / "legacy.md").write_text(legacy, encoding="utf-8")
+    (output / "legacy.md").write_bytes(legacy.encode("utf-8"))
     jobs = types.ModuleType("cron.jobs")
     jobs.OUTPUT_DIR = tmp_path
     jobs.get_job = lambda job_id: None
@@ -214,9 +218,8 @@ def test_deleted_job_uses_artifact_mode_but_not_legacy_fallback(monkeypatch, tmp
         return json.loads(handler.wfile.getvalue())
 
     assert detail("agent.md")["projection"]["kind"] == "agent"
-    stored_legacy = legacy.replace("\n", "\r\n")
     assert detail("legacy.md")["projection"] == {
-        "kind": "raw", "response": None, "diagnostics": stored_legacy,
+        "kind": "raw", "response": None, "diagnostics": legacy,
         "fallback_reason": "unknown_mode",
     }
 
@@ -234,7 +237,7 @@ def test_legacy_agent_fallback_keeps_response_and_excludes_response_usage(monkey
     output = tmp_path / "job_abc"
     output.mkdir()
     legacy = "legacy prompt\n## Response\n**Cost:** $999\nanswer"
-    (output / "legacy.md").write_text(legacy, encoding="utf-8")
+    (output / "legacy.md").write_bytes(legacy.encode("utf-8"))
     jobs = types.ModuleType("cron.jobs")
     jobs.OUTPUT_DIR = tmp_path
     jobs.get_job = lambda job_id: {"id": job_id, "no_agent": False}
@@ -247,7 +250,7 @@ def test_legacy_agent_fallback_keeps_response_and_excludes_response_usage(monkey
     routes._handle_cron_run_detail(handler, types.SimpleNamespace(query="job_id=job_abc&filename=legacy.md"))
     body = json.loads(handler.wfile.getvalue())
     assert body["projection"]["kind"] == "agent"
-    assert body["snippet"] == "**Cost:** $999\r\nanswer"
+    assert body["snippet"] == "**Cost:** $999\nanswer"
     assert body["usage"] == {}
 
 

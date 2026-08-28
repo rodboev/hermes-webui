@@ -64,8 +64,9 @@ def resolve_cron_artifact_mode(text: str, *, legacy_job_mode: str = "unknown") -
                 positions.setdefault(name, index)
                 break
 
-    if all(name in positions for name in ("job_id", "run_time", "mode")) and not any(counts[name] > 1 for name in positions):
-        if positions["job_id"] < positions["run_time"] < positions["mode"]:
+    if all(name in positions for name in ("job_id", "run_time", "mode")):
+        if (positions["job_id"] < positions["run_time"] < positions["mode"] and
+                positions["mode"] == positions["run_time"] + 1):
             return "script"
     if all(name in positions for name in ("job_id", "run_time", "schedule")) and not any(counts[name] > 1 for name in positions):
         prompt = next((index for index, line in enumerate(lines[1:], 1) if _PROMPT.fullmatch(line)), None)
