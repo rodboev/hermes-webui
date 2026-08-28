@@ -2007,9 +2007,14 @@ const _STREAM_NOTIFICATION_BACKGROUND={};
 
 function _preserveDeliveredSteerCacheForNewInflight(sid, entry){
   const existing=typeof INFLIGHT!=='undefined'&&INFLIGHT?INFLIGHT[sid]:null;
+  const entryProfile=String(entry&&entry.profile||
+    ((typeof S!=='undefined'&&S&&S.activeProfile)||
+      (typeof S!=='undefined'&&S&&S.session&&S.session.profile)||'default'));
+  const existingProfile=String(existing&&existing.profile||'').trim();
+  if(!existingProfile||!_deliveredSteerProfilesMatch(existingProfile,entryProfile)) return {...entry,profile:entryProfile};
   const records=existing&&Array.isArray(existing.deliveredSteers)?existing.deliveredSteers:[];
   const recovery=existing&&Array.isArray(existing.deliveredSteerRecovery)?existing.deliveredSteerRecovery:[];
-  return records.length||recovery.length?{...entry,deliveredSteers:records,deliveredSteerRecovery:recovery}:entry;
+  return records.length||recovery.length?{...entry,profile:entryProfile,deliveredSteers:records,deliveredSteerRecovery:recovery}:{...entry,profile:entryProfile};
 }
 
 function _saveInflightWithDeliveredSteerCache(sid, state){

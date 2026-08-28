@@ -9614,6 +9614,15 @@ function clearInflightState(sid, profileOverride=null){
         toolCalls:deletingCurrent?[]:entry.toolCalls,
         lastAssistantText:deletingCurrent?'':entry.lastAssistantText,
         lastReasoningText:deletingCurrent?'':entry.lastReasoningText,
+        lastRunJournalSeq:deletingCurrent?0:entry.lastRunJournalSeq,
+        lastRunJournalEventId:deletingCurrent?'':entry.lastRunJournalEventId,
+        journalReplayFromStart:deletingCurrent?false:entry.journalReplayFromStart,
+        currentActivityBurstId:deletingCurrent?0:entry.currentActivityBurstId,
+        currentLiveSegmentSeq:deletingCurrent?0:entry.currentLiveSegmentSeq,
+        activityBurstAnchors:deletingCurrent?[]:entry.activityBurstAnchors,
+        todos:deletingCurrent?null:entry.todos,
+        todoStateMeta:deletingCurrent?null:entry.todoStateMeta,
+        reattach:deletingCurrent?false:entry.reattach,
         deliveredSteers:Array.isArray(replacement.deliveredSteers)?replacement.deliveredSteers:[],
         deliveredSteerRecovery:Array.isArray(replacement.deliveredSteerRecovery)?replacement.deliveredSteerRecovery:[]};
       if(Object.keys(byProfile).length||next.streamId||next.messages?.length||next.toolCalls?.length) all[sid]=next; else delete all[sid];

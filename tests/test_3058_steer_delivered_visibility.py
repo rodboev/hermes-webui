@@ -261,6 +261,22 @@ def test_3058_terminal_owner_cleanup_preserves_cache_only_delivery_state():
     assert out == {"cache": 1, "recovery": 1, "stream": "stream-3058", "saved": 1, "cleared": 0}
 
 
+def test_3058_new_profile_send_does_not_inherit_an_old_profile_cache():
+    preserve = _function(_read(MESSAGES_JS), "_preserveDeliveredSteerCacheForNewInflight")
+    out = _run_node(
+        "const INFLIGHT={'sid-3058':{profile:'alpha',deliveredSteers:[{local_id:'alpha-steer'}],deliveredSteerRecovery:[{local_id:'alpha-recovery'}]}};"
+        "const S={activeProfile:'beta',session:{profile:'beta'}};"
+        + _function(_read(MESSAGES_JS), "_normalizeDeliveredSteerOwner")
+        + "\n"
+        + _function(_read(MESSAGES_JS), "_deliveredSteerProfilesMatch")
+        + "\n"
+        + preserve
+        + "\nconst fresh=_preserveDeliveredSteerCacheForNewInflight('sid-3058',{messages:[],deliveredSteers:[]});"
+        + "console.log(JSON.stringify({profile:fresh.profile,steers:fresh.deliveredSteers||[],recovery:fresh.deliveredSteerRecovery||[]}));"
+    )
+    assert out == {"profile": "beta", "steers": [], "recovery": []}
+
+
 # -------------------------------------------------------------------- ordering
 
 
@@ -475,14 +491,14 @@ def test_3058_inflight_delivery_storage_is_scoped_to_the_active_profile():
         + load
         + "\n"
         + clear
-        + "\nsaveInflightState('sid-3058',{profile:'alpha',streamId:'stream-alpha',messages:[{role:'assistant',content:'alpha-tail'}],toolCalls:[{id:'alpha-tool'}],deliveredSteers:[{local_id:'alpha-steer'}]});"
+        + "\nsaveInflightState('sid-3058',{profile:'alpha',streamId:'stream-alpha',messages:[{role:'assistant',content:'alpha-tail'}],toolCalls:[{id:'alpha-tool'}],lastRunJournalSeq:42,lastRunJournalEventId:'alpha-event',journalReplayFromStart:true,currentActivityBurstId:3,currentLiveSegmentSeq:4,activityBurstAnchors:[{id:'alpha-anchor'}],todos:[{content:'alpha-todo'}],todoStateMeta:{hash:'alpha'},reattach:true,deliveredSteers:[{local_id:'alpha-steer'}]});"
         + "S.activeProfile='alpha';saveInflightState('sid-3058',{profile:'alpha',streamId:'stream-alpha',messages:[{role:'assistant',content:'alpha-tail'}],toolCalls:[{id:'alpha-tool'}],deliveredSteers:[{local_id:'alpha-steer'}],deliveredSteersByProfile:{beta:{streamId:'stream-beta',deliveredSteers:[{local_id:'beta-steer'}]}}});"
         + "S.activeProfile='alpha';const alpha=loadInflightState('sid-3058','stream-alpha');"
         + "S.activeProfile='beta';const beta=loadInflightState('sid-3058','stream-beta');"
         + "S.activeProfile='alpha';clearInflightState('sid-3058');"
         + "const afterClear=JSON.parse(store[INFLIGHT_STATE_KEY])['sid-3058'].deliveredSteersByProfile;"
         + "S.activeProfile='beta';const betaAfterClear=loadInflightState('sid-3058','stream-beta');"
-        + "console.log(JSON.stringify({alpha:alpha.deliveredSteers.map(r=>r.local_id),beta:beta.deliveredSteers.map(r=>r.local_id),afterClear:Object.keys(afterClear),betaAfterClear:betaAfterClear.deliveredSteers.map(r=>r.local_id),betaMessages:betaAfterClear.messages,betaTools:betaAfterClear.toolCalls}));"
+        + "console.log(JSON.stringify({alpha:alpha.deliveredSteers.map(r=>r.local_id),beta:beta.deliveredSteers.map(r=>r.local_id),afterClear:Object.keys(afterClear),betaAfterClear:betaAfterClear.deliveredSteers.map(r=>r.local_id),betaMessages:betaAfterClear.messages,betaTools:betaAfterClear.toolCalls,betaCursor:betaAfterClear.lastRunJournalSeq,betaReplay:betaAfterClear.journalReplayFromStart,betaAnchors:betaAfterClear.activityBurstAnchors,betaTodos:betaAfterClear.todos,betaReattach:betaAfterClear.reattach}));"
     )
     assert out["alpha"] == ["alpha-steer"]
     assert out["beta"] == ["beta-steer"]
@@ -490,6 +506,11 @@ def test_3058_inflight_delivery_storage_is_scoped_to_the_active_profile():
     assert out["betaAfterClear"] == ["beta-steer"]
     assert out["betaMessages"] == []
     assert out["betaTools"] == []
+    assert out["betaCursor"] == 0
+    assert out["betaReplay"] is False
+    assert out["betaAnchors"] == []
+    assert out["betaTodos"] is None
+    assert out["betaReattach"] is False
 
 
 def test_3058_idle_restore_materializes_a_current_turn_after_a_historical_assistant():
