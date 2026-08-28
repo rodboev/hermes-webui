@@ -79,6 +79,14 @@ async function cancelSessionStream(session){
     respOk=!!(r&&r.ok);
   }catch(e){/* close local stream; keep UI state honest below */}
   if(!respOk) return false;
+  if(typeof _approvalSessionId!=='undefined' && _approvalSessionId===sid){
+    stopApprovalPolling();
+    hideApprovalCard(true);
+  }
+  if(typeof _clarifySessionId!=='undefined' && _clarifySessionId===sid){
+    stopClarifyPolling();
+    hideClarifyCard(true, 'cancelled');
+  }
   if(typeof closeLiveStream==='function') closeLiveStream(sid, streamId);
   session.active_stream_id=null;
   const pending=typeof INFLIGHT!=='undefined'&&INFLIGHT?INFLIGHT[sid]:null;
@@ -98,14 +106,6 @@ async function cancelSessionStream(session){
     setBusy(false);
     if(typeof setComposerStatus==='function') setComposerStatus('');
     else setStatus('');
-  }
-  if(typeof _approvalSessionId!=='undefined' && _approvalSessionId===sid){
-    stopApprovalPolling();
-    hideApprovalCard(true);
-  }
-  if(typeof _clarifySessionId!=='undefined' && _clarifySessionId===sid){
-    stopClarifyPolling();
-    hideClarifyCard(true, 'cancelled');
   }
   if(typeof renderSessionList==='function') renderSessionList();
   return true;

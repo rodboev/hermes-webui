@@ -9549,7 +9549,9 @@ function saveInflightState(sid, state){
   const byProfile={...(existing.deliveredSteersByProfile||{}),...(state.deliveredSteersByProfile||{})};
   byProfile[profile]={streamId:String(state.streamId||state.activeStreamId||
     (byProfile[profile]&&byProfile[profile].streamId)||''),deliveredSteers:Array.isArray(state.deliveredSteers)?state.deliveredSteers:(byProfile[profile]&&byProfile[profile].deliveredSteers)||[],deliveredSteerRecovery:Array.isArray(state.deliveredSteerRecovery)?state.deliveredSteerRecovery:(byProfile[profile]&&byProfile[profile].deliveredSteerRecovery)||[]};
-  const entry={..._compactInflightState({...state,profile,deliveredSteers:byProfile[profile].deliveredSteers,deliveredSteerRecovery:byProfile[profile].deliveredSteerRecovery,deliveredSteersByProfile:byProfile}),updated_at:Date.now()};
+  const persistedState={...state,profile,deliveredSteers:byProfile[profile].deliveredSteers,deliveredSteerRecovery:byProfile[profile].deliveredSteerRecovery,deliveredSteersByProfile:byProfile};
+  const entry={..._compactInflightState(state),updated_at:Date.now()};
+  Object.assign(entry,_compactInflightState(persistedState),{updated_at:entry.updated_at});
   try{
     const all=_readInflightStateMap();
     all[sid]=entry;
@@ -9591,12 +9593,13 @@ function loadInflightState(sid, streamId){
   }
   return entry;
 }
-function clearInflightState(sid, profileOverride=null){
+function clearInflightState(sid){
   if(!sid) return;
   try{
     const all=_readInflightStateMap();
     if(!(sid in all)) return;
     const entry=all[sid];
+    const profileOverride=arguments[1];
     const profile=String(profileOverride||((typeof S!=='undefined'&&S&&S.activeProfile)||entry.profile||'default'));
     if(entry.deliveredSteersByProfile&&entry.deliveredSteersByProfile[profile]){
       const byProfile={...entry.deliveredSteersByProfile};

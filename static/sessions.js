@@ -1131,7 +1131,14 @@ function _selectLiveRecoveryInflight(localInflight, serverLiveSnapshot, activeSt
         ?_deliveredSteerRecoveryRecord(record,'runtime_owner_not_proven'):record)].slice(-50),
     };
   };
-  const selectLocalSnapshot=()=>({...localInflight,...localDeliveryState()});
+  const selectLocalSnapshot=()=>{
+    const delivery=localDeliveryState();
+    if(!delivery.deliveredSteers.length&&!delivery.deliveredSteerRecovery.length&&
+        !Array.isArray(localInflight.deliveredSteers)&&!Array.isArray(localInflight.deliveredSteerRecovery)){
+      return localInflight;
+    }
+    return {...localInflight,...delivery};
+  };
   const selectDurableSnapshot=()=>{
     const carried={};
     // Carry only records whose complete owner matches this profile and stream;
