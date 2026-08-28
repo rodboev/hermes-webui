@@ -47,6 +47,12 @@ def _function(source: str, name: str) -> str:
                     result = (
                         _function(source, "_normalizeDeliveredSteerOwner")
                         + "\n"
+                        + _function(source, "_deliveredSteerOwnerField")
+                        + "\n"
+                        + _function(source, "_deliveredSteerOwnerFieldsConflict")
+                        + "\n"
+                        + _function(source, "_deliveredSteerProfilesMatch")
+                        + "\n"
                         + _function(source, "_compareDeliveredSteerOwners")
                         + "\n"
                         + result
@@ -119,7 +125,11 @@ def _anchor_harness_prelude() -> str:
         + "\n"
         + _function(_read(MESSAGES_JS), "_normalizeDeliveredSteerOwner")
         + "\n"
+        + _function(_read(MESSAGES_JS), "_deliveredSteerProfilesMatch")
+        + "\n"
         + _function(_read(MESSAGES_JS), "_compareDeliveredSteerOwners")
+        + "\n"
+        + _function(_read(MESSAGES_JS), "_mergeDeliveredSteerOwners")
         + "\n"
         + "\n"
         "const _steerDeliveredOrdinalByStream=new Map();\n"
@@ -241,14 +251,14 @@ def test_3058_terminal_owner_cleanup_preserves_cache_only_delivery_state():
     clear_owner = _function(_read(MESSAGES_JS), "_clearOwnerInflightState")
     out = _run_node(
         "const activeSid='sid-3058';const streamId='stream-3058';"
-        "const S={activeStreamId:streamId};const cached={streamId,deliveredSteers:[{stream_id:streamId,payload:{local_id:'steer:stream-3058:1'}}],messages:[{role:'assistant',content:'partial'}]};"
+        "const S={activeStreamId:streamId};const cached={streamId,deliveredSteers:[{stream_id:streamId,payload:{local_id:'steer:stream-3058:1'}}],deliveredSteerRecovery:[{stream_id:streamId,payload:{local_id:'steer:stream-3058:recovery'}}],messages:[{role:'assistant',content:'partial'}]};"
         "const INFLIGHT={[activeSid]:cached};const SAVED=[];let cleared=0;"
         "function _isActiveSession(){return true;}function saveInflightState(sid,state){SAVED.push([sid,state]);}"
         "function clearInflightState(){cleared+=1;}function _clearActivePaneInflightIfOwner(){}function _resumeSessionStreamAfterLiveChat(){}"
         + clear_owner
-        + "_clearOwnerInflightState();console.log(JSON.stringify({cache:INFLIGHT[activeSid].deliveredSteers.length,stream:INFLIGHT[activeSid].streamId,saved:SAVED.length,cleared}));"
+        + "_clearOwnerInflightState();console.log(JSON.stringify({cache:INFLIGHT[activeSid].deliveredSteers.length,recovery:INFLIGHT[activeSid].deliveredSteerRecovery.length,stream:INFLIGHT[activeSid].streamId,saved:SAVED.length,cleared}));"
     )
-    assert out == {"cache": 1, "stream": "stream-3058", "saved": 1, "cleared": 0}
+    assert out == {"cache": 1, "recovery": 1, "stream": "stream-3058", "saved": 1, "cleared": 0}
 
 
 # -------------------------------------------------------------------- ordering
@@ -402,6 +412,82 @@ def test_3058_stale_identity_incomplete_delivery_cannot_attach_to_later_sole_ass
         + f"\nconst messages=[{{role:'user',content:'old request'}},{{role:'assistant',content:'old answer'}},{{role:'user',content:'later request'}},{{role:'assistant',content:'later answer'}}];const changed=_restoreDeliveredSteersIntoSettledMessages(messages,'{OWNER_SID}',[{json.dumps(record)}]);console.log(JSON.stringify({{changed,attached:messages.filter(m=>m._anchor_activity_scene).length,roles:messages.map(m=>m.role)}}));"
     )
     assert out == {"changed": False, "attached": 0, "roles": ["user", "assistant", "user", "assistant"]}
+
+
+def test_3058_owner_capture_never_walks_back_from_an_identity_less_current_user():
+    normalize = _function(_read(MESSAGES_JS), "_normalizeDeliveredSteerOwner")
+    find = _function(_read(MESSAGES_JS), "_findDeliveredSteerOwnerUser")
+    out = _run_node(
+        normalize
+        + "\n"
+        + find
+        + "\nconst messages=[{role:'user',id:'old-user',turn_id:'old-turn'},{role:'user',content:'current',_pending:true}];"
+        + "console.log(JSON.stringify(_findDeliveredSteerOwnerUser(messages,{profile:'default',session_id:'sid-3058',stream_id:'stream-3058'})));"
+    )
+    assert out["user_message_id"] == ""
+    assert out["turn_id"] == ""
+
+
+def test_3058_same_stream_replay_requires_the_current_turn_owner():
+    normalize = _function(_read(MESSAGES_JS), "_normalizeDeliveredSteerOwner")
+    profiles = _function(_read(MESSAGES_JS), "_deliveredSteerProfilesMatch")
+    compare = _function(_read(MESSAGES_JS), "_compareDeliveredSteerOwners")
+    owner_field = _function(_read(MESSAGES_JS), "_deliveredSteerOwnerField")
+    owner_conflict = _function(_read(MESSAGES_JS), "_deliveredSteerOwnerFieldsConflict")
+    merge = _function(_read(MESSAGES_JS), "_mergeDeliveredSteerOwners")
+    find = _function(_read(MESSAGES_JS), "_findDeliveredSteerOwnerUser")
+    eligible = _function(_read(MESSAGES_JS), "_deliveredSteerRecordEligible")
+    old_record = {
+        "source_event_type": "steer_delivered",
+        "stream_id": OWNER_STREAM,
+        "session_id": "sid-3058",
+        "user_message_id": "old-user",
+        "turn_id": "old-turn",
+        "run_id": "old-run",
+        "profile": "default",
+        "payload": {"local_id": "steer:stream-3058:old", "stream_id": OWNER_STREAM, "text": STEER_TEXT},
+    }
+    current_record = dict(old_record, user_message_id="current-user", turn_id="current-turn", run_id="current-run")
+    out = _run_node(
+        "const S={activeProfile:'default',session:{session_id:'sid-3058',profile:'default'},messages:[{role:'user',id:'current-user',turn_id:'current-turn',run_id:'current-run'}]};const window={_liveAnchorRegistries:new Map()};"
+        + normalize + "\n" + owner_field + "\n" + owner_conflict + "\n" + profiles + "\n" + compare + "\n" + merge + "\n" + find + "\n" + eligible
+        + f"\nconst conflicting={{...{json.dumps(current_record)},payload:{{stream_id:'{OWNER_STREAM}',turn_id:'old-turn',local_id:'steer:stream-3058:conflict'}}}};"
+        + f"\nconsole.log(JSON.stringify({{old:_deliveredSteerRecordEligible({json.dumps(old_record)},'sid-3058','{OWNER_STREAM}',S.messages),current:_deliveredSteerRecordEligible({json.dumps(current_record)},'sid-3058','{OWNER_STREAM}',S.messages),conflicting:_deliveredSteerRecordEligible(conflicting,'sid-3058','{OWNER_STREAM}',S.messages)}}));"
+    )
+    assert out == {"old": False, "current": True, "conflicting": False}
+
+
+def test_3058_inflight_delivery_storage_is_scoped_to_the_active_profile():
+    read_map = _function(_read(UI_JS), "_readInflightStateMap")
+    save = _function(_read(UI_JS), "saveInflightState")
+    load = _function(_read(UI_JS), "loadInflightState")
+    clear = _function(_read(UI_JS), "clearInflightState")
+    out = _run_node(
+        "const INFLIGHT_STATE_KEY='hermes-webui-inflight-state';"
+        "const store={};const localStorage={getItem:key=>store[key]||null,setItem:(key,value)=>{store[key]=value;},removeItem:key=>{delete store[key];}};"
+        "const S={activeProfile:'alpha'};"
+        + read_map
+        + "\nfunction _compactInflightState(state){return state;}"
+        + "\nfunction _writeInflightStateMap(all){localStorage.setItem(INFLIGHT_STATE_KEY,JSON.stringify(all));}"
+        + "\n"
+        + save
+        + "\n"
+        + load
+        + "\n"
+        + clear
+        + "\nsaveInflightState('sid-3058',{profile:'alpha',streamId:'stream-alpha',deliveredSteers:[{local_id:'alpha-steer'}]});"
+        + "S.activeProfile='beta';saveInflightState('sid-3058',{profile:'beta',streamId:'stream-beta',deliveredSteers:[{local_id:'beta-steer'}]});"
+        + "S.activeProfile='alpha';const alpha=loadInflightState('sid-3058','stream-alpha');"
+        + "S.activeProfile='beta';const beta=loadInflightState('sid-3058','stream-beta');"
+        + "S.activeProfile='alpha';clearInflightState('sid-3058');"
+        + "const afterClear=JSON.parse(store[INFLIGHT_STATE_KEY])['sid-3058'].deliveredSteersByProfile;"
+        + "S.activeProfile='beta';const betaAfterClear=loadInflightState('sid-3058','stream-beta');"
+        + "console.log(JSON.stringify({alpha:alpha.deliveredSteers.map(r=>r.local_id),beta:beta.deliveredSteers.map(r=>r.local_id),afterClear:Object.keys(afterClear),betaAfterClear:betaAfterClear.deliveredSteers.map(r=>r.local_id)}));"
+    )
+    assert out["alpha"] == ["alpha-steer"]
+    assert out["beta"] == ["beta-steer"]
+    assert out["afterClear"] == ["beta"]
+    assert out["betaAfterClear"] == ["beta-steer"]
 
 
 def test_3058_idle_restore_materializes_a_current_turn_after_a_historical_assistant():

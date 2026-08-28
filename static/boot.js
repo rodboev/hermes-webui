@@ -83,8 +83,9 @@ async function cancelSessionStream(session){
   session.active_stream_id=null;
   const pending=typeof INFLIGHT!=='undefined'&&INFLIGHT?INFLIGHT[sid]:null;
   const delivered= pending&&Array.isArray(pending.deliveredSteers)?pending.deliveredSteers:[];
-  if(delivered.length){
-    INFLIGHT[sid]={...pending,streamId:null,deliveredSteers:delivered};
+  const recovery=pending&&Array.isArray(pending.deliveredSteerRecovery)?pending.deliveredSteerRecovery:[];
+  if(delivered.length||recovery.length){
+    INFLIGHT[sid]={...pending,streamId:null,deliveredSteers:delivered,deliveredSteerRecovery:recovery};
     if(typeof saveInflightState==='function') saveInflightState(sid,INFLIGHT[sid]);
   }else{
     delete INFLIGHT[sid];

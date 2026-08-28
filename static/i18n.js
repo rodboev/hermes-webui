@@ -308,6 +308,8 @@ const LOCALES = {
     cmd_steer_fallback: 'Steer unavailable — draft restored',
     cmd_steer_delivered: 'Steer delivered',
     steer_delivered: 'Steer delivered',
+    steer_delivered_recovery: 'Steer delivered, but its original turn could not be restored.',
+    steer_recovery_dismiss: 'Dismiss',
     steer_leftover_queued: 'Steer queued for next turn',
     busy_steer_fallback: 'Steer unavailable — draft restored',
     steer_fail_no_cached_agent: 'No cached agent is available for steering this run',

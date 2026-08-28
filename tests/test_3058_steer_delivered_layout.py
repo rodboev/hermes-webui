@@ -13,7 +13,13 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import subprocess
 import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -29,6 +35,12 @@ SCREENSHOT_PATH = os.environ.get("ISSUE3058_SCREENSHOT_PATH")
 
 CHECKS = ["overlap", "clip", "container-escape", "degenerate"]
 WIDTHS = [(1440, 900), (760, 900), (390, 844)]
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 SHORT_STEER = "prefer the reconnect path"
 LONG_STEER = (
@@ -281,3 +293,116 @@ def test_3058_delivered_steer_row_stays_sane_across_widths_and_modes():
             page.set_viewport_size({"width": WIDTHS[0][0], "height": WIDTHS[0][1]})
             page.screenshot(path=SCREENSHOT_PATH, full_page=True)
         browser.close()
+
+
+def test_3058_served_branch_render_keeps_the_delivered_row_in_the_real_renderer():
+    """The layout harness must also cross the served application boundary."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        pytest.skip("playwright is unavailable for the served #3058 proof")
+
+    with tempfile.TemporaryDirectory(prefix="hermes-3058-served-") as temp:
+        state = Path(temp)
+        port = _free_port()
+        env = os.environ.copy()
+        for key in list(env):
+            if key.endswith("_API_KEY"):
+                env.pop(key, None)
+        env.update(
+            {
+                "BROWSER": "echo",
+                "HERMES_WEBUI_PORT": str(port),
+                "HERMES_WEBUI_HOST": "127.0.0.1",
+                "HERMES_WEBUI_STATE_DIR": str(state / "webui-state"),
+                "HERMES_HOME": str(state / "hermes-home"),
+                "HERMES_BASE_HOME": str(state / "hermes-home"),
+                "HERMES_WEBUI_SKIP_ONBOARDING": "1",
+                "HERMES_WEBUI_AGENT_DIR": str(state / "no-agent"),
+            }
+        )
+        log_path = state / "server.log"
+        with log_path.open("w", encoding="utf-8") as log:
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            proc = subprocess.Popen(
+                [sys.executable, str(ROOT / "server.py")],
+                cwd=ROOT,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+            )
+            base_url = f"http://127.0.0.1:{port}"
+            try:
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    if proc.poll() is not None:
+                        break
+                    try:
+                        with urllib.request.urlopen(base_url + "/health", timeout=2) as response:
+                            if response.status == 200:
+                                break
+                    except (urllib.error.URLError, OSError):
+                        time.sleep(0.25)
+                else:
+                    pytest.fail("served #3058 proof server did not become healthy")
+                if proc.poll() is not None:
+                    pytest.fail(log_path.read_text(encoding="utf-8", errors="replace")[-2000:])
+
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(
+                        headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+                    )
+                    page = browser.new_page(viewport={"width": 1024, "height": 600})
+                    page.goto(base_url + "/", wait_until="domcontentloaded")
+                    page.wait_for_selector("#msgInner", timeout=10000)
+                    result = page.evaluate(
+                        """() => {
+                          const scene = {
+                            version: 'activity_scene_v1', mode: 'compact_worklog',
+                            identity: {stream_id: 'stream-3058', run_id: 'run-3058'},
+                            lifecycle: {status: 'completed', terminal_state: 'completed'},
+                            final_answer: 'answer', final_message_ref: 'assistant-3058',
+                            activity_rows: [
+                              {role: 'prose', kind: 'process_prose', source_event_type: 'token', status: 'completed',
+                               row_id: 'prose-3058', local_id: 'prose-3058', text: 'before', payload: {}},
+                              {role: 'user', kind: 'control_boundary', source_event_type: 'steer_delivered', status: 'delivered',
+                               row_id: 'steer-3058', local_id: 'steer:stream-3058:1', text: 'keep this steer',
+                               payload: {delivered: true, origin: 'webui', files: []}},
+                            ], artifacts: [], side_effects: []
+                          };
+                          S.session = {session_id: 'served-3058', profile: 'default', title: 'served proof'};
+                          S.activeProfile = 'default'; S.activeProfileIsDefault = true;
+                          S.busy = false; S.toolCalls = [];
+                          S.messages = [
+                            {role: 'user', content: 'request', id: 'user-3058', turn_id: 'turn-3058'},
+                            {role: 'assistant', content: 'answer', id: 'assistant-3058', _anchor_stream_id: 'stream-3058',
+                             _anchor_activity_scene: scene}
+                          ];
+                          renderMessages();
+                          const assistant = document.querySelector('.assistant-turn');
+                          const direct = assistant && typeof _renderSettledAnchorSceneForMessage === 'function'
+                            ? _renderSettledAnchorSceneForMessage(S.messages[1], assistant, 1) : false;
+                          const group = assistant && assistant.querySelector('[data-anchor-settled-scene-owner="1"]');
+                          const summary = group && group.querySelector('.tool-worklog-summary,.tool-call-group-summary');
+                          if (group && summary && group.classList.contains('tool-call-group-collapsed')) {
+                            _toggleActivityGroup(summary);
+                          }
+                          const row = document.querySelector('[data-steer-delivery="delivered"]');
+                          return {count: document.querySelectorAll('[data-steer-delivery="delivered"]').length,
+                            role: row && row.getAttribute('data-role'), text: row && row.textContent,
+                            scene: !!S.messages[1]._anchor_activity_scene, direct};
+                        }"""
+                    )
+                    assert result["count"] == 1, json.dumps(result)
+                    assert result["role"] == "user"
+                    assert "keep this steer" in result["text"]
+                    browser.close()
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()

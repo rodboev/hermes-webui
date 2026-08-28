@@ -9406,6 +9406,7 @@ function _compactInflightState(state){
   const deliveredSteersByProfile={};
   for(const [profile,scoped] of Object.entries(state.deliveredSteersByProfile&&typeof state.deliveredSteersByProfile==='object'?state.deliveredSteersByProfile:{})){
     deliveredSteersByProfile[profile]={
+      streamId:String(scoped&&scoped.streamId||''),
       deliveredSteers:Array.isArray(scoped&&scoped.deliveredSteers)?scoped.deliveredSteers.slice(-50).map(record=>_compactDeliveredSteerForStorage(record)):[],
       deliveredSteerRecovery:Array.isArray(scoped&&scoped.deliveredSteerRecovery)?scoped.deliveredSteerRecovery.slice(-50).map(record=>_compactDeliveredSteerForStorage(record)):[],
     };
@@ -9513,6 +9514,11 @@ function _writeInflightStateMap(all){
       json=serialize([[sid,reduced]]);
     }
     trimOldest('deliveredSteers');
+    if(json.length>limits.jsonChars&&Array.isArray(reduced.deliveredSteerRecovery)){
+      reduced.deliveredSteerRecovery=reduced.deliveredSteerRecovery.map(record=>_compactDeliveredSteerForStorage(record,2000));
+      json=serialize([[sid,reduced]]);
+    }
+    trimOldest('deliveredSteerRecovery');
     if(json.length>limits.jsonChars){
       for(const field of ['lastAssistantText','lastReasoningText']){
         if(typeof reduced[field]==='string'&&reduced[field].length){
@@ -9534,10 +9540,15 @@ function _writeInflightStateMap(all){
 }
 function saveInflightState(sid, state){
   if(!sid||!state) return;
-  const profile=String(state.profile||((typeof S!=='undefined'&&S&&S.activeProfile)||'default'));
   const existing=_readInflightStateMap()[sid]||{};
+  const firstRecord=(Array.isArray(state.deliveredSteers)&&state.deliveredSteers[0])||
+    (Array.isArray(state.deliveredSteerRecovery)&&state.deliveredSteerRecovery[0])||{};
+  const firstPayload=firstRecord&&firstRecord.payload&&typeof firstRecord.payload==='object'?firstRecord.payload:{};
+  const profile=String(state.profile||state.ownerProfile||existing.profile||firstRecord.profile||firstPayload.profile||
+    ((typeof S!=='undefined'&&S&&S.activeProfile)||'default'));
   const byProfile={...(existing.deliveredSteersByProfile||{}),...(state.deliveredSteersByProfile||{})};
-  byProfile[profile]={deliveredSteers:Array.isArray(state.deliveredSteers)?state.deliveredSteers:(byProfile[profile]&&byProfile[profile].deliveredSteers)||[],deliveredSteerRecovery:Array.isArray(state.deliveredSteerRecovery)?state.deliveredSteerRecovery:(byProfile[profile]&&byProfile[profile].deliveredSteerRecovery)||[]};
+  byProfile[profile]={streamId:String(state.streamId||state.activeStreamId||
+    (byProfile[profile]&&byProfile[profile].streamId)||''),deliveredSteers:Array.isArray(state.deliveredSteers)?state.deliveredSteers:(byProfile[profile]&&byProfile[profile].deliveredSteers)||[],deliveredSteerRecovery:Array.isArray(state.deliveredSteerRecovery)?state.deliveredSteerRecovery:(byProfile[profile]&&byProfile[profile].deliveredSteerRecovery)||[]};
   const entry={..._compactInflightState({...state,profile,deliveredSteers:byProfile[profile].deliveredSteers,deliveredSteerRecovery:byProfile[profile].deliveredSteerRecovery,deliveredSteersByProfile:byProfile}),updated_at:Date.now()};
   try{
     const all=_readInflightStateMap();
@@ -9560,29 +9571,49 @@ function loadInflightState(sid, streamId){
   const raw=all[sid];
   if(!raw) return null;
   const profile=String((typeof S!=='undefined'&&S&&S.activeProfile)||raw.profile||'default');
-  const scoped=raw.deliveredSteersByProfile&&raw.deliveredSteersByProfile[profile]||{};
+  const hasScoped=!!(raw.deliveredSteersByProfile&&Object.prototype.hasOwnProperty.call(raw.deliveredSteersByProfile,profile));
+  const scoped=hasScoped?raw.deliveredSteersByProfile[profile]||{}:{};
   const ownsLegacyRecords=raw.profile===profile||(!raw.profile&&profile==='default');
-  const entry={...raw,profile,deliveredSteers:Array.isArray(scoped.deliveredSteers)?scoped.deliveredSteers:(ownsLegacyRecords?raw.deliveredSteers:[]),deliveredSteerRecovery:Array.isArray(scoped.deliveredSteerRecovery)?scoped.deliveredSteerRecovery:(ownsLegacyRecords?raw.deliveredSteerRecovery:[])};
+  if(!ownsLegacyRecords&&!hasScoped) return null;
+  const selectedStreamId=String(scoped.streamId||((ownsLegacyRecords&&raw.streamId)||'')||'');
+  const entry={...raw,profile,streamId:selectedStreamId||null,
+    messages:ownsLegacyRecords?(Array.isArray(raw.messages)?raw.messages:[]):[],
+    uploaded:ownsLegacyRecords?(Array.isArray(raw.uploaded)?raw.uploaded:[]):[],
+    toolCalls:ownsLegacyRecords?(Array.isArray(raw.toolCalls)?raw.toolCalls:[]):[],
+    deliveredSteers:Array.isArray(scoped.deliveredSteers)?scoped.deliveredSteers:(ownsLegacyRecords?raw.deliveredSteers:[]),
+    deliveredSteerRecovery:Array.isArray(scoped.deliveredSteerRecovery)?scoped.deliveredSteerRecovery:(ownsLegacyRecords?raw.deliveredSteerRecovery:[])};
   if(streamId&&entry.streamId&&entry.streamId!==streamId) return null;
-  const retainsDeliveredSteers=Array.isArray(entry.deliveredSteers)&&entry.deliveredSteers.length>0;
+  const retainsDeliveredSteers=(Array.isArray(entry.deliveredSteers)&&entry.deliveredSteers.length>0)||
+    (Array.isArray(entry.deliveredSteerRecovery)&&entry.deliveredSteerRecovery.length>0);
   if(entry.updated_at&&Date.now()-entry.updated_at>10*60*1000&&!retainsDeliveredSteers){
     clearInflightState(sid);
     return null;
   }
   return entry;
 }
-function clearInflightState(sid){
+function clearInflightState(sid, profileOverride=null){
   if(!sid) return;
   try{
     const all=_readInflightStateMap();
     if(!(sid in all)) return;
     const entry=all[sid];
-    const profile=String((typeof S!=='undefined'&&S&&S.activeProfile)||entry.profile||'default');
+    const profile=String(profileOverride||((typeof S!=='undefined'&&S&&S.activeProfile)||entry.profile||'default'));
     if(entry.deliveredSteersByProfile&&entry.deliveredSteersByProfile[profile]){
       const byProfile={...entry.deliveredSteersByProfile};
       delete byProfile[profile];
-      const next={...entry,deliveredSteersByProfile:byProfile,deliveredSteers:[],deliveredSteerRecovery:[]};
+      const deletingCurrent=profile===String(entry.profile||'default');
+      const replacementEntry=deletingCurrent
+        ? (Object.entries(byProfile)[0]||['',{}])
+        : {deliveredSteers:entry.deliveredSteers,deliveredSteerRecovery:entry.deliveredSteerRecovery};
+      const replacement=Array.isArray(replacementEntry)?replacementEntry[1]:replacementEntry;
+      const next={...entry,deliveredSteersByProfile:byProfile,
+        profile:deletingCurrent?(Array.isArray(replacementEntry)?replacementEntry[0]:entry.profile):entry.profile,
+        streamId:String(replacement.streamId||''),
+        deliveredSteers:Array.isArray(replacement.deliveredSteers)?replacement.deliveredSteers:[],
+        deliveredSteerRecovery:Array.isArray(replacement.deliveredSteerRecovery)?replacement.deliveredSteerRecovery:[]};
       if(Object.keys(byProfile).length||next.streamId||next.messages?.length||next.toolCalls?.length) all[sid]=next; else delete all[sid];
+    }else if(entry.deliveredSteersByProfile){
+      return;
     }else delete all[sid];
     if(Object.keys(all).length) localStorage.setItem(INFLIGHT_STATE_KEY, JSON.stringify(all));
     else localStorage.removeItem(INFLIGHT_STATE_KEY);

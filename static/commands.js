@@ -1313,9 +1313,9 @@ async function cmdGoal(args){
       : [];
     const priorDeliveredSteerRecovery=INFLIGHT[activeSid]&&Array.isArray(INFLIGHT[activeSid].deliveredSteerRecovery)
       ? INFLIGHT[activeSid].deliveredSteerRecovery : [];
-    INFLIGHT[activeSid]={messages:[...S.messages],uploaded:[],toolCalls:[],deliveredSteers:priorDeliveredSteers,deliveredSteerRecovery:priorDeliveredSteerRecovery};
+    INFLIGHT[activeSid]={profile:S.activeProfile||S.session&&S.session.profile||'default',messages:[...S.messages],uploaded:[],toolCalls:[],deliveredSteers:priorDeliveredSteers,deliveredSteerRecovery:priorDeliveredSteerRecovery};
     if(typeof markInflight==='function')markInflight(activeSid,r.stream_id);
-    if(typeof saveInflightState==='function')saveInflightState(activeSid,{streamId:r.stream_id,messages:INFLIGHT[activeSid].messages,uploaded:[],toolCalls:[],deliveredSteers:priorDeliveredSteers,deliveredSteerRecovery:priorDeliveredSteerRecovery});
+    if(typeof saveInflightState==='function')saveInflightState(activeSid,{profile:INFLIGHT[activeSid].profile,streamId:r.stream_id,messages:INFLIGHT[activeSid].messages,uploaded:[],toolCalls:[],deliveredSteers:priorDeliveredSteers,deliveredSteerRecovery:priorDeliveredSteerRecovery});
     startApprovalPolling(activeSid);
     startClarifyPolling(activeSid);
     if(typeof _fetchYoloState==='function')_fetchYoloState(activeSid);
@@ -1480,10 +1480,14 @@ function _showDeliveredSteerRecoveryNotice(record){
   const node=document.createElement('div');
   node.className='steer-recovery delivered-steer-recovery';
   node.dataset.deliveryOnly='1';
-  node.textContent=t('steer_delivered_recovery')||'Steer delivered, but its original turn could not be restored.';
+  const recoveryLabel=t('steer_delivered_recovery');
+  node.textContent=recoveryLabel==='steer_delivered_recovery'
+    ?'Steer delivered, but its original turn could not be restored.'
+    :recoveryLabel;
   const dismiss=document.createElement('button');
   dismiss.type='button';
-  dismiss.textContent=t('dismiss')||'Dismiss';
+  const dismissLabel=t('steer_recovery_dismiss');
+  dismiss.textContent=dismissLabel==='steer_recovery_dismiss'?'Dismiss':dismissLabel;
   dismiss.addEventListener('click',()=>node.remove());
   node.appendChild(dismiss);
   inner.appendChild(node);
@@ -1536,8 +1540,9 @@ function _steerClearCurrentOwnerDeadRun(ownerSid, ownerStreamId){
   if(typeof INFLIGHT!=='undefined'&&INFLIGHT&&INFLIGHT[ownerSid]){
     const pending=INFLIGHT[ownerSid];
     const delivered=Array.isArray(pending.deliveredSteers)?pending.deliveredSteers:[];
-    if(delivered.length){
-      INFLIGHT[ownerSid]={...pending,streamId:null,deliveredSteers:delivered};
+    const recovery=Array.isArray(pending.deliveredSteerRecovery)?pending.deliveredSteerRecovery:[];
+    if(delivered.length||recovery.length){
+      INFLIGHT[ownerSid]={...pending,streamId:null,deliveredSteers:delivered,deliveredSteerRecovery:recovery};
       if(typeof saveInflightState==='function') saveInflightState(ownerSid,INFLIGHT[ownerSid]);
     }else{
       delete INFLIGHT[ownerSid];
@@ -1636,8 +1641,12 @@ function _nextSteerDeliveredOrdinal(ownerSid, ownerStreamId){
   const key=String(ownerStreamId);
   let highest=_steerDeliveredOrdinalByStream.get(key)||0;
   try{
-    if(typeof INFLIGHT!=='undefined'&&INFLIGHT[ownerSid]&&Array.isArray(INFLIGHT[ownerSid].deliveredSteers)){
-      for(const record of INFLIGHT[ownerSid].deliveredSteers){
+    if(typeof INFLIGHT!=='undefined'&&INFLIGHT[ownerSid]){
+      const cachedRecords=[
+        ...(Array.isArray(INFLIGHT[ownerSid].deliveredSteers)?INFLIGHT[ownerSid].deliveredSteers:[]),
+        ...(Array.isArray(INFLIGHT[ownerSid].deliveredSteerRecovery)?INFLIGHT[ownerSid].deliveredSteerRecovery:[]),
+      ];
+      for(const record of cachedRecords){
         const payload=record&&record.payload;
         if(!payload||String(payload.stream_id||'')!==key) continue;
         const n=Number(payload.ordinal)||0;
@@ -1674,12 +1683,16 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
     : {profile:String(ownerEnvelope&&ownerEnvelope.profile||''),session_id:String(ownerSid),stream_id:String(ownerStreamId)};
   const registryIdentity=registry&&registry.anchor&&registry.anchor.identity||{};
   const registryOwner=typeof _normalizeDeliveredSteerOwner==='function'
-    ? _normalizeDeliveredSteerOwner({...registryIdentity,session_id:ownerSid,stream_id:ownerStreamId})
+    ? _normalizeDeliveredSteerOwner({...registryIdentity,profile:ownerEnvelope&&ownerEnvelope.profile||'default',session_id:ownerSid,stream_id:ownerStreamId})
     : {};
   const ownerComparison=typeof _compareDeliveredSteerOwners==='function'
     ? _compareDeliveredSteerOwners(capturedOwner,registryOwner,false)
     : 'unknown';
-  const recoveryOnly=ownerComparison==='unknown'||!capturedOwner.user_message_id&&!capturedOwner.turn_id;
+  const owner=typeof _mergeDeliveredSteerOwners==='function'&&ownerComparison!=='unknown'
+    ? _mergeDeliveredSteerOwners(capturedOwner,registryOwner)
+    : null;
+  const effectiveOwner=owner||capturedOwner;
+  const recoveryOnly=ownerComparison==='unknown'||!effectiveOwner.user_message_id||!effectiveOwner.turn_id;
   const ordinal=_nextSteerDeliveredOrdinal(ownerSid,ownerStreamId);
   const text=_steerIndicatorText(originalMsg,filesSnapshot);
   const files=(Array.isArray(filesSnapshot)?filesSnapshot:[])
@@ -1690,9 +1703,9 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
     seq:`steer-${ordinal}`,
     created_at:Date.now()/1000,
     session_id:String(ownerSid),
-    ...capturedOwner,
-    turn_id:capturedOwner.turn_id||String(registryIdentity.turn_id||''),
-    run_id:capturedOwner.run_id||String(registryIdentity.run_id||''),
+    ...effectiveOwner,
+    turn_id:effectiveOwner.turn_id||String(registryIdentity.turn_id||''),
+    run_id:effectiveOwner.run_id||String(registryIdentity.run_id||''),
     recovery_only:recoveryOnly,
     recovery_reason:recoveryOnly?(ownerComparison==='unknown'?'conflicting_or_incomplete_owner':'missing_user_turn_owner'):'',
     payload:{
@@ -1709,11 +1722,11 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
       files,
       delivered:true,
       origin:'webui',
-      profile:capturedOwner.profile,
+      profile:effectiveOwner.profile,
       session_id:String(ownerSid),
-      user_message_id:capturedOwner.user_message_id,
-      turn_id:capturedOwner.turn_id||String(registryIdentity.turn_id||''),
-      run_id:capturedOwner.run_id||String(registryIdentity.run_id||''),
+      user_message_id:effectiveOwner.user_message_id,
+      turn_id:effectiveOwner.turn_id||String(registryIdentity.turn_id||''),
+      run_id:effectiveOwner.run_id||String(registryIdentity.run_id||''),
       recovery_only:recoveryOnly,
     },
   };
@@ -1754,7 +1767,12 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
       // A session can retain replacement-stream state while a late accepted
       // response belongs to the retired stream. Keep both records in the one
       // session cache; reattach and settlement filter by each record's stream.
-      const cache=existing||{streamId:String(ownerStreamId),deliveredSteers:[]};
+      const existingProfile=String(existing&&existing.profile||'').trim();
+      const sameProfile=!existingProfile||existingProfile===String(effectiveOwner.profile||'default');
+      const cache=sameProfile
+        ? (existing||{profile:effectiveOwner.profile,streamId:String(ownerStreamId),deliveredSteers:[]})
+        : {profile:effectiveOwner.profile,streamId:String(ownerStreamId),deliveredSteers:[]};
+      if(!cache.profile) cache.profile=effectiveOwner.profile;
       const cached=Array.isArray(cache.deliveredSteers)?cache.deliveredSteers:[];
       const recovery=Array.isArray(cache.deliveredSteerRecovery)?cache.deliveredSteerRecovery:[];
       const sourceLocalId=String(sourceEvent.local_id||sourceEvent.payload&&sourceEvent.payload.local_id||'');
@@ -1770,7 +1788,7 @@ function _recordDeliveredSteer(ownerSid, ownerStreamId, originalMsg, filesSnapsh
       if(!cache.streamId) cache.streamId=String(ownerStreamId);
       cache.deliveredSteers=cached;
       cache.deliveredSteerRecovery=recovery.slice(-50);
-      INFLIGHT[ownerSid]=cache;
+      if(sameProfile) INFLIGHT[ownerSid]=cache;
       if(typeof saveInflightState==='function') saveInflightState(ownerSid,cache);
       mirrored=true;
     }
@@ -1798,12 +1816,19 @@ async function _trySteer(msg, explicitSteer){
   const pendingFilesSnapshot=typeof S!=='undefined'&&Array.isArray(S.pendingFiles)?[...S.pendingFiles]:[];
   const ownerProfile=typeof S!=='undefined'&&(S.activeProfile||'default');
   const initiatingUser=typeof _findDeliveredSteerOwnerUser==='function'
-    ? _findDeliveredSteerOwnerUser(S&&S.messages)
+    ? _findDeliveredSteerOwnerUser(S&&S.messages,{profile:ownerProfile,session_id:ownerSid,stream_id:ownerStreamId})
     : null;
-  const ownerEnvelope={profile:ownerProfile,session_id:ownerSid,stream_id:ownerStreamId,
-    user_message_id:initiatingUser&&initiatingUser.user_message_id,
-    turn_id:initiatingUser&&initiatingUser.turn_id,
-    run_id:initiatingUser&&initiatingUser.run_id};
+  const liveRegistry=typeof window!=='undefined'&&window._liveAnchorRegistries&&
+    typeof window._liveAnchorRegistries.get==='function'&&ownerStreamId
+    ? window._liveAnchorRegistries.get(String(ownerStreamId)) : null;
+  const liveIdentity=liveRegistry&&liveRegistry.anchor&&liveRegistry.anchor.identity||{};
+  const registryOwner=typeof _normalizeDeliveredSteerOwner==='function'
+    ? _normalizeDeliveredSteerOwner({...liveIdentity,profile:ownerProfile,session_id:ownerSid,stream_id:ownerStreamId})
+    : {profile:ownerProfile,session_id:ownerSid,stream_id:ownerStreamId};
+  let ownerEnvelope=typeof _mergeDeliveredSteerOwners==='function'
+    ? _mergeDeliveredSteerOwners(registryOwner,initiatingUser)
+    : null;
+  if(!ownerEnvelope) ownerEnvelope=registryOwner;
   const ownerModelState=typeof _chatPayloadModelState==='function'
     ? _chatPayloadModelState()
     : {model:(typeof S!=='undefined'&&S.session&&S.session.model)||'',model_provider:(typeof S!=='undefined'&&S.session&&S.session.model_provider)||''};
