@@ -15,6 +15,10 @@ _RUN_TIME_LINE = re.compile(r"^\*\*Run Time:\*\*[ \t]*[^\r\n]+\r?$")
 _SCHEDULE_LINE = re.compile(r"^\*\*Schedule:\*\*[ \t]*[^\r\n]+\r?$")
 _MODE_SCRIPT_LINE = re.compile(r"^\*\*Mode:\*\*[ \t]*no_agent \(script\)[ \t]*\r?$")
 _FENCE_LINE = re.compile(r"^(`{3,}|~{3,})(?:[^`~]*)$")
+_PRODUCER_HEADER = re.compile(r"^#\s+(?:Cron|Monitor)\s+Job\b", re.IGNORECASE)
+_USAGE_METADATA_LINE = re.compile(
+    r"^\*\*(?:Provider|Model(?: Used)?|Estimated cost|Cost|Duration|Elapsed|Tokens|Status):\*\*[ \t]*"
+)
 
 
 def _opening_lines(text: str):
@@ -44,7 +48,9 @@ def _opening_lines(text: str):
 def is_legacy_cron_artifact(text: str) -> bool:
     """Return whether an artifact has no producer-owned cron envelope."""
     lines = list(_opening_lines(text if isinstance(text, str) else str(text or "")))
-    return not lines or not _CRON_JOB_LINE.fullmatch(lines[0])
+    return not lines or (
+        not _CRON_JOB_LINE.fullmatch(lines[0]) and not _PRODUCER_HEADER.match(lines[0])
+    )
 
 
 def resolve_cron_artifact_mode(text: str, *, legacy_job_mode: str = "unknown") -> str:
@@ -52,6 +58,8 @@ def resolve_cron_artifact_mode(text: str, *, legacy_job_mode: str = "unknown") -
     raw = text if isinstance(text, str) else str(text or "")
     lines = list(_opening_lines(raw))
     if not lines or not _CRON_JOB_LINE.fullmatch(lines[0]):
+        if lines and _PRODUCER_HEADER.match(lines[0]):
+            return "unknown"
         return legacy_job_mode if legacy_job_mode in ("agent", "script") else "unknown"
 
     positions = {}
@@ -74,6 +82,24 @@ def resolve_cron_artifact_mode(text: str, *, legacy_job_mode: str = "unknown") -
                 prompt is not None and positions["schedule"] < prompt):
             return "agent"
     return "unknown"
+
+
+def cron_artifact_metadata_head(text: str) -> str:
+    """Return only contiguous producer metadata before arbitrary artifact content."""
+    raw = text if isinstance(text, str) else str(text or "")
+    metadata = []
+    for line in _opening_lines(raw):
+        if line in ("## Prompt", "## Response", "# Response", "## Error", "# Error", "---"):
+            break
+        if not line.strip():
+            continue
+        if (_CRON_JOB_LINE.fullmatch(line) or _JOB_ID_LINE.fullmatch(line) or
+                _RUN_TIME_LINE.fullmatch(line) or _SCHEDULE_LINE.fullmatch(line) or
+                _MODE_SCRIPT_LINE.fullmatch(line) or _USAGE_METADATA_LINE.match(line)):
+            metadata.append(line)
+            continue
+        break
+    return "\n".join(metadata)
 
 
 def _outside_fence_and_quote(text: str, index: int) -> bool:

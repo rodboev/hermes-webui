@@ -21778,12 +21778,9 @@ def _cron_output_usage_metadata(text: str, *, job_mode: str = "agent", legacy: b
 
     if job_mode != "agent":
         return {}
-    head = text
-    from api.cron_output import parse_cron_output_artifact
+    from api.cron_output import cron_artifact_metadata_head
 
-    projection = parse_cron_output_artifact(text, job_mode=job_mode, legacy=legacy)
-    if projection["kind"] == "agent":
-        head = projection["diagnostics"]
+    head = cron_artifact_metadata_head(text)
     usage: dict = {}
 
     def _intish(value: str):

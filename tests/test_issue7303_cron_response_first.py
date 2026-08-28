@@ -119,10 +119,13 @@ def test_large_prompt_reproduction_preserves_response_in_bounded_window():
 
 def test_parser_fallbacks_keep_error_and_empty_artifacts_raw():
     from api.cron_output import parse_cron_output_artifact
+    from api.routes import _cron_output_usage_metadata
     for suffix, reason in (("\r\n\r\n## Error\r\n\r\n`oops`", "error_output"), ("\r\n\r\n## Response\r\n", "empty_response")):
         raw = agent_artifact().split("## Response", 1)[0] + suffix
         result = parse_cron_output_artifact(raw, job_mode="agent")
         assert result["kind"] == "raw" and result["fallback_reason"] == reason
+    raw = agent_artifact().replace("## Response", "## Response\n\n**Cost:** $999")
+    assert _cron_output_usage_metadata(raw, job_mode="agent") == {}
 
 
 def test_resolver_accepts_terminal_script_forms_and_rejects_near_miss():
@@ -143,6 +146,7 @@ def test_resolver_accepts_terminal_script_forms_and_rejects_near_miss():
     assert resolve_cron_artifact_mode(script_metadata) == "script"
     assert resolve_cron_artifact_mode("legacy output", legacy_job_mode="agent") == "agent"
     assert resolve_cron_artifact_mode("legacy output", legacy_job_mode="unknown") == "unknown"
+    assert resolve_cron_artifact_mode("# Monitor Job: demo\n## Response\nanswer", legacy_job_mode="agent") == "unknown"
 
 
 def test_historical_mode_is_owned_by_each_artifact_across_job_mutations(monkeypatch, tmp_path):
