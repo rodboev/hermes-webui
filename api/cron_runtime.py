@@ -29,17 +29,11 @@ def _serialize_child_request(job, args, kwargs):
 
 
 def _child_kwargs_for_operation(operation, kwargs):
-    """Reject live gateway handles that cannot cross into a spawned interpreter."""
+    """Keep process-local scheduler handles out of the child request."""
     child_kwargs = dict(kwargs)
     if operation == "run_one_job":
-        live_context = [
-            name for name in ("adapters", "loop") if child_kwargs.get(name) is not None
-        ]
-        if live_context:
-            raise RuntimeError(
-                "cron subprocess cannot transfer live gateway handles: "
-                + ", ".join(live_context)
-            )
+        for name in ("adapters", "loop", "cancel_event"):
+            child_kwargs.pop(name, None)
     return child_kwargs
 
 
@@ -106,9 +100,14 @@ def _cron_subprocess_result_timeout_seconds(job):
 
 
 def run_cron_in_profile_subprocess(
-    job, profile_home, operation, *, args=(), kwargs=None
+    job, profile_home, operation, *, args=(), kwargs=None, cancel_event=None
 ):
-    """Run one supported cron operation in a profile-pinned spawned child."""
+    """Run one supported cron operation in a profile-pinned spawned child.
+
+    ``cancel_event`` stays in the parent because it is a live control object.
+    A set event terminates the child; Agent then recovers the abandoned claim
+    through its normal expiry and takeover path.
+    """
     if operation not in {"run_job", "run_one_job"}:
         raise ValueError(f"Unsupported cron operation: {operation}")
     args = tuple(args)
@@ -137,6 +136,10 @@ def run_cron_in_profile_subprocess(
                 if remaining == 0:
                     raise queue.Empty
                 try:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RuntimeError(
+                            "cron run subprocess cancelled and was terminated"
+                        )
                     status, *payload = result_queue.get(
                         timeout=min(_CRON_SUBPROCESS_POLL_SECONDS, remaining)
                     )
@@ -151,6 +154,12 @@ def run_cron_in_profile_subprocess(
                                 "",
                             ]
                         break
+        except RuntimeError as exc:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=_CRON_SUBPROCESS_CLEANUP_TIMEOUT_SECONDS)
+            payload = [str(exc), ""]
+            status = "error"
         except queue.Empty:
             if process.is_alive():
                 process.terminate()

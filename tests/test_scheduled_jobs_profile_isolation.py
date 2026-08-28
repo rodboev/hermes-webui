@@ -14,7 +14,6 @@ import os
 import pathlib
 import sys
 import threading
-from unittest import mock
 
 import pytest
 
@@ -246,7 +245,7 @@ def test_webui_routes_scheduler_lifecycle_to_pinned_child(tmp_path, monkeypatch)
     monkeypatch.setattr(p, "publish_session_list_changed", lambda reason: events.append(("publish", reason)))
     monkeypatch.setattr(
         "api.cron_runtime.run_cron_in_profile_subprocess",
-        lambda job, home, operation, *, args=(), kwargs=None: (
+        lambda job, home, operation, *, args=(), kwargs=None, cancel_event=None: (
             events.append(("spawn", str(home), operation))
             or original_run_one_job(job)
         ),
@@ -327,7 +326,9 @@ def test_scheduled_fire_reader_enters_while_child_remains_blocked(tmp_path, monk
     monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
     monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", home)
 
-    def child_boundary(job, profile_home, operation, *, args=(), kwargs=None):
+    def child_boundary(
+        job, profile_home, operation, *, args=(), kwargs=None, cancel_event=None
+    ):
         started.set()
         assert release.wait(2)
         return True
@@ -369,7 +370,9 @@ def test_in_chat_run_suspends_parent_tool_context_before_child(monkeypatch, tmp_
     monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", home)
     observed = []
 
-    def child_boundary(job, profile_home, operation, *, args=(), kwargs=None):
+    def child_boundary(
+        job, profile_home, operation, *, args=(), kwargs=None, cancel_event=None
+    ):
         observed.append((operation, p._cron_env_lock.locked(), p._cron_profile_context_depth()))
         return True
 
@@ -399,7 +402,9 @@ def test_in_chat_run_reacquires_profile_for_post_child_settlement(monkeypatch, t
     monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", home)
     observed = []
 
-    def child_boundary(job, profile_home, operation, *, args=(), kwargs=None):
+    def child_boundary(
+        job, profile_home, operation, *, args=(), kwargs=None, cancel_event=None
+    ):
         assert not p._cron_env_lock.locked()
         return True
 
@@ -432,7 +437,9 @@ def test_in_chat_run_without_profile_inherits_selected_home_before_suspend(
     monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", tmp_path / "default")
     observed = []
 
-    def child_boundary(job, profile_home, operation, *, args=(), kwargs=None):
+    def child_boundary(
+        job, profile_home, operation, *, args=(), kwargs=None, cancel_event=None
+    ):
         observed.append((profile_home, operation, p._cron_profile_context_depth()))
         return True
 
@@ -453,12 +460,18 @@ def test_cron_child_request_uses_standalone_runtime_for_live_gateway_handles(
 ):
     from api import cron_runtime
 
-    live_kwargs = {"adapters": object(), "loop": object(), "verbose": True}
-    with pytest.raises(RuntimeError, match="live gateway handles: adapters, loop"):
-        cron_runtime._child_kwargs_for_operation("run_one_job", live_kwargs)
+    live_kwargs = {
+        "adapters": object(),
+        "loop": object(),
+        "cancel_event": object(),
+        "verbose": True,
+    }
     assert cron_runtime._child_kwargs_for_operation(
-        "run_one_job", {"adapters": None, "loop": None, "verbose": True}
-    ) == {"adapters": None, "loop": None, "verbose": True}
+        "run_one_job", live_kwargs
+    ) == {"verbose": True}
+    assert cron_runtime._serialize_child_request(
+        {"id": "runtime-kwarg"}, (), {"verbose": True}
+    )
     with pytest.raises(RuntimeError, match="non-serializable"):
         cron_runtime._serialize_child_request(
             {"id": "runtime-kwarg"}, (), {"runtime": object()}
@@ -492,7 +505,9 @@ def test_two_overlapping_scheduled_children_leave_profile_readers_responsive(
     started = {profile: threading.Event() for profile in homes}
     release = {profile: threading.Event() for profile in homes}
 
-    def child_boundary(job, profile_home, operation, *, args=(), kwargs=None):
+    def child_boundary(
+        job, profile_home, operation, *, args=(), kwargs=None, cancel_event=None
+    ):
         profile = job["profile"]
         assert pathlib.Path(profile_home) == homes[profile]
         assert operation == "run_one_job"
@@ -577,7 +592,7 @@ def test_install_scheduler_legacy_refusal_is_explicit_on_repeat(monkeypatch, tmp
     assert scheduler.run_job({"id": "legacy-repeat"}) == "legacy-repeat"
 
 
-def test_scheduler_live_gateway_handles_use_child_run_job_and_parent_completion(
+def test_scheduler_live_gateway_handles_use_child_run_one_job_standalone_delivery(
     monkeypatch, tmp_path
 ):
     import types
@@ -595,19 +610,12 @@ def test_scheduler_live_gateway_handles_use_child_run_job_and_parent_completion(
     calls = []
     monkeypatch.setattr(
         "api.cron_runtime.run_cron_in_profile_subprocess",
-        lambda job, home, operation, *, args=(), kwargs=None: (
-            calls.append((operation, kwargs)),
-            (True, "saved", "delivered", None),
+        lambda job, home, operation, *, args=(), kwargs=None, cancel_event=None: (
+            calls.append((operation, kwargs, cancel_event)),
+            True,
         )[1],
     )
-    completed = []
-    monkeypatch.setattr(
-        p,
-        "_complete_cron_run_with_live_handles",
-        lambda job, result, got_adapters, got_loop, *, verbose=False: (
-            completed.append((result, got_adapters, got_loop, verbose)) or True
-        ),
-    )
+    monkeypatch.setattr(p, "publish_session_list_changed", lambda *args, **kwargs: None)
 
     p.install_cron_scheduler_profile_isolation()
 
@@ -617,11 +625,10 @@ def test_scheduler_live_gateway_handles_use_child_run_job_and_parent_completion(
         loop=loop,
         verbose=True,
     ) is True
-    assert calls == [("run_job", {})]
-    assert completed == [((True, "saved", "delivered", None), adapters, loop, True)]
+    assert calls == [("run_one_job", {"verbose": True}, None)]
 
 
-def test_scheduler_claimed_failure_is_marked_after_child_error(monkeypatch, tmp_path):
+def test_scheduler_child_failure_is_not_settled_in_parent(monkeypatch, tmp_path):
     import types
 
     from api import profiles as p
@@ -633,23 +640,20 @@ def test_scheduler_claimed_failure_is_marked_after_child_error(monkeypatch, tmp_
     monkeypatch.setitem(sys.modules, "cron", cron_pkg)
     monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
     monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", tmp_path / "home")
-    failure = []
     monkeypatch.setattr(
         "api.cron_runtime.run_cron_in_profile_subprocess",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("child died")),
     )
-    monkeypatch.setattr(
-        p,
-        "_mark_claimed_cron_failure",
-        lambda job, home, exc: failure.append((job["id"], str(home), str(exc))),
-    )
+    monkeypatch.setattr(p, "publish_session_list_changed", lambda *args, **kwargs: None)
 
     p.install_cron_scheduler_profile_isolation()
 
-    assert scheduler.run_one_job(
-        {"id": "claimed", "profile": "default"}, adapters=object(), loop=object()
-    ) is False
-    assert failure == [("claimed", str(tmp_path / "home"), "child died")]
+    with pytest.raises(RuntimeError, match="child died"):
+        scheduler.run_one_job(
+            {"id": "claimed", "profile": "default"},
+            adapters=object(),
+            loop=object(),
+        )
 
 
 def test_install_scheduler_fails_when_both_operations_are_missing(monkeypatch):

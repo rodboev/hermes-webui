@@ -297,6 +297,66 @@ def test_cron_subprocess_no_payload_and_crash_cleanup_are_bounded(monkeypatch):
         assert process.joins
 
 
+def test_cron_subprocess_cancel_event_terminates_child_without_parent_settlement(
+    monkeypatch,
+):
+    from api import cron_runtime
+
+    class FakeQueue:
+        def close(self):
+            return None
+
+        def join_thread(self):
+            return None
+
+        def get(self, timeout):
+            raise queue.Empty
+
+    class FakeProcess:
+        exitcode = None
+
+        def __init__(self):
+            self.alive = True
+            self.terminated = False
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.terminated = True
+            self.alive = False
+
+        def join(self, timeout=None):
+            return None
+
+    class FakeContext:
+        def __init__(self):
+            self.process = FakeProcess()
+
+        def Queue(self, maxsize=1):
+            return FakeQueue()
+
+        def Process(self, **kwargs):
+            return self.process
+
+    context = FakeContext()
+    monkeypatch.setattr(
+        cron_runtime.multiprocessing, "get_context", lambda name: context
+    )
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    with pytest.raises(RuntimeError, match="cancelled and was terminated"):
+        cron_runtime.run_cron_in_profile_subprocess(
+            {}, None, "run_one_job", cancel_event=cancel_event
+        )
+
+    assert context.process.terminated
+
+
 def test_shared_cron_subprocess_contract_executes_requested_operation(monkeypatch, tmp_path):
     """The shared transport invokes one explicit operation and returns its value."""
     import types

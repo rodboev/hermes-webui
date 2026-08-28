@@ -693,47 +693,27 @@ def install_cron_scheduler_profile_isolation() -> None:
         execution_home = _home_for_scheduled_cron_job(job)
         if _cron_profile_context_depth() > 0:
             _suspend_active_cron_profile_context_for_child()
-        live_adapters = kwargs.get("adapters")
-        live_loop = kwargs.get("loop")
-        if live_adapters is not None or live_loop is not None:
-            child_kwargs = {
-                key: value
-                for key, value in kwargs.items()
-                if key not in {"adapters", "loop", "verbose"}
-            }
-            try:
-                claim_dispatch = None
-                if getattr(_cs, "__file__", None):
-                    from cron.jobs import claim_dispatch
-
-                with cron_profile_context_for_home(execution_home):
-                    if claim_dispatch is not None and not claim_dispatch(job["id"]):
-                        return True
-                result = run_cron_in_profile_subprocess(
-                    job, execution_home, "run_job", args=args, kwargs=child_kwargs
-                )
-                return _complete_cron_run_with_live_handles(
-                    job, result, live_adapters, live_loop,
-                    verbose=bool(kwargs.get("verbose")),
-                )
-            except Exception as exc:
-                _mark_claimed_cron_failure(job, execution_home, exc)
-                return False
-            finally:
-                if _cron_profile_context_depth() == 0:
-                    stack = _cron_context_stack.get()
-                    if stack and getattr(stack[-1], '_suspended', False):
-                        stack[-1]._resume_after_child()
-                event_profile = str((job or {}).get("profile") or "").strip() or None
-                if _is_isolated_profile_mode():
-                    event_profile = _isolated_profile_name()
-                try:
-                    publish_session_list_changed("cron_complete", profile=event_profile)
-                except TypeError:
-                    publish_session_list_changed("cron_complete")
+        child_kwargs = dict(kwargs)
+        live_context = [
+            name for name in ("adapters", "loop")
+            if child_kwargs.pop(name, None) is not None
+        ]
+        cancel_event = child_kwargs.pop("cancel_event", None)
+        if live_context:
+            logger.info(
+                "Cron job %s is isolated in a child; Agent will use its "
+                "standalone delivery path because live gateway handles cannot "
+                "cross the process boundary",
+                (job or {}).get("id", "?"),
+            )
         try:
             return run_cron_in_profile_subprocess(
-                job, execution_home, "run_one_job", args=args, kwargs=kwargs
+                job,
+                execution_home,
+                "run_one_job",
+                args=args,
+                kwargs=child_kwargs,
+                cancel_event=cancel_event,
             )
         finally:
             if _cron_profile_context_depth() == 0:
@@ -751,55 +731,6 @@ def install_cron_scheduler_profile_isolation() -> None:
     _webui_profile_isolated_run_one_job._webui_profile_isolated = True
     setattr(_webui_profile_isolated_run_one_job, f"_webui_original_{operation}", original)
     setattr(_cs, operation, _webui_profile_isolated_run_one_job)
-
-
-def _mark_claimed_cron_failure(job, execution_home, exc) -> None:
-    """Settle a fire claim when the isolated worker cannot return a result."""
-    try:
-        from cron.jobs import mark_job_run
-
-        with cron_profile_context_for_home(execution_home):
-            mark_job_run(job["id"], False, str(exc) or type(exc).__name__)
-    except Exception:
-        logger.exception("Failed to mark isolated cron failure for %s", job.get("id"))
-
-
-def _complete_cron_run_with_live_handles(job, result, adapters, loop, *, verbose=False):
-    """Finish a child run in the parent so gateway-owned handles stay live."""
-    import importlib
-
-    scheduler = importlib.import_module("cron.scheduler")
-    from cron.jobs import mark_job_run, save_job_output
-
-    success, output, final_response, error = result
-    job_id = job["id"]
-    delivery_error = None
-    with cron_profile_context_for_home(_home_for_scheduled_cron_job(job)):
-        save_job_output(job_id, output)
-        if success and not str(final_response or "").strip():
-            success = False
-            error = "Agent completed but produced empty response (model error, timeout, or misconfiguration)"
-        deliver_content = (
-            final_response
-            if success
-            else scheduler._summarize_cron_failure_for_delivery(job, error)
-        )
-        should_deliver = bool(str(deliver_content or "").strip())
-        if should_deliver and success and scheduler._is_cron_silence_response(deliver_content):
-            should_deliver = False
-        if should_deliver:
-            try:
-                delivery_error = scheduler._deliver_result(
-                    job, deliver_content, adapters=adapters, loop=loop
-                )
-            except Exception as exc:
-                delivery_error = str(exc)
-                logger.error("Delivery failed for isolated cron job %s: %s", job_id, exc)
-        try:
-            mark_job_run(job_id, success, error, delivery_error=delivery_error)
-        except TypeError:
-            mark_job_run(job_id, success, error)
-    return True
 
 
 class cron_profile_context_for_home:
@@ -2836,7 +2767,7 @@ def delete_profile_api(name: str) -> dict:
             raise RuntimeError(
                 f"Cannot delete active profile '{name}' while an agent is running. "
                 "Cancel or wait for it to finish."
-            )
+            ) from None
 
     try:
         from hermes_cli.profiles import delete_profile
@@ -2848,7 +2779,7 @@ def delete_profile_api(name: str) -> dict:
         if profile_dir.is_dir():
             shutil.rmtree(str(profile_dir))
         else:
-            raise ValueError(f"Profile '{name}' does not exist.")
+            raise ValueError(f"Profile '{name}' does not exist.") from None
 
     # Drop cached root-profile-name lookup — list_profiles_api() shape changed.
     _SKILLS_STATS_CACHE.clear()
