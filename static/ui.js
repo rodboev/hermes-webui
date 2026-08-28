@@ -9609,6 +9609,11 @@ function clearInflightState(sid, profileOverride=null){
       const next={...entry,deliveredSteersByProfile:byProfile,
         profile:deletingCurrent?(Array.isArray(replacementEntry)?replacementEntry[0]:entry.profile):entry.profile,
         streamId:String(replacement.streamId||''),
+        messages:deletingCurrent?[]:entry.messages,
+        uploaded:deletingCurrent?[]:entry.uploaded,
+        toolCalls:deletingCurrent?[]:entry.toolCalls,
+        lastAssistantText:deletingCurrent?'':entry.lastAssistantText,
+        lastReasoningText:deletingCurrent?'':entry.lastReasoningText,
         deliveredSteers:Array.isArray(replacement.deliveredSteers)?replacement.deliveredSteers:[],
         deliveredSteerRecovery:Array.isArray(replacement.deliveredSteerRecovery)?replacement.deliveredSteerRecovery:[]};
       if(Object.keys(byProfile).length||next.streamId||next.messages?.length||next.toolCalls?.length) all[sid]=next; else delete all[sid];
