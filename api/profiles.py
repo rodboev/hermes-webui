@@ -688,25 +688,32 @@ def install_cron_scheduler_profile_isolation() -> None:
                     publish_session_list_changed("cron_complete", profile=event_profile)
                 except TypeError:
                     publish_session_list_changed("cron_complete")
-        from api.cron_runtime import run_cron_in_profile_subprocess
-
+        live_gateway_handles = (
+            kwargs.get("adapters") is not None or kwargs.get("loop") is not None
+        )
         execution_home = _home_for_scheduled_cron_job(job)
-        if _cron_profile_context_depth() > 0:
-            _suspend_active_cron_profile_context_for_child()
-        child_kwargs = dict(kwargs)
-        live_context = [
-            name for name in ("adapters", "loop")
-            if child_kwargs.pop(name, None) is not None
-        ]
-        cancel_event = child_kwargs.pop("cancel_event", None)
-        if live_context:
-            logger.info(
-                "Cron job %s is isolated in a child; Agent will use its "
-                "standalone delivery path because live gateway handles cannot "
-                "cross the process boundary",
-                (job or {}).get("id", "?"),
-            )
         try:
+            if live_gateway_handles:
+                active_context = _cron_context_stack.get()
+                if active_context:
+                    pinned_home = Path(active_context[-1]._home)
+                    if pinned_home != Path(execution_home):
+                        raise RuntimeError(
+                            "live cron gateway handles cannot run outside the active "
+                            "profile context"
+                        )
+                    return original(job, *args, **kwargs)
+                with cron_profile_context_for_home(execution_home):
+                    return original(job, *args, **kwargs)
+
+            from api.cron_runtime import run_cron_in_profile_subprocess
+
+            if _cron_profile_context_depth() > 0:
+                _suspend_active_cron_profile_context_for_child()
+            child_kwargs = dict(kwargs)
+            child_kwargs.pop("adapters", None)
+            child_kwargs.pop("loop", None)
+            cancel_event = child_kwargs.pop("cancel_event", None)
             return run_cron_in_profile_subprocess(
                 job,
                 execution_home,

@@ -29,11 +29,14 @@ def _serialize_child_request(job, args, kwargs):
 
 
 def _child_kwargs_for_operation(operation, kwargs):
-    """Keep process-local scheduler handles out of the child request."""
+    """Reject process-local scheduler handles at the child boundary."""
     child_kwargs = dict(kwargs)
     if operation == "run_one_job":
-        for name in ("adapters", "loop", "cancel_event"):
-            child_kwargs.pop(name, None)
+        for name in ("adapters", "loop"):
+            if child_kwargs.get(name) is not None:
+                raise RuntimeError(
+                    f"run_one_job child request cannot carry live {name}"
+                )
     return child_kwargs
 
 

@@ -455,20 +455,30 @@ def test_in_chat_run_without_profile_inherits_selected_home_before_suspend(
     assert not p._cron_env_lock.locked()
 
 
-def test_cron_child_request_uses_standalone_runtime_for_live_gateway_handles(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("handle", ["adapters", "loop", "both"])
+def test_cron_child_request_rejects_live_gateway_handles_before_spawn(
+    monkeypatch, handle
 ):
     from api import cron_runtime
 
-    live_kwargs = {
-        "adapters": object(),
-        "loop": object(),
-        "cancel_event": object(),
-        "verbose": True,
-    }
+    live_kwargs = {"adapters": None, "loop": None, "verbose": True}
+    if handle in {"adapters", "both"}:
+        live_kwargs["adapters"] = object()
+    if handle in {"loop", "both"}:
+        live_kwargs["loop"] = object()
+
+    monkeypatch.setattr(
+        cron_runtime.multiprocessing,
+        "get_context",
+        lambda name: pytest.fail("live handle request reached process creation"),
+    )
+    with pytest.raises(RuntimeError, match="cannot carry live"):
+        cron_runtime.run_cron_in_profile_subprocess(
+            {"id": "runtime-kwarg"}, None, "run_one_job", kwargs=live_kwargs
+        )
     assert cron_runtime._child_kwargs_for_operation(
-        "run_one_job", live_kwargs
-    ) == {"verbose": True}
+        "run_one_job", {"adapters": None, "loop": None, "verbose": True}
+    ) == {"adapters": None, "loop": None, "verbose": True}
     assert cron_runtime._serialize_child_request(
         {"id": "runtime-kwarg"}, (), {"verbose": True}
     )
@@ -592,7 +602,130 @@ def test_install_scheduler_legacy_refusal_is_explicit_on_repeat(monkeypatch, tmp
     assert scheduler.run_job({"id": "legacy-repeat"}) == "legacy-repeat"
 
 
-def test_scheduler_live_gateway_handles_use_child_run_one_job_standalone_delivery(
+@pytest.mark.parametrize("handle_names", [("adapters",), ("loop",), ("adapters", "loop")])
+def test_scheduler_live_gateway_handles_preserve_parent_run_one_job(
+    monkeypatch, tmp_path, handle_names
+):
+    import types
+
+    from api import profiles as p
+
+    scheduler = types.ModuleType("cron.scheduler")
+    calls = []
+
+    def original_run_one_job(job, *args, **kwargs):
+        calls.append((job, args, kwargs, os.environ.get("HERMES_HOME")))
+        return "delivered"
+
+    scheduler.run_one_job = original_run_one_job
+    cron_pkg = types.ModuleType("cron")
+    cron_pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
+    monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", tmp_path / "home")
+    handles = {name: object() for name in ("adapters", "loop")}
+    cancel_event = object()
+    published = []
+    monkeypatch.setattr(
+        p, "publish_session_list_changed", lambda *args, **kwargs: published.append((args, kwargs))
+    )
+
+    p.install_cron_scheduler_profile_isolation()
+
+    kwargs = {name: handles[name] for name in handle_names}
+    kwargs.update(cancel_event=cancel_event, verbose=True, future_flag="kept")
+    assert scheduler.run_one_job({"id": "live", "profile": "default"}, "positional", **kwargs) == "delivered"
+    assert calls == [(
+        {"id": "live", "profile": "default"},
+        ("positional",),
+        kwargs,
+        str(tmp_path / "home"),
+    )]
+    assert published == [(('cron_complete',), {'profile': 'default'})]
+
+
+def test_scheduler_live_gateway_handles_matching_context_stays_in_parent(
+    monkeypatch, tmp_path
+):
+    import types
+
+    from api import profiles as p
+
+    home = tmp_path / "home"
+    scheduler = types.ModuleType("cron.scheduler")
+    calls, published = [], []
+    scheduler.run_one_job = lambda job, **kwargs: calls.append(kwargs) or True
+    cron_pkg = types.ModuleType("cron")
+    cron_pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
+    monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", home)
+    monkeypatch.setattr(p, "publish_session_list_changed", lambda *a, **k: published.append(1))
+    p.install_cron_scheduler_profile_isolation()
+
+    with p.cron_profile_context_for_home(home):
+        assert scheduler.run_one_job({"id": "matching", "profile": "default"}, adapters=object())
+        assert os.environ["HERMES_HOME"] == str(home)
+    assert len(calls) == 1
+    assert len(published) == 1
+
+
+def test_scheduler_live_gateway_handles_mismatched_context_fails_closed(
+    monkeypatch, tmp_path
+):
+    import types
+
+    from api import profiles as p
+
+    default_home = tmp_path / "home"
+    other_home = tmp_path / "other"
+    scheduler = types.ModuleType("cron.scheduler")
+    calls, published = [], []
+    scheduler.run_one_job = lambda job, **kwargs: calls.append(1) or True
+    cron_pkg = types.ModuleType("cron")
+    cron_pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
+    monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", default_home)
+    monkeypatch.setattr(p, "publish_session_list_changed", lambda *a, **k: published.append(1))
+    p.install_cron_scheduler_profile_isolation()
+
+    with p.cron_profile_context_for_home(other_home):
+        with pytest.raises(RuntimeError, match="outside the active profile context"):
+            scheduler.run_one_job({"id": "mismatch", "profile": "default"}, loop=object())
+    assert calls == []
+    assert len(published) == 1
+
+
+def test_scheduler_live_gateway_handles_deleted_profile_uses_resolved_fallback(
+    monkeypatch, tmp_path
+):
+    import types
+
+    from api import profiles as p
+
+    default_home = tmp_path / "home"
+    scheduler = types.ModuleType("cron.scheduler")
+    observed = []
+    scheduler.run_one_job = lambda job, **kwargs: observed.append(
+        os.environ["HERMES_HOME"]
+    ) or True
+    cron_pkg = types.ModuleType("cron")
+    cron_pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
+    monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", default_home)
+    monkeypatch.setattr(p, "publish_session_list_changed", lambda *a, **k: None)
+    p.install_cron_scheduler_profile_isolation()
+
+    assert scheduler.run_one_job(
+        {"id": "deleted", "profile": "deleted-profile"}, loop=object()
+    ) is True
+    assert observed == [str(default_home)]
+    assert not p._cron_env_lock.locked()
+
+
+def test_scheduler_live_gateway_exception_releases_parent_lock_and_publishes(
     monkeypatch, tmp_path
 ):
     import types
@@ -600,35 +733,23 @@ def test_scheduler_live_gateway_handles_use_child_run_one_job_standalone_deliver
     from api import profiles as p
 
     scheduler = types.ModuleType("cron.scheduler")
-    scheduler.run_one_job = lambda job, **kwargs: None
+    scheduler.run_one_job = lambda job, **kwargs: (_ for _ in ()).throw(ValueError("delivery failed"))
     cron_pkg = types.ModuleType("cron")
     cron_pkg.__path__ = []
+    published = []
     monkeypatch.setitem(sys.modules, "cron", cron_pkg)
     monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
     monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", tmp_path / "home")
-    adapters, loop = object(), object()
-    calls = []
-    monkeypatch.setattr(
-        "api.cron_runtime.run_cron_in_profile_subprocess",
-        lambda job, home, operation, *, args=(), kwargs=None, cancel_event=None: (
-            calls.append((operation, kwargs, cancel_event)),
-            True,
-        )[1],
-    )
-    monkeypatch.setattr(p, "publish_session_list_changed", lambda *args, **kwargs: None)
-
+    monkeypatch.setattr(p, "publish_session_list_changed", lambda *a, **k: published.append(1))
     p.install_cron_scheduler_profile_isolation()
 
-    assert scheduler.run_one_job(
-        {"id": "live", "profile": "default"},
-        adapters=adapters,
-        loop=loop,
-        verbose=True,
-    ) is True
-    assert calls == [("run_one_job", {"verbose": True}, None)]
+    with pytest.raises(ValueError, match="delivery failed"):
+        scheduler.run_one_job({"id": "failure", "profile": "default"}, adapters=object())
+    assert not p._cron_env_lock.locked()
+    assert len(published) == 1
 
 
-def test_scheduler_child_failure_is_not_settled_in_parent(monkeypatch, tmp_path):
+def test_scheduler_child_failure_releases_lock_and_publishes(monkeypatch, tmp_path):
     import types
 
     from api import profiles as p
@@ -644,16 +765,19 @@ def test_scheduler_child_failure_is_not_settled_in_parent(monkeypatch, tmp_path)
         "api.cron_runtime.run_cron_in_profile_subprocess",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("child died")),
     )
-    monkeypatch.setattr(p, "publish_session_list_changed", lambda *args, **kwargs: None)
+    published = []
+    monkeypatch.setattr(
+        p, "publish_session_list_changed", lambda *args, **kwargs: published.append(1)
+    )
 
     p.install_cron_scheduler_profile_isolation()
 
     with pytest.raises(RuntimeError, match="child died"):
         scheduler.run_one_job(
             {"id": "claimed", "profile": "default"},
-            adapters=object(),
-            loop=object(),
         )
+    assert not p._cron_env_lock.locked()
+    assert published == [1]
 
 
 def test_install_scheduler_fails_when_both_operations_are_missing(monkeypatch):
