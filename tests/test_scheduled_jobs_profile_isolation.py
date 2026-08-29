@@ -644,6 +644,102 @@ def test_scheduler_live_gateway_handles_preserve_parent_run_one_job(
     assert published == [(('cron_complete',), {'profile': 'default'})]
 
 
+def test_scheduler_live_gateway_handles_preserve_agent_delivery_and_settlement(
+    monkeypatch, tmp_path
+):
+    import importlib
+
+    from api import profiles as p
+
+    scheduler = importlib.import_module("cron.scheduler")
+    home = tmp_path / "home"
+    adapter, loop = object(), object()
+    events = []
+    monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", home)
+    monkeypatch.setattr(
+        scheduler,
+        "claim_dispatch",
+        lambda job_id: events.append(("claim", job_id)) or True,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_job",
+        lambda job, **kwargs: (True, "output", "response", None),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "save_job_output",
+        lambda job_id, output: events.append(("save", job_id, output)) or home / "output",
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_deliver_result",
+        lambda job, content, adapters=None, loop=None: events.append(
+            ("deliver", job["id"], content, adapters, loop)
+        ) or None,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "mark_job_run",
+        lambda job_id, success, error=None, delivery_error=None: events.append(
+            ("mark", job_id, success, error, delivery_error)
+        ),
+    )
+    monkeypatch.setattr(scheduler, "_is_interrupted", lambda job_id: False)
+    monkeypatch.setattr(scheduler, "_consume_interrupted_flag", lambda job_id: False)
+    monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: home)
+    monkeypatch.setattr(p, "publish_session_list_changed", lambda *a, **k: None)
+    p.install_cron_scheduler_profile_isolation()
+
+    assert scheduler.run_one_job(
+        {"id": "live-delivery", "profile": "default"},
+        adapters=adapter,
+        loop=loop,
+    ) is True
+    assert events == [
+        ("claim", "live-delivery"),
+        ("save", "live-delivery", "output"),
+        ("deliver", "live-delivery", "response", adapter, loop),
+        ("mark", "live-delivery", True, None, None),
+    ]
+
+
+def test_scheduler_live_gateway_handles_do_not_trust_copied_stack_without_depth(
+    monkeypatch, tmp_path
+):
+    import contextvars
+    import types
+
+    from api import profiles as p
+
+    home = tmp_path / "home"
+    stale_home = tmp_path / "stale"
+    scheduler = types.ModuleType("cron.scheduler")
+    observed = []
+    scheduler.run_one_job = lambda job, **kwargs: observed.append(
+        (os.environ.get("HERMES_HOME"), p._cron_profile_context_depth(), p._cron_env_lock.locked())
+    ) or True
+    cron_pkg = types.ModuleType("cron")
+    cron_pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
+    monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", home)
+    monkeypatch.setattr(p, "publish_session_list_changed", lambda *a, **k: None)
+    p.install_cron_scheduler_profile_isolation()
+
+    with p.cron_profile_context_for_home(stale_home):
+        copied_context = contextvars.copy_context()
+
+    assert p._cron_profile_context_depth() == 0
+    copied_context.run(
+        scheduler.run_one_job,
+        {"id": "copied-live", "profile": "default"},
+        loop=object(),
+    )
+    assert observed == [(str(home), 1, True)]
+    assert not p._cron_env_lock.locked()
+
+
 def test_scheduler_live_gateway_handles_matching_context_stays_in_parent(
     monkeypatch, tmp_path
 ):

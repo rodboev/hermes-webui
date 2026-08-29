@@ -694,8 +694,13 @@ def install_cron_scheduler_profile_isolation() -> None:
         execution_home = _home_for_scheduled_cron_job(job)
         try:
             if live_gateway_handles:
-                active_context = _cron_context_stack.get()
-                if active_context:
+                if _cron_profile_context_depth() > 0:
+                    active_context = _cron_context_stack.get()
+                    if not active_context:
+                        raise RuntimeError(
+                            "live cron gateway handles require an active "
+                            "profile context"
+                        )
                     pinned_home = Path(active_context[-1]._home)
                     if pinned_home != Path(execution_home):
                         raise RuntimeError(
