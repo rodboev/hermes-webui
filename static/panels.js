@@ -11233,7 +11233,7 @@ function _buildProviderQuotaCard(status){
     </div>
     <div class="provider-quota-body">${body}</div>
   `;
-  if(publicStatus&&typeof publicStatus==='object'&&['operational','degraded','outage'].includes(publicStatus.status)&&typeof publicStatus.checkedAt==='string'){
+  if(publicStatus&&typeof publicStatus==='object'&&['operational','degraded','outage','maintenance'].includes(publicStatus.status)&&typeof publicStatus.checkedAt==='string'){
     const detail=document.createElement('aside');
     detail.className=`provider-public-status provider-public-status-${publicStatus.status}`;
     const heading=document.createElement('strong');
