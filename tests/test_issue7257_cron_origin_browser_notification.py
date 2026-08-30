@@ -215,7 +215,7 @@ def test_issue_reproduction_base_fails_head_reaches_presentation_owner():
 
 def test_desktop_background_recomputed_before_and_after_await():
     result = _run("desktop")
-    assert result["toasts"] == [] and result["since"] == 42
+    assert result["toasts"] == [] and result["since"] == 42 and result["alerts"] == 1
 
 
 def test_desktop_background_transition_after_await_uses_canonical_state():
@@ -251,8 +251,9 @@ def test_explicit_empty_sid_never_inherits_active_session():
 
 def test_truthy_session_keeps_deep_link_and_unread_boundary():
     result = _run("hidden")
-    assert result["marks"][0][0] == "sid-1" and result["marks"][0][2]["profile"] == "profile-a"
+    assert len(result["marks"]) == 1 and result["marks"][0][0] == "sid-1" and result["marks"][0][2]["profile"] == "profile-a"
     assert "/session/sid-1" in result["shown"][0]["options"]["data"]["url"]
+    assert result["shown"][0]["options"]["tag"] == "hermes-cron-profile-a-job-1-42"
 
 
 def test_two_realms_same_identity_short_circuit_displayed_record():
