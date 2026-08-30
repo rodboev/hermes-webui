@@ -13009,8 +13009,8 @@ function startCronPolling(){
         }
       }
     }catch(e){}finally{
-      if(committedCompletion) updateCronBadge();
       startCronPolling._inFlight=false;
+      if(committedCompletion){try{updateCronBadge();}catch(_err){}}
     }
   },30000);
 }

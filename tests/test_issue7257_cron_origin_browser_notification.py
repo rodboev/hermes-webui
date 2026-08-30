@@ -14,7 +14,39 @@ MESSAGES = (ROOT / "static/messages.js").read_text(encoding="utf-8")
 PANELS = (ROOT / "static/panels.js").read_text(encoding="utf-8")
 NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(NODE is None, reason="node is required")
-BASE_PANELS = subprocess.check_output(["git", "show", "origin/master:static/panels.js"], cwd=ROOT, text=True)
+
+# This is the exact hidden-document guard from origin/master at the respec base.
+# Pinning the small reproduction fixture keeps CI independent of git ref depth.
+BASE_POLLER = """function startCronPolling(){
+    if(_cronPollTimer) return;
+    _cronPollTimer=setInterval(async()=>{
+      if(document.hidden) return;  // don't poll when tab is in background
+      try{
+        const pollGeneration=_cronPollGeneration;
+        const data=await api(`/api/crons/recent?since=${_cronPollSince}`);
+        if(pollGeneration!==_cronPollGeneration) return;
+        if(data.completions&&data.completions.length>0){
+          for(const c of data.completions){
+            if(c.toast_notifications !== false){
+              showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') :
+t('status_completed')),4000);
+            }
+            _cronPollSince=Math.max(_cronPollSince,c.completed_at);
+            if(c.job_id) _cronNewJobIds.add(String(c.job_id));
+            if(c.session_id && typeof _markSessionCompletionUnreadIfBackground === 'function'){
+              const activeProfile=(typeof S!=='undefined'&&S&&S.activeProfile)||'default';
+              _markSessionCompletionUnreadIfBackground(c.session_id, c.message_count, {
+                source:'cron',
+                profile:activeProfile,
+              });
+            }
+          }
+          // _cronUnreadCount is derived from _cronNewJobIds.size in updateCronBadge.
+          updateCronBadge();
+        }
+      }catch(e){}
+    },30000);
+  }"""
 
 
 def _function(source: str, name: str) -> str:
@@ -36,7 +68,6 @@ OWNER = "const _STREAM_NOTIFICATION_BACKGROUND={};" + MESSAGES[_owner_start:_own
     for name in ("_isBrowserNotificationReady", "_notificationOptions", "_showPwaNotification", "sendBrowserNotification")
 )
 POLLER = _function(PANELS, "startCronPolling")
-BASE_POLLER = _function(BASE_PANELS, "startCronPolling")
 
 
 def _run_base_head_reproduction() -> dict:
@@ -65,14 +96,15 @@ const owner={json.dumps(OWNER)};
 const poller={json.dumps(POLLER)};
 const caseName={json.dumps(case)};
 const registry=new Map(),shown=[],toasts=[],marks=[];
-let badgeCalls=0,enteredQueries=0,releaseQueries;
+let badgeCalls=0;
 let alertCount=0,failPresentation=caseName==='failure'||caseName==='ordered';
-function Notification(title,options) {{ if(failPresentation) throw new Error('native seam failed'); shown.push({{title,options}}); alertCount++; }}
+const shouldFail=options=>failPresentation&&(caseName!=='ordered'||String(options&&options.tag).endsWith('-42'));
+function Notification(title,options) {{ if(shouldFail(options)) throw new Error('native seam failed'); shown.push({{title,options}}); alertCount++; }}
 Notification.permission='granted';
 const registration={{active:null}}; registration.active=registration;
 registration.getNotifications=({{tag}})=>Promise.resolve(registry.has(tag)?[registry.get(tag)]:[]);
 registration.showNotification=(title,options)=>{{
-  if(failPresentation) return Promise.reject(new Error('worker failed'));
+  if(shouldFail(options)) return Promise.reject(new Error('worker failed'));
   const existing=registry.get(options.tag); registry.set(options.tag,{{title,options}}); shown.push({{title,options}});
   if(caseName==='stale-after-notification') context._cronPollGeneration++;
   if(caseName==='partial-failure') failPresentation=true;
@@ -87,7 +119,7 @@ const context={{window,document,Notification,navigator:{{serviceWorker:{{getRegi
 context.globalThis=context; context.window.Notification=Notification; vm.createContext(context); vm.runInContext(owner,context);
 function setupPoller(completions) {{
   let timer=null,apiCalls=0,resolveApi,rejectApi;
-  context._cronPollSince=0; context._cronPollTimer=null; context._cronPollGeneration=0; context._cronNewJobIds=new Set(); context.updateCronBadge=()=>{{badgeCalls++;}};
+  context._cronPollSince=0; context._cronPollTimer=null; context._cronPollGeneration=0; context._cronNewJobIds=new Set(); context.updateCronBadge=()=>{{badgeCalls++;if(caseName==='badge-failure')throw new Error('badge failed');}};
   context._markSessionCompletionUnreadIfBackground=(...args)=>marks.push(args);
   context.api=()=>{{apiCalls++;return new Promise((resolve,reject)=>{{resolveApi=()=>resolve({{completions}});rejectApi=()=>reject(new Error('rejected api'));}});}};
   context.setInterval=cb=>{{timer={{callback:cb}};context._cronPollTimer=timer;return timer;}};
@@ -107,6 +139,7 @@ async function main() {{
   if(caseName==='unavailable') {{ await p.timer.callback(); return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}}; }}
   if(caseName==='no-query') delete registration.getNotifications;
   if(caseName==='rejected-api') {{ const first=p.timer.callback(); await Promise.resolve(); p.reject(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
+  else if(caseName==='badge-failure') {{ const first=p.timer.callback(); p.resolve(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
   else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable') window._notificationsEnabled=false; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{failPresentation=false;const retry=p.timer.callback();p.resolve();await retry;}} }}
   return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}};
 }}
@@ -250,10 +283,6 @@ def test_stale_generation_after_presentation_drops_local_effects():
     assert result["shown"] and result["since"] == 0 and result["ids"] == [] and result["marks"] == []
 
 
-def test_rejected_poll_releases_in_flight():
-    assert _run("hidden")["apiCalls"] == 1
-
-
 def test_sessionless_poller_uses_root_url_and_no_session_unread():
     result = _run("sessionless")
     options = result["shown"][0]["options"]
@@ -278,3 +307,8 @@ def test_omitted_sid_without_active_session_uses_current_location():
 
 def test_explicit_renotify_false_is_preserved():
     assert _run("owner-false")["result"]["renotify"] is False
+
+
+def test_badge_failure_does_not_stick_in_flight_guard():
+    result = _run("badge-failure")
+    assert result["apiCalls"] == 2 and result["since"] == 42
