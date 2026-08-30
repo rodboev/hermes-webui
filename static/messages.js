@@ -9149,7 +9149,7 @@ function playAttentionSound(key){
 }
 
 function _notificationOptions(body,options={}){
-  const hasSid=!!(options&&Object.prototype.hasOwnProperty.call(options,'sid'));
+  const hasSid=!!(options&&Object.prototype.hasOwnProperty.call(options,'sid'))&&options.sid!==undefined;
   const sid=(options&&options.sid)||(S&&S.session&&S.session.session_id);
   const effectiveSid=hasSid?options.sid:sid;
   const url=effectiveSid?`${location.origin}${_sessionUrlForSid(sid)}`:

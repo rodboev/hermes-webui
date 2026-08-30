@@ -12998,7 +12998,7 @@ function startCronPolling(){
               if(pollGeneration!==_cronPollGeneration) return;
               if(!outcome||(outcome.delivered!==true&&outcome.alreadyDisplayed!==true)) return;
             }
-            else showToast(completionStatus,4000);
+            else showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
           }
           _cronPollSince=Math.max(_cronPollSince,c.completed_at);
           committedCompletion=true;
