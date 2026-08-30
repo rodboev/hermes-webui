@@ -554,7 +554,8 @@ def get_active_hermes_home() -> Path:
 # below makes the entire context-manager body run-to-completion serially, so
 # all webui access to HERMES_HOME goes through one thread at a time. Any
 # Short metadata operations still need the lock while cached cron module paths
-# and HERMES_HOME are swapped; long lifecycle execution runs in a child.
+# and HERMES_HOME are swapped; handle-free lifecycle execution runs in a child,
+# while adapter-backed execution stays parent-side for live delivery.
 _cron_env_lock = threading.Lock()
 
 
@@ -611,7 +612,7 @@ def _home_for_scheduled_cron_job(job: dict) -> Path:
         return get_active_hermes_home()
     if not raw:
         stack = _cron_context_stack.get()
-        if stack:
+        if _cron_profile_context_depth() > 0 and stack:
             return stack[-1]._home
         return get_active_hermes_home()
     if _is_root_profile(raw):
@@ -638,7 +639,8 @@ def install_cron_scheduler_profile_isolation() -> None:
     Standard WebUI deployments do not start the scheduler thread in-process, but
     if a future/single-process deployment calls cron.scheduler.tick() from the
     WebUI worker, tick's background job path has no request TLS context. Wrap
-    run_one_job so the complete Agent lifecycle runs in a profile-pinned child.
+    run_one_job so handle-free Agent lifecycles run in a profile-pinned child;
+    adapter-backed calls retain the parent path for live delivery.
     """
     try:
         import importlib

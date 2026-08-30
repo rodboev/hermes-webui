@@ -689,6 +689,7 @@ def test_scheduler_live_gateway_handles_preserve_agent_delivery_and_settlement(
     monkeypatch.setattr(scheduler, "_consume_interrupted_flag", lambda job_id: False)
     monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: home)
     monkeypatch.setattr(p, "publish_session_list_changed", lambda *a, **k: None)
+    monkeypatch.setattr(scheduler, "run_one_job", scheduler.run_one_job)
     p.install_cron_scheduler_profile_isolation()
 
     assert scheduler.run_one_job(
@@ -736,7 +737,12 @@ def test_scheduler_live_gateway_handles_do_not_trust_copied_stack_without_depth(
         {"id": "copied-live", "profile": "default"},
         loop=object(),
     )
-    assert observed == [(str(home), 1, True)]
+    copied_context.run(
+        scheduler.run_one_job,
+        {"id": "copied-live-without-profile"},
+        loop=object(),
+    )
+    assert observed == [(str(home), 1, True), (str(home), 1, True)]
     assert not p._cron_env_lock.locked()
 
 

@@ -1653,22 +1653,6 @@ def _event_profile_for_cron_job(job: dict) -> str | None:
     return raw
 
 
-def _cron_job_subprocess_main(job, execution_profile_home, result_queue):
-    """Legacy subprocess target kept for the #1312 import regression test."""
-    from cron.scheduler import run_job
-    from api.cron_runtime import _cron_job_subprocess_main as runtime_main
-
-    del run_job
-    runtime_main(
-        json.dumps(job, separators=(",", ":"), ensure_ascii=False),
-        None if execution_profile_home is None else str(execution_profile_home),
-        "run_job",
-        "[]",
-        "{}",
-        result_queue,
-    )
-
-
 def _run_cron_job_in_profile_subprocess(job, execution_profile_home):
     from api.cron_runtime import run_cron_in_profile_subprocess
 
