@@ -1,4 +1,8 @@
-"""Composed owner and cron-poller proof for issue #7257."""
+"""Composed owner and cron-poller proof for issue #7257.
+
+The harness stubs only the final presentation seam; real service-worker registration,
+OS delivery, and OS-level tag collapse remain unreached.
+"""
 
 from __future__ import annotations
 
@@ -137,6 +141,7 @@ function setupPoller(completions) {{
   vm.runInContext(poller,context); return {{get timer(){{return timer;}},get apiCalls(){{return apiCalls;}},resolve:()=>resolveApi(),reject:()=>rejectApi()}};
 }}
 async function main() {{
+  let firstTick=null;
   if(caseName==='permission-reject') {{ Notification.permission='default'; return {{result:await vm.runInContext("sendBrowserNotification('title','body',{{forceHidden:true}})",context)}}; }}
   if(caseName.startsWith('owner-')&&caseName!=='owner-no-dedupe') {{
     if(caseName==='owner-no-session') context.S.session=null;
@@ -157,8 +162,8 @@ async function main() {{
   if(caseName==='rejected-api') {{ const first=p.timer.callback(); await Promise.resolve(); p.reject(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
   else if(caseName==='overlap') {{ const first=p.timer.callback(); const second=p.timer.callback(); p.resolve(); await Promise.all([first,second]); }}
   else if(caseName==='badge-failure') {{ const first=p.timer.callback(); p.resolve(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
-  else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable'||caseName==='after-unavailable-muted') window._notificationsEnabled=false; if(caseName==='profile-transition') context.S.activeProfile='profile-b'; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{failPresentation=false;const retry=p.timer.callback();p.resolve();await retry;}} }}
-  return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls,ownerCalls,getNotificationCalls}};
+  else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable'||caseName==='after-unavailable-muted') window._notificationsEnabled=false; if(caseName==='profile-transition') context.S.activeProfile='profile-b'; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{firstTick={{since:context._cronPollSince,ids:[...context._cronNewJobIds],marks:marks.length}}; failPresentation=false;const retry=p.timer.callback();p.resolve();await retry; }} }}
+  return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls,ownerCalls,getNotificationCalls,firstTick}};
 }}
 main().then(v=>process.stdout.write(JSON.stringify(v))).catch(e=>{{console.error(e);process.exit(1)}});
 """
@@ -194,7 +199,7 @@ async function main() {{const a=makeRealm('realm-a'),b=makeRealm('realm-b');
  process.stdout.write(JSON.stringify({{first,second,entered,audible,alerts,records:[...registry.values()]}}));}}
 main().catch(e=>{{console.error(e);process.exit(1)}});
 """
-    return json.loads(subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
+    return json.loads(subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=True).stdout)
 
 
 def test_issue_repro_hidden_completion_reaches_presentation_owner():
@@ -278,6 +283,7 @@ def test_worker_failure_falls_back_to_direct_notification():
 
 def test_failed_presentation_retries_without_cursor_advance():
     result = _run("failure")
+    assert result["firstTick"] == {"since": 0, "ids": [], "marks": 0}
     assert result["since"] == 42 and result["alerts"] == 1
 
 

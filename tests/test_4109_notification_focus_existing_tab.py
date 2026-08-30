@@ -84,12 +84,11 @@ def test_test_notification_without_sid_still_targets_current_page_for_reuse():
     else:
         raise AssertionError("_notificationOptions body did not terminate")
     script = f"""
-const S={{session:null}};
-const location={{origin:'http://localhost:8080',href:'http://localhost:8080/#/s/current'}};
-const _sessionUrlForSid=sid=>'/session/'+sid;
-const _appRootPath=()=>'/app/';
-eval({json.dumps(function)});
-process.stdout.write(JSON.stringify({{url:_notificationOptions('body',{{}}).data.url,empty:_notificationOptions('body',{{sid:''}}).data.url}}));
+const vm=require('vm');
+const context={{S:{{session:null}},location:{{origin:'http://localhost:8080',href:'http://localhost:8080/#/s/current'}},_sessionUrlForSid:sid=>'/session/'+sid,_appRootPath:()=>'/app/'}};
+vm.createContext(context);
+vm.runInContext({json.dumps(function)},context);
+process.stdout.write(JSON.stringify({{url:vm.runInContext("_notificationOptions('body',{{}}).data.url",context),empty:vm.runInContext("_notificationOptions('body',{{sid:''}}).data.url",context)}}));
 """
     result = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8", check=True)
     options = json.loads(result.stdout)
