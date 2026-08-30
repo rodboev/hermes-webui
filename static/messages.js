@@ -9197,6 +9197,7 @@ function _showPwaNotification(title,body,options={}){
     ]);
     return reg$.then(inspectAndShow);
   }
+  // Direct notifications do not expose browser-owned displayed records.
   return inspectAndShow(null);
 }
 function requestNotificationPermission(){
@@ -9231,10 +9232,8 @@ function sendBrowserNotification(title,body,options={}){
   // explicit "Send test" override); only the visibility gate is bypassed.
   const forceHidden=!!(options&&options.forceHidden);
   const outcome=(reason,retryable=false)=>Promise.resolve({delivered:false,alreadyDisplayed:false,retryable,reason});
-  const settingGateSatisfied=()=>{if(!force&&!window._notificationsEnabled) return;return true;};
-  const visibilityGateSatisfied=()=>{if(!force&&!forceHidden&&!_isBackgroundedForBrowserNotification()) return;return true;};
-  if(settingGateSatisfied()!==true) return outcome('setting-disabled');
-  if(visibilityGateSatisfied()!==true) return outcome('foreground');
+  if(!force&&!window._notificationsEnabled) return outcome('setting-disabled');
+  if(!force&&!forceHidden&&!_isBackgroundedForBrowserNotification()) return outcome('foreground');
   if(!('Notification' in window)) return outcome('unsupported');
   if(Notification.permission==='granted'){
     return _showPwaNotification(title,body,options);

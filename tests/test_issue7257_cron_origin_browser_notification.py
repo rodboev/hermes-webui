@@ -104,13 +104,14 @@ Notification.permission='granted';
 const registration={{active:null}}; registration.active=registration;
 registration.getNotifications=({{tag}})=>Promise.resolve(registry.has(tag)?[registry.get(tag)]:[]);
 registration.showNotification=(title,options)=>{{
+  if(caseName==='worker-fallback') return Promise.reject(new Error('worker failed'));
   if(shouldFail(options)) return Promise.reject(new Error('worker failed'));
   const existing=registry.get(options.tag); registry.set(options.tag,{{title,options}}); shown.push({{title,options}});
   if(caseName==='stale-after-notification') context._cronPollGeneration++;
   if(caseName==='partial-failure') failPresentation=true;
   if(!existing || options.renotify) alertCount++; return Promise.resolve();
 }};
-const document={{hidden:!['foreground','desktop'].includes(caseName),baseURI:'https://example.test/',hasFocus:()=>false}};
+const document={{hidden:!['foreground','desktop','desktop-transition','desktop-unavailable'].includes(caseName),baseURI:'https://example.test/',hasFocus:()=>false}};
 const window={{_notificationsEnabled:true,location:{{origin:'https://example.test',href:'https://example.test/'}},addEventListener:()=>{{}}}};
 const context={{window,document,Notification,navigator:{{serviceWorker:{{getRegistration:()=>Promise.resolve(registration)}}}},location:window.location,
   S:{{activeProfile:'profile-a',session:{{session_id:'sess-active'}}}},_sessionUrlForSid:sid=>'/session/'+sid,_appRootPath:()=>'/app/',assistantDisplayName:()=> 'Hermes',
@@ -132,15 +133,16 @@ async function main() {{
     const options=caseName==='owner-empty'?{{sid:'',tag:'hermes-cron-profile-a-job-1-42',renotify:false}}:caseName==='owner-false'?{{renotify:false}}:{{}};
     return {{result:vm.runInContext(`_notificationOptions('body',${{JSON.stringify(options)}})`,context)}};
   }}
-  const all=[{{name:'Nightly',status:'success',completed_at:42,job_id:'job-1',session_id:caseName==='sessionless'?'':'sid-1',message_count:7,toast_notifications:caseName!=='muted'}},{{name:'Later',status:'success',completed_at:43,job_id:'job-1',session_id:'',message_count:0,toast_notifications:true}}];
+  const all=[{{name:'Nightly',status:'success',completed_at:42,job_id:'job-1',session_id:caseName==='sessionless'?'':'sid-1',message_count:7,toast_notifications:caseName!=='muted'&&caseName!=='after-unavailable-muted'}},{{name:'Later',status:'success',completed_at:43,job_id:'job-1',session_id:'',message_count:0,toast_notifications:true}}];
   const completions=caseName==='ordered'?all.slice().reverse():all.slice(0,(caseName==='later'||caseName==='partial-failure')?2:1);
   const p=setupPoller(completions); vm.runInContext('startCronPolling()',context);
-  if(caseName==='desktop') {{ document.hidden=false; window.__hermesSetBackgrounded(true); }} if(caseName==='unavailable') window._notificationsEnabled=false;
-  if(caseName==='unavailable') {{ await p.timer.callback(); return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}}; }}
+  if(caseName==='desktop'||caseName==='desktop-unavailable') {{ document.hidden=false; window.__hermesSetBackgrounded(true); }} if(caseName==='unavailable'||caseName==='desktop-unavailable') window._notificationsEnabled=false;
+  if(caseName==='unavailable'||caseName==='desktop-unavailable') {{ await p.timer.callback(); return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}}; }}
   if(caseName==='no-query') delete registration.getNotifications;
   if(caseName==='rejected-api') {{ const first=p.timer.callback(); await Promise.resolve(); p.reject(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
+  else if(caseName==='overlap') {{ const first=p.timer.callback(); const second=p.timer.callback(); p.resolve(); await Promise.all([first,second]); }}
   else if(caseName==='badge-failure') {{ const first=p.timer.callback(); p.resolve(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
-  else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable') window._notificationsEnabled=false; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{failPresentation=false;const retry=p.timer.callback();p.resolve();await retry;}} }}
+  else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable'||caseName==='after-unavailable-muted') window._notificationsEnabled=false; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{failPresentation=false;const retry=p.timer.callback();p.resolve();await retry;}} }}
   return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}};
 }}
 main().then(v=>process.stdout.write(JSON.stringify(v))).catch(e=>{{console.error(e);process.exit(1)}});
@@ -201,8 +203,18 @@ def test_desktop_background_transition_after_await_uses_canonical_state():
     assert result["toasts"] == [] and result["since"] == 42 and result["shown"]
 
 
+def test_visible_desktop_background_with_notifications_off_preserves_base_skip():
+    result = _run("desktop-unavailable")
+    assert result["apiCalls"] == 0 and result["since"] == 0 and result["ids"] == []
+
+
 def test_after_await_readiness_loss_preserves_backlog_and_badge():
     result = _run("after-unavailable")
+    assert result["since"] == 0 and result["ids"] == [] and result["marks"] == [] and result["badgeCalls"] == 0
+
+
+def test_after_await_readiness_loss_blocks_muted_completion_effects():
+    result = _run("after-unavailable-muted")
     assert result["since"] == 0 and result["ids"] == [] and result["marks"] == [] and result["badgeCalls"] == 0
 
 
@@ -244,6 +256,11 @@ def test_get_notifications_absent_falls_through_to_show():
     assert _run("no-query")["shown"]
 
 
+def test_worker_failure_falls_back_to_direct_notification():
+    result = _run("worker-fallback")
+    assert result["since"] == 42 and result["shown"]
+
+
 def test_failed_presentation_retries_without_cursor_advance():
     result = _run("failure")
     assert result["since"] == 42 and result["alerts"] == 1
@@ -257,6 +274,11 @@ def test_successful_completion_updates_badge_before_later_retryable_failure():
 def test_rejected_api_clears_in_flight_and_next_request_succeeds():
     result = _run("rejected-api")
     assert result["apiCalls"] == 2 and result["since"] == 42
+
+
+def test_overlapping_polls_keep_one_request_in_flight():
+    result = _run("overlap")
+    assert result["apiCalls"] == 1 and result["since"] == 42
 
 
 def test_earlier_failure_blocks_later_completion():
