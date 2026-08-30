@@ -91,7 +91,7 @@ const _appRootPath=()=>'/app/';
 eval({json.dumps(function)});
 process.stdout.write(JSON.stringify({{url:_notificationOptions('body',{{}}).data.url,empty:_notificationOptions('body',{{sid:''}}).data.url}}));
 """
-    result = subprocess.run([NODE, "-e", script], capture_output=True, text=True, check=True)
+    result = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8", check=True)
     options = json.loads(result.stdout)
     assert options == {"url": "http://localhost:8080/#/s/current", "empty": "http://localhost:8080/app/"}
     assert "sendBrowserNotification('Hermes test','Notifications are ready.',{force:true});" in (

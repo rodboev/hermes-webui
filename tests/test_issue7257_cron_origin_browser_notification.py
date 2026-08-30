@@ -72,21 +72,28 @@ POLLER = _function(PANELS, "startCronPolling")
 
 def _run_base_head_reproduction() -> dict:
     script = f"""
-const vm=require('vm'),base={json.dumps(BASE_POLLER)},head={json.dumps(POLLER)};
+const vm=require('vm'),owner={json.dumps(OWNER)},base={json.dumps(BASE_POLLER)},head={json.dumps(POLLER)};
 async function run(source,isHead) {{
   let timer,apiCalls=0,presentations=0;
-  const context={{document:{{hidden:true}},window:{{_notificationsEnabled:true}},Notification:{{permission:'granted'}},
+  function Notification(title,options) {{ presentations++; }}
+  Notification.permission='granted';
+  const registration={{active:null}}; registration.active=registration;
+  registration.getNotifications=()=>Promise.resolve([]);
+  registration.showNotification=()=>{{presentations++;return Promise.resolve();}};
+  const context={{document:{{hidden:true}},window:{{_notificationsEnabled:true,location:{{origin:'https://example.test',href:'https://example.test/'}},addEventListener:()=>{{}}}},Notification,
     _cronPollTimer:null,_cronPollSince:0,_cronPollGeneration:0,_cronNewJobIds:new Set(),
     S:{{activeProfile:'profile-a',session:null}},setInterval:cb=>{{timer=cb;return 1;}},
     api:async()=>{{apiCalls++;return {{completions:[{{name:'Nightly',status:'success',completed_at:42,job_id:'job-1',toast_notifications:true}}]}};}},
-    sendBrowserNotification:async()=>{{presentations++;return {{delivered:true,alreadyDisplayed:false}};}},showToast:()=>{{}},updateCronBadge:()=>{{}},
+    navigator:{{serviceWorker:{{getRegistration:()=>Promise.resolve(registration)}}}},location:{{origin:'https://example.test',href:'https://example.test/'}},
+    _sessionUrlForSid:sid=>'/session/'+sid,_appRootPath:()=>'/app/',assistantDisplayName:()=> 'Hermes',
+    requestNotificationPermission:()=>Promise.resolve('granted'),showToast:()=>{{}},updateCronBadge:()=>{{}},
     t:(key,...args)=>key+':'+args.join('|'),
-    _isBackgroundedForBrowserNotification:()=>true,_isBrowserNotificationReady:()=>true,Promise,console}};
-  vm.createContext(context);vm.runInContext(source,context);vm.runInContext('startCronPolling()',context);await timer();return {{apiCalls,presentations}};
+    setTimeout,clearTimeout,Promise,console,globalThis:null}};
+  context.globalThis=context; context.window.Notification=Notification; vm.createContext(context);vm.runInContext(owner,context);vm.runInContext(source,context);vm.runInContext('startCronPolling()',context);await timer();return {{apiCalls,presentations}};
 }}
 Promise.all([run(base,false),run(head,true)]).then(([baseResult,headResult])=>process.stdout.write(JSON.stringify({{base:baseResult,head:headResult}}))).catch(e=>{{console.error(e);process.exit(1)}});
 """
-    return json.loads(subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
+    return json.loads(subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=True).stdout)
 
 
 def _run(case: str) -> dict:
@@ -96,17 +103,18 @@ const owner={json.dumps(OWNER)};
 const poller={json.dumps(POLLER)};
 const caseName={json.dumps(case)};
 const registry=new Map(),shown=[],toasts=[],marks=[];
-let badgeCalls=0;
+let badgeCalls=0,getNotificationCalls=0,ownerCalls=0;
 let alertCount=0,failPresentation=caseName==='failure'||caseName==='ordered';
 const shouldFail=options=>failPresentation&&(caseName!=='ordered'||String(options&&options.tag).endsWith('-42'));
 function Notification(title,options) {{ if(shouldFail(options)) throw new Error('native seam failed'); shown.push({{title,options}}); alertCount++; }}
 Notification.permission='granted';
 const registration={{active:null}}; registration.active=registration;
-registration.getNotifications=({{tag}})=>Promise.resolve(registry.has(tag)?[registry.get(tag)]:[]);
+registration.getNotifications=({{tag}})=>{{getNotificationCalls++;return Promise.resolve(registry.has(tag)?[registry.get(tag)]:[]);}};
 registration.showNotification=(title,options)=>{{
   if(caseName==='worker-fallback') return Promise.reject(new Error('worker failed'));
   if(shouldFail(options)) return Promise.reject(new Error('worker failed'));
   const existing=registry.get(options.tag); registry.set(options.tag,{{title,options}}); shown.push({{title,options}});
+  if(caseName==='force-hidden-transition'&&shown.length===1) {{ document.hidden=false; window.__hermesSetBackgrounded(false); }}
   if(caseName==='stale-after-notification') context._cronPollGeneration++;
   if(caseName==='partial-failure') failPresentation=true;
   if(!existing || options.renotify) alertCount++; return Promise.resolve();
@@ -118,6 +126,8 @@ const context={{window,document,Notification,navigator:{{serviceWorker:{{getRegi
   t:(key,...args)=>key+':'+args.join('|'),showToast:msg=>toasts.push(msg),updateNotificationPermissionStatus:()=>{{}},requestNotificationPermission:()=>caseName==='permission-reject'?Promise.reject(new Error('permission request failed')):Promise.resolve('granted'),
   setTimeout,clearTimeout,Promise,console,globalThis:null}};
 context.globalThis=context; context.window.Notification=Notification; vm.createContext(context); vm.runInContext(owner,context);
+const realSendBrowserNotification=context.sendBrowserNotification;
+context.sendBrowserNotification=(...args)=>{{ownerCalls++;return realSendBrowserNotification(...args);}};
 function setupPoller(completions) {{
   let timer=null,apiCalls=0,resolveApi,rejectApi;
   context._cronPollSince=0; context._cronPollTimer=null; context._cronPollGeneration=0; context._cronNewJobIds=new Set(); context.updateCronBadge=()=>{{badgeCalls++;if(caseName==='badge-failure')throw new Error('badge failed');}};
@@ -128,26 +138,31 @@ function setupPoller(completions) {{
 }}
 async function main() {{
   if(caseName==='permission-reject') {{ Notification.permission='default'; return {{result:await vm.runInContext("sendBrowserNotification('title','body',{{forceHidden:true}})",context)}}; }}
-  if(caseName.startsWith('owner-')) {{
+  if(caseName.startsWith('owner-')&&caseName!=='owner-no-dedupe') {{
     if(caseName==='owner-no-session') context.S.session=null;
     const options=caseName==='owner-empty'?{{sid:'',tag:'hermes-cron-profile-a-job-1-42',renotify:false}}:caseName==='owner-false'?{{renotify:false}}:{{}};
     return {{result:vm.runInContext(`_notificationOptions('body',${{JSON.stringify(options)}})`,context)}};
   }}
+  if(caseName==='owner-no-dedupe') {{
+    registry.set('hermes-sess-active',{{title:'existing',options:{{tag:'hermes-sess-active'}}}});
+    const result=await vm.runInContext("sendBrowserNotification('title','body',{{force:true}})",context);
+    return {{result,ownerCalls,getNotificationCalls,shown}};
+  }}
   const all=[{{name:'Nightly',status:'success',completed_at:42,job_id:'job-1',session_id:caseName==='sessionless'?'':'sid-1',message_count:7,toast_notifications:caseName!=='muted'&&caseName!=='after-unavailable-muted'}},{{name:'Later',status:'success',completed_at:43,job_id:'job-1',session_id:'',message_count:0,toast_notifications:true}}];
-  const completions=caseName==='ordered'?all.slice().reverse():all.slice(0,(caseName==='later'||caseName==='partial-failure')?2:1);
+  const completions=caseName==='ordered'?all.slice().reverse():all.slice(0,(caseName==='later'||caseName==='partial-failure'||caseName==='force-hidden-transition')?2:1);
   const p=setupPoller(completions); vm.runInContext('startCronPolling()',context);
   if(caseName==='desktop'||caseName==='desktop-unavailable') {{ document.hidden=false; window.__hermesSetBackgrounded(true); }} if(caseName==='unavailable'||caseName==='desktop-unavailable') window._notificationsEnabled=false;
-  if(caseName==='unavailable'||caseName==='desktop-unavailable') {{ await p.timer.callback(); return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}}; }}
+  if(caseName==='unavailable'||caseName==='desktop-unavailable') {{ await p.timer.callback(); return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls,ownerCalls,getNotificationCalls}}; }}
   if(caseName==='no-query') delete registration.getNotifications;
   if(caseName==='rejected-api') {{ const first=p.timer.callback(); await Promise.resolve(); p.reject(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
   else if(caseName==='overlap') {{ const first=p.timer.callback(); const second=p.timer.callback(); p.resolve(); await Promise.all([first,second]); }}
   else if(caseName==='badge-failure') {{ const first=p.timer.callback(); p.resolve(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
-  else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable'||caseName==='after-unavailable-muted') window._notificationsEnabled=false; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{failPresentation=false;const retry=p.timer.callback();p.resolve();await retry;}} }}
-  return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}};
+  else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable'||caseName==='after-unavailable-muted') window._notificationsEnabled=false; if(caseName==='profile-transition') context.S.activeProfile='profile-b'; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{failPresentation=false;const retry=p.timer.callback();p.resolve();await retry;}} }}
+  return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls,ownerCalls,getNotificationCalls}};
 }}
 main().then(v=>process.stdout.write(JSON.stringify(v))).catch(e=>{{console.error(e);process.exit(1)}});
 """
-    result = subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
+    result = subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=True)
     return json.loads(result.stdout)
 
 
@@ -160,7 +175,7 @@ function makeRealm(id) {{
   const Notification=function(){{}}; Notification.permission='granted';
   const reg={{active:null}}; reg.active=reg;
   reg.getNotifications=({{tag}})=>{{entered++;if(!simultaneous)return Promise.resolve(registry.has(tag)?[registry.get(tag)]:[]);if(entered===2) release();return bothEntered.then(()=>registry.has(tag)?[registry.get(tag)]:[]);}};
-  reg.showNotification=(title,options)=>{{const existed=registry.has(options.tag);registry.set(options.tag,{{title,options,realm:id}});alerts.push({{id,options}});if(!existed) audible++;return Promise.resolve();}};
+  reg.showNotification=(title,options)=>{{const existed=registry.has(options.tag);registry.set(options.tag,{{title,options,realm:id}});alerts.push({{id,options}});if(!existed||options.renotify) audible++;return Promise.resolve();}};
   const window={{_notificationsEnabled:true,location:{{origin:'https://example.test',href:'https://example.test/'}},Notification}};
   const context={{window,document:{{hidden:true}},Notification,navigator:{{serviceWorker:{{getRegistration:()=>Promise.resolve(reg)}}}},location:window.location,S:{{session:null}},assistantDisplayName:()=> 'Hermes',_appRootPath:()=>'/app/',_sessionUrlForSid:s=>'/session/'+s,setTimeout,Promise,console}};
   context.globalThis=context;vm.createContext(context);vm.runInContext(owner,context);return context;
@@ -184,7 +199,7 @@ main().catch(e=>{{console.error(e);process.exit(1)}});
 
 def test_issue_repro_hidden_completion_reaches_presentation_owner():
     result = _run("hidden")
-    assert result["since"] == 42 and result["toasts"] == [] and result["shown"]
+    assert result["since"] == 42 and result["toasts"] == [] and result["shown"] and result["getNotificationCalls"] > 0
     assert result["shown"][0]["options"]["renotify"] is False
 
 
@@ -203,14 +218,14 @@ def test_desktop_background_transition_after_await_uses_canonical_state():
     assert result["toasts"] == [] and result["since"] == 42 and result["shown"]
 
 
-def test_visible_desktop_background_with_notifications_off_preserves_base_skip():
+def test_visible_desktop_background_with_notifications_off_skips_request_and_preserves_backlog():
     result = _run("desktop-unavailable")
     assert result["apiCalls"] == 0 and result["since"] == 0 and result["ids"] == []
 
 
 def test_after_await_readiness_loss_preserves_backlog_and_badge():
     result = _run("after-unavailable")
-    assert result["since"] == 0 and result["ids"] == [] and result["marks"] == [] and result["badgeCalls"] == 0
+    assert result["since"] == 0 and result["ids"] == [] and result["marks"] == [] and result["badgeCalls"] == 0 and result["ownerCalls"] == 0
 
 
 def test_after_await_readiness_loss_blocks_muted_completion_effects():
@@ -329,6 +344,23 @@ def test_omitted_sid_without_active_session_uses_current_location():
 
 def test_explicit_renotify_false_is_preserved():
     assert _run("owner-false")["result"]["renotify"] is False
+
+
+def test_owner_without_dedupe_does_not_query_displayed_records():
+    result = _run("owner-no-dedupe")
+    assert result["result"] == {"delivered": True, "alreadyDisplayed": False, "retryable": False, "reason": "delivered"}
+    assert result["getNotificationCalls"] == 0
+
+
+def test_profile_capture_survives_change_during_api_await():
+    result = _run("profile-transition")
+    assert result["marks"][0][2]["profile"] == "profile-a"
+    assert "profile-a" in result["shown"][0]["options"]["tag"]
+
+
+def test_force_hidden_keeps_multi_completion_delivery_after_return_to_foreground():
+    result = _run("force-hidden-transition")
+    assert result["since"] == 43 and len(result["shown"]) == 2
 
 
 def test_badge_failure_does_not_stick_in_flight_guard():
