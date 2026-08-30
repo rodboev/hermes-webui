@@ -647,29 +647,33 @@ def test_scheduler_live_gateway_handles_preserve_parent_run_one_job(
 def test_scheduler_live_gateway_handles_preserve_agent_delivery_and_settlement(
     monkeypatch, tmp_path
 ):
-    import importlib
+    import types
 
     from api import profiles as p
 
-    scheduler = importlib.import_module("cron.scheduler")
+    scheduler = types.ModuleType("cron.scheduler")
     home = tmp_path / "home"
     adapter, loop = object(), object()
     events = []
+    scheduler.run_one_job = None
     monkeypatch.setattr(p, "_DEFAULT_HERMES_HOME", home)
     monkeypatch.setattr(
         scheduler,
         "claim_dispatch",
         lambda job_id: events.append(("claim", job_id)) or True,
+        raising=False,
     )
     monkeypatch.setattr(
         scheduler,
         "run_job",
         lambda job, **kwargs: (True, "output", "response", None),
+        raising=False,
     )
     monkeypatch.setattr(
         scheduler,
         "save_job_output",
         lambda job_id, output: events.append(("save", job_id, output)) or home / "output",
+        raising=False,
     )
     monkeypatch.setattr(
         scheduler,
@@ -677,6 +681,7 @@ def test_scheduler_live_gateway_handles_preserve_agent_delivery_and_settlement(
         lambda job, content, adapters=None, loop=None: events.append(
             ("deliver", job["id"], content, adapters, loop)
         ) or None,
+        raising=False,
     )
     monkeypatch.setattr(
         scheduler,
@@ -684,12 +689,32 @@ def test_scheduler_live_gateway_handles_preserve_agent_delivery_and_settlement(
         lambda job_id, success, error=None, delivery_error=None: events.append(
             ("mark", job_id, success, error, delivery_error)
         ),
+        raising=False,
     )
-    monkeypatch.setattr(scheduler, "_is_interrupted", lambda job_id: False)
-    monkeypatch.setattr(scheduler, "_consume_interrupted_flag", lambda job_id: False)
-    monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: home)
+    monkeypatch.setattr(scheduler, "_is_interrupted", lambda job_id: False, raising=False)
+    monkeypatch.setattr(
+        scheduler, "_consume_interrupted_flag", lambda job_id: False, raising=False
+    )
+    monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: home, raising=False)
     monkeypatch.setattr(p, "publish_session_list_changed", lambda *a, **k: None)
-    monkeypatch.setattr(scheduler, "run_one_job", scheduler.run_one_job)
+
+    def agent_run_one_job(job, *, adapters=None, loop=None):
+        if adapters is not adapter or loop is not loop_handle:
+            raise AssertionError("Agent delivery requires the live gateway handles")
+        if not scheduler.claim_dispatch(job["id"]):
+            return False
+        success, output, response, error = scheduler.run_job(job)
+        scheduler.save_job_output(job["id"], output)
+        scheduler._deliver_result(job, response, adapters=adapters, loop=loop)
+        scheduler.mark_job_run(job["id"], success, error, None)
+        return success
+
+    loop_handle = loop
+    scheduler.run_one_job = agent_run_one_job
+    cron_pkg = types.ModuleType("cron")
+    cron_pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.scheduler", scheduler)
     p.install_cron_scheduler_profile_isolation()
 
     assert scheduler.run_one_job(
