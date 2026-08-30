@@ -523,13 +523,35 @@ def test_saved_provider_payload_has_no_singular_model_authority(monkeypatch, tmp
 
 def test_configured_status_key_is_present_once_in_all_locale_blocks():
     i18n = (ROOT / "static" / "i18n.js").read_text(encoding="utf-8")
-    blocks = re.findall(r"(?ms)^  (?:'[^']+'|[A-Za-z-]+): \{.*?(?=^  (?:'[^']+'|[A-Za-z-]+): \{|\Z)", i18n)
+    locale_blocks = re.findall(
+        r"(?ms)^  (?P<locale>'[^']+'|[A-Za-z-]+): \{(?P<body>.*?)(?=^  (?:'[^']+'|[A-Za-z-]+): \{|\Z)",
+        i18n,
+    )
+    blocks = [body for _, body in locale_blocks]
     assert len(blocks) == 15
     assert all(block.count("providers_status_configured_label:") == 1 for block in blocks)
     assert all(block.count("providers_status_configured:") == 1 for block in blocks)
-    labels = [re.search(r"providers_status_configured_label: '([^']+)'", block).group(1) for block in blocks]
-    assert labels[0] == "Configured"
-    assert all(label != "Configured" for label in labels[1:])
+    labels = {
+        locale.strip("'"): re.search(r"providers_status_configured_label: '([^']+)'", block).group(1)
+        for locale, block in locale_blocks
+    }
+    assert labels == {
+        "en": "Configured",
+        "it": "Configurato",
+        "ja": "設定済み",
+        "ru": "Настроено",
+        "es": "Configurado",
+        "de": "Konfiguriert",
+        "zh": "已配置",
+        "zh-Hant": "已設定",
+        "pt": "Configurada",
+        "ko": "구성됨",
+        "fr": "Configuré",
+        "cs": "Nakonfigurováno",
+        "tr": "Yapılandırıldı",
+        "pl": "Skonfigurowano",
+        "vi": "Đã cấu hình",
+    }
 
 
 def test_save_self_hosted_provider_posts_expected_payload(tmp_path):
