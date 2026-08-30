@@ -12991,8 +12991,8 @@ function startCronPolling(){
         });
         for(const c of completions){
           if(c.toast_notifications !== false){
-            const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
             if(completionBackgrounded){
+              const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
               const tag=`hermes-cron-${pollProfile}-${c.job_id||'unknown'}-${c.completed_at}`;
               const outcome=await sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id||'',tag,renotify:false,dedupe:true});
               if(pollGeneration!==_cronPollGeneration) return;
