@@ -1,4 +1,4 @@
-"""Behavioral coverage for cron-origin browser notifications in hidden tabs."""
+"""Composed owner and cron-poller proof for issue #7257."""
 
 from __future__ import annotations
 
@@ -9,205 +9,272 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
-PANELS_JS = (ROOT / "static" / "panels.js").read_text(encoding="utf-8")
+MESSAGES = (ROOT / "static/messages.js").read_text(encoding="utf-8")
+PANELS = (ROOT / "static/panels.js").read_text(encoding="utf-8")
 NODE = shutil.which("node")
+pytestmark = pytest.mark.skipif(NODE is None, reason="node is required")
+BASE_PANELS = subprocess.check_output(["git", "show", "origin/master:static/panels.js"], cwd=ROOT, text=True)
 
 
-def _function_source(name: str) -> str:
-    marker = f"function {name}("
-    start = PANELS_JS.find(marker)
-    assert start >= 0, f"{name} not found"
-    brace = PANELS_JS.find("{", PANELS_JS.find(")", start))
+def _function(source: str, name: str) -> str:
+    start = source.index(f"function {name}(")
+    brace = source.index("{", source.index(")", start))
     depth = 0
-    for index in range(brace, len(PANELS_JS)):
-        if PANELS_JS[index] == "{":
-            depth += 1
-        elif PANELS_JS[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return PANELS_JS[start : index + 1]
-    raise AssertionError(f"{name} body did not terminate")
+    for index in range(brace, len(source)):
+        depth += source[index] == "{"
+        depth -= source[index] == "}"
+        if depth == 0:
+            return source[start : index + 1]
+    raise AssertionError(name)
 
 
-def _run_node(case: str) -> dict:
-    if NODE is None:
-        pytest.skip("node is required for the behavioral harness")
-    helper = _function_source("_cronBrowserNotificationsDeliverable")
-    poller = _function_source("startCronPolling")
+_owner_start = MESSAGES.index("let _desktopBackgroundedForNotifications=false;")
+_owner_end = MESSAGES.index("function _isSessionCurrentPane", _owner_start)
+OWNER = "const _STREAM_NOTIFICATION_BACKGROUND={};" + MESSAGES[_owner_start:_owner_end] + "\n" + "\n".join(
+    _function(MESSAGES, name)
+    for name in ("_isBrowserNotificationReady", "_notificationOptions", "_showPwaNotification", "sendBrowserNotification")
+)
+POLLER = _function(PANELS, "startCronPolling")
+BASE_POLLER = _function(BASE_PANELS, "startCronPolling")
+
+
+def _run_base_head_reproduction() -> dict:
     script = f"""
-const caseName = {json.dumps(case)};
-const helperSource = {json.dumps(helper)};
-const pollerSource = {json.dumps(poller)};
-
-async function runCase() {{
-  let _cronPollSince = 0;
-  let _cronPollTimer = null;
-  let _cronPollGeneration = 0;
-  const _cronNewJobIds = new Set();
-  const toasts = [];
-  const notifications = [];
-  const markCalls = [];
-  let apiCalls = 0;
-  let resolveApi;
-  const document = {{
-    hidden: caseName !== 'visible',
-    querySelector: () => ({{
-      querySelector: () => null,
-      appendChild: () => {{}},
-      style: {{}},
-    }}),
-  }};
-  const unavailableCases = new Set(['unavailable', 'setting-off', 'permission-denied', 'permission-default', 'missing-api']);
-  const window = {{_notificationsEnabled: !['unavailable', 'setting-off'].includes(caseName)}};
-  if(caseName !== 'missing-api') {{
-    const permission = caseName === 'permission-denied' ? 'denied' : caseName === 'permission-default' ? 'default' : 'granted';
-    globalThis.Notification = {{permission}};
-  }} else delete globalThis.Notification;
-  const t = (key, ...args) => key + ':' + args.join('|');
-  const showToast = (message) => toasts.push(message);
-  const sendBrowserNotification = (title, body, options) => notifications.push({{title, body, options}});
-  const updateCronBadge = () => {{}};
-  const _markSessionCompletionUnreadIfBackground = (...args) => markCalls.push(args);
-  const completions = [{{name: 'Nightly', status: 'success', completed_at: 42, job_id: 'job-1', session_id: caseName === 'no-session' ? '' : 'sid-1', message_count: 7, toast_notifications: caseName !== 'muted'}}];
-  let rejectApi;
-  const api = () => {{
-    apiCalls += 1;
-    return new Promise((resolve, reject) => {{
-      if(caseName === 'reject' && apiCalls === 1) rejectApi = () => reject(new Error('poll failed'));
-      else resolveApi = () => resolve({{completions}});
-    }});
-  }};
-  const setInterval = callback => {{ _cronPollTimer = {{callback}}; return _cronPollTimer; }};
-  const clearInterval = () => {{}};
-  eval(helperSource);
-  eval(pollerSource);
-  startCronPolling();
-  if (unavailableCases.has(caseName)) {{
-    await _cronPollTimer.callback();
-  }} else if (caseName === 'transition') {{
-    const pending = _cronPollTimer.callback();
-    await Promise.resolve();
-    window._notificationsEnabled = false;
-    resolveApi();
-    await pending;
-  }} else if (caseName === 'reject') {{
-    const failed = _cronPollTimer.callback();
-    await Promise.resolve();
-    rejectApi();
-    await failed;
-    const recovered = _cronPollTimer.callback();
-    resolveApi();
-    await recovered;
-  }} else if (caseName === 'stale') {{
-    const pending = _cronPollTimer.callback();
-    await Promise.resolve();
-    _cronPollGeneration += 1;
-    resolveApi();
-    await pending;
-  }} else if (caseName === 'overlap') {{
-    const first = _cronPollTimer.callback();
-    await Promise.resolve();
-    const second = _cronPollTimer.callback();
-    resolveApi();
-    await Promise.all([first, second]);
-  }} else {{
-    const pending = _cronPollTimer.callback();
-    resolveApi();
-    await pending;
-  }}
-  process.stdout.write(JSON.stringify({{apiCalls, toasts, notifications, markCalls, since: _cronPollSince, ids: [..._cronNewJobIds]}}));
+const vm=require('vm'),base={json.dumps(BASE_POLLER)},head={json.dumps(POLLER)};
+async function run(source,isHead) {{
+  let timer,apiCalls=0,presentations=0;
+  const context={{document:{{hidden:true}},window:{{_notificationsEnabled:true}},Notification:{{permission:'granted'}},
+    _cronPollTimer:null,_cronPollSince:0,_cronPollGeneration:0,_cronNewJobIds:new Set(),
+    S:{{activeProfile:'profile-a',session:null}},setInterval:cb=>{{timer=cb;return 1;}},
+    api:async()=>{{apiCalls++;return {{completions:[{{name:'Nightly',status:'success',completed_at:42,job_id:'job-1',toast_notifications:true}}]}};}},
+    sendBrowserNotification:async()=>{{presentations++;return {{delivered:true,alreadyDisplayed:false}};}},showToast:()=>{{}},updateCronBadge:()=>{{}},
+    t:(key,...args)=>key+':'+args.join('|'),
+    _isBackgroundedForBrowserNotification:()=>true,_isBrowserNotificationReady:()=>true,Promise,console}};
+  vm.createContext(context);vm.runInContext(source,context);vm.runInContext('startCronPolling()',context);await timer();return {{apiCalls,presentations}};
 }}
-runCase().catch(error => {{ console.error(error); process.exit(1); }});
+Promise.all([run(base,false),run(head,true)]).then(([baseResult,headResult])=>process.stdout.write(JSON.stringify({{base:baseResult,head:headResult}}))).catch(e=>{{console.error(e);process.exit(1)}});
+"""
+    return json.loads(subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
+
+
+def _run(case: str) -> dict:
+    script = f"""
+const vm=require('vm');
+const owner={json.dumps(OWNER)};
+const poller={json.dumps(POLLER)};
+const caseName={json.dumps(case)};
+const registry=new Map(),shown=[],toasts=[],marks=[];
+let badgeCalls=0,enteredQueries=0,releaseQueries;
+let alertCount=0,failPresentation=caseName==='failure'||caseName==='ordered';
+function Notification(title,options) {{ if(failPresentation) throw new Error('native seam failed'); shown.push({{title,options}}); alertCount++; }}
+Notification.permission='granted';
+const registration={{active:null}}; registration.active=registration;
+registration.getNotifications=({{tag}})=>Promise.resolve(registry.has(tag)?[registry.get(tag)]:[]);
+registration.showNotification=(title,options)=>{{
+  if(failPresentation) return Promise.reject(new Error('worker failed'));
+  const existing=registry.get(options.tag); registry.set(options.tag,{{title,options}}); shown.push({{title,options}});
+  if(caseName==='stale-after-notification') context._cronPollGeneration++;
+  if(caseName==='partial-failure') failPresentation=true;
+  if(!existing || options.renotify) alertCount++; return Promise.resolve();
+}};
+const document={{hidden:!['foreground','desktop'].includes(caseName),baseURI:'https://example.test/',hasFocus:()=>false}};
+const window={{_notificationsEnabled:true,location:{{origin:'https://example.test',href:'https://example.test/'}},addEventListener:()=>{{}}}};
+const context={{window,document,Notification,navigator:{{serviceWorker:{{getRegistration:()=>Promise.resolve(registration)}}}},location:window.location,
+  S:{{activeProfile:'profile-a',session:{{session_id:'sess-active'}}}},_sessionUrlForSid:sid=>'/session/'+sid,_appRootPath:()=>'/app/',assistantDisplayName:()=> 'Hermes',
+  t:(key,...args)=>key+':'+args.join('|'),showToast:msg=>toasts.push(msg),updateNotificationPermissionStatus:()=>{{}},requestNotificationPermission:()=>caseName==='permission-reject'?Promise.reject(new Error('permission request failed')):Promise.resolve('granted'),
+  setTimeout,clearTimeout,Promise,console,globalThis:null}};
+context.globalThis=context; context.window.Notification=Notification; vm.createContext(context); vm.runInContext(owner,context);
+function setupPoller(completions) {{
+  let timer=null,apiCalls=0,resolveApi,rejectApi;
+  context._cronPollSince=0; context._cronPollTimer=null; context._cronPollGeneration=0; context._cronNewJobIds=new Set(); context.updateCronBadge=()=>{{badgeCalls++;}};
+  context._markSessionCompletionUnreadIfBackground=(...args)=>marks.push(args);
+  context.api=()=>{{apiCalls++;return new Promise((resolve,reject)=>{{resolveApi=()=>resolve({{completions}});rejectApi=()=>reject(new Error('rejected api'));}});}};
+  context.setInterval=cb=>{{timer={{callback:cb}};context._cronPollTimer=timer;return timer;}};
+  vm.runInContext(poller,context); return {{get timer(){{return timer;}},get apiCalls(){{return apiCalls;}},resolve:()=>resolveApi(),reject:()=>rejectApi()}};
+}}
+async function main() {{
+  if(caseName==='permission-reject') {{ Notification.permission='default'; return {{result:await vm.runInContext("sendBrowserNotification('title','body',{{forceHidden:true}})",context)}}; }}
+  if(caseName.startsWith('owner-')) {{
+    if(caseName==='owner-no-session') context.S.session=null;
+    const options=caseName==='owner-empty'?{{sid:'',tag:'hermes-cron-profile-a-job-1-42',renotify:false}}:caseName==='owner-false'?{{renotify:false}}:{{}};
+    return {{result:vm.runInContext(`_notificationOptions('body',${{JSON.stringify(options)}})`,context)}};
+  }}
+  const all=[{{name:'Nightly',status:'success',completed_at:42,job_id:'job-1',session_id:caseName==='sessionless'?'':'sid-1',message_count:7,toast_notifications:caseName!=='muted'}},{{name:'Later',status:'success',completed_at:43,job_id:'job-1',session_id:'',message_count:0,toast_notifications:true}}];
+  const completions=caseName==='ordered'?all.slice().reverse():all.slice(0,(caseName==='later'||caseName==='partial-failure')?2:1);
+  const p=setupPoller(completions); vm.runInContext('startCronPolling()',context);
+  if(caseName==='desktop') {{ document.hidden=false; window.__hermesSetBackgrounded(true); }} if(caseName==='unavailable') window._notificationsEnabled=false;
+  if(caseName==='unavailable') {{ await p.timer.callback(); return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}}; }}
+  if(caseName==='no-query') delete registration.getNotifications;
+  if(caseName==='rejected-api') {{ const first=p.timer.callback(); await Promise.resolve(); p.reject(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
+  else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable') window._notificationsEnabled=false; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{failPresentation=false;const retry=p.timer.callback();p.resolve();await retry;}} }}
+  return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls}};
+}}
+main().then(v=>process.stdout.write(JSON.stringify(v))).catch(e=>{{console.error(e);process.exit(1)}});
 """
     result = subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
     return json.loads(result.stdout)
 
 
-def test_hidden_tab_cron_completion_fires_browser_notification():
-    result = _run_node("hidden")
-    assert result["apiCalls"] == 1
-    assert result["toasts"] == []
-    assert result["notifications"] == [{
-        "title": "Nightly",
-        "body": "cron_completion_status:Nightly|status_completed:",
-        "options": {"forceHidden": True, "sid": "sid-1"},
-    }]
+def _run_two_realms(simultaneous: bool) -> dict:
+    script = f"""
+const vm=require('vm'),owner={json.dumps(OWNER)},registry=new Map(),alerts=[];const simultaneous={json.dumps(simultaneous)};let audible=0;
+let entered=0,release;
+const bothEntered=new Promise(resolve=>release=resolve);
+function makeRealm(id) {{
+  const Notification=function(){{}}; Notification.permission='granted';
+  const reg={{active:null}}; reg.active=reg;
+  reg.getNotifications=({{tag}})=>{{entered++;if(!simultaneous)return Promise.resolve(registry.has(tag)?[registry.get(tag)]:[]);if(entered===2) release();return bothEntered.then(()=>registry.has(tag)?[registry.get(tag)]:[]);}};
+  reg.showNotification=(title,options)=>{{const existed=registry.has(options.tag);registry.set(options.tag,{{title,options,realm:id}});alerts.push({{id,options}});if(!existed) audible++;return Promise.resolve();}};
+  const window={{_notificationsEnabled:true,location:{{origin:'https://example.test',href:'https://example.test/'}},Notification}};
+  const context={{window,document:{{hidden:true}},Notification,navigator:{{serviceWorker:{{getRegistration:()=>Promise.resolve(reg)}}}},location:window.location,S:{{session:null}},assistantDisplayName:()=> 'Hermes',_appRootPath:()=>'/app/',_sessionUrlForSid:s=>'/session/'+s,setTimeout,Promise,console}};
+  context.globalThis=context;vm.createContext(context);vm.runInContext(owner,context);return context;
+}}
+async function main() {{const a=makeRealm('realm-a'),b=makeRealm('realm-b');
+ const opts={{forceHidden:true,sid:'',tag:'hermes-cron-profile-a-job-1-42',renotify:false,dedupe:true}};
+ let first,second;
+ if(simultaneous) {{
+   const firstPromise=vm.runInContext(`sendBrowserNotification('Nightly','done',${{JSON.stringify(opts)}})`,a);
+   const secondPromise=vm.runInContext(`sendBrowserNotification('Nightly','done',${{JSON.stringify(opts)}})`,b);
+   [first,second]=await Promise.all([firstPromise,secondPromise]);
+ }} else {{
+   first=await vm.runInContext(`sendBrowserNotification('Nightly','done',${{JSON.stringify(opts)}})`,a);
+   second=await vm.runInContext(`sendBrowserNotification('Nightly','done',${{JSON.stringify(opts)}})`,b);
+ }}
+ process.stdout.write(JSON.stringify({{first,second,entered,audible,alerts,records:[...registry.values()]}}));}}
+main().catch(e=>{{console.error(e);process.exit(1)}});
+"""
+    return json.loads(subprocess.run([NODE, "-e", script], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
 
 
-def test_hidden_completion_preserves_cursor_unread_and_badge():
-    result = _run_node("hidden")
-    assert result["since"] == 42
-    assert result["ids"] == ["job-1"]
+def test_issue_repro_hidden_completion_reaches_presentation_owner():
+    result = _run("hidden")
+    assert result["since"] == 42 and result["toasts"] == [] and result["shown"]
+    assert result["shown"][0]["options"]["renotify"] is False
 
 
-def test_visible_completion_keeps_toast_only():
-    result = _run_node("visible")
-    assert result["toasts"] == ["cron_completion_status:Nightly|status_completed:"]
-    assert result["notifications"] == []
+def test_issue_reproduction_base_fails_head_reaches_presentation_owner():
+    result = _run_base_head_reproduction()
+    assert result == {"base": {"apiCalls": 0, "presentations": 0}, "head": {"apiCalls": 1, "presentations": 1}}
 
 
-def test_muted_completion_keeps_unread_without_alert():
-    result = _run_node("muted")
-    assert result["toasts"] == []
-    assert result["notifications"] == []
-    assert result["since"] == 42
-    assert result["ids"] == ["job-1"]
+def test_desktop_background_recomputed_before_and_after_await():
+    result = _run("desktop")
+    assert result["toasts"] == [] and result["since"] == 42
 
 
-def test_hidden_without_permission_or_setting_preserves_backlog():
-    result = _run_node("unavailable")
-    assert result == {"apiCalls": 0, "toasts": [], "notifications": [], "markCalls": [], "since": 0, "ids": []}
+def test_desktop_background_transition_after_await_uses_canonical_state():
+    result = _run("desktop-transition")
+    assert result["toasts"] == [] and result["since"] == 42 and result["shown"]
 
 
-@pytest.mark.parametrize("case", ["setting-off", "permission-denied", "permission-default", "missing-api"])
-def test_hidden_unavailable_delivery_modes_preserve_backlog(case):
-    result = _run_node(case)
-    assert result == {"apiCalls": 0, "toasts": [], "notifications": [], "markCalls": [], "since": 0, "ids": []}
+def test_after_await_readiness_loss_preserves_backlog_and_badge():
+    result = _run("after-unavailable")
+    assert result["since"] == 0 and result["ids"] == [] and result["marks"] == [] and result["badgeCalls"] == 0
 
 
-def test_hidden_transition_to_unavailable_preserves_backlog():
-    result = _run_node("transition")
-    assert result == {"apiCalls": 1, "toasts": [], "notifications": [], "markCalls": [], "since": 0, "ids": []}
+def test_background_delivery_unavailable_preserves_backlog():
+    result = _run("unavailable")
+    assert result["apiCalls"] == 0 and result["since"] == 0 and result["ids"] == []
 
 
-def test_rejected_poll_clears_in_flight_guard():
-    result = _run_node("reject")
-    assert result["apiCalls"] == 2
-    assert len(result["notifications"]) == 1
-    assert result["since"] == 42
+def test_explicit_empty_sid_never_inherits_active_session():
+    result = _run("owner-empty")["result"]
+    assert result["data"]["url"] == "https://example.test/app/" and result["renotify"] is False
+    assert result["tag"] == "hermes-cron-profile-a-job-1-42"
 
 
-def test_hidden_sessionless_completion_hands_off_without_session_unread_mark():
-    result = _run_node("no-session")
-    assert result["notifications"] == [{
-        "title": "Nightly",
-        "body": "cron_completion_status:Nightly|status_completed:",
-        "options": {"forceHidden": True, "sid": ""},
-    }]
-    assert result["markCalls"] == []
-    assert result["since"] == 42
-    assert result["ids"] == ["job-1"]
+def test_truthy_session_keeps_deep_link_and_unread_boundary():
+    result = _run("hidden")
+    assert result["marks"][0][0] == "sid-1" and result["marks"][0][2]["profile"] == "profile-a"
+    assert "/session/sid-1" in result["shown"][0]["options"]["data"]["url"]
 
 
-def test_hidden_session_bound_completion_marks_session_unread():
-    result = _run_node("hidden")
-    assert result["markCalls"] == [["sid-1", 7, {
-        "source": "cron",
-        "profile": "default",
-    }]]
+def test_two_realms_same_identity_short_circuit_displayed_record():
+    result = _run_two_realms(False)
+    assert result["first"]["delivered"] is True and result["second"]["alreadyDisplayed"] is True
+    assert len(result["records"]) == 1 and len(result["alerts"]) == 1
 
 
-def test_stale_generation_drops_completion():
-    result = _run_node("stale")
-    assert result["apiCalls"] == 1
-    assert result["notifications"] == []
-    assert result["since"] == 0
-    assert result["ids"] == []
+def test_two_realms_same_identity_replace_silently():
+    result = _run_two_realms(True)
+    assert result["audible"] == 1 and len(result["records"]) == 1
+    assert all(row["options"]["renotify"] is False for row in result["alerts"])
 
 
-def test_overlapping_polls_do_not_duplicate_completion():
-    result = _run_node("overlap")
-    assert result["apiCalls"] == 1
-    assert len(result["notifications"]) == 1
+def test_later_completed_at_remains_presentable():
+    result = _run("later")
+    assert result["since"] == 43 and len(result["registry"]) == 2
+
+
+def test_get_notifications_absent_falls_through_to_show():
+    assert _run("no-query")["shown"]
+
+
+def test_failed_presentation_retries_without_cursor_advance():
+    result = _run("failure")
+    assert result["since"] == 42 and result["alerts"] == 1
+
+
+def test_successful_completion_updates_badge_before_later_retryable_failure():
+    result = _run("partial-failure")
+    assert result["since"] == 42 and result["badgeCalls"] == 1
+
+
+def test_rejected_api_clears_in_flight_and_next_request_succeeds():
+    result = _run("rejected-api")
+    assert result["apiCalls"] == 2 and result["since"] == 42
+
+
+def test_earlier_failure_blocks_later_completion():
+    assert _run("ordered")["since"] == 0
+
+
+def test_muted_completion_consumes_without_alert():
+    result = _run("muted")
+    assert result["shown"] == [] and result["since"] == 42
+
+
+def test_foreground_completion_keeps_toast_only():
+    result = _run("foreground")
+    assert result["shown"] == [] and result["toasts"]
+
+
+def test_stale_generation_drops_every_effect():
+    result = _run("stale")
+    assert result["shown"] == [] and result["since"] == 0 and result["ids"] == []
+
+
+def test_stale_generation_after_presentation_drops_local_effects():
+    result = _run("stale-after-notification")
+    assert result["shown"] and result["since"] == 0 and result["ids"] == [] and result["marks"] == []
+
+
+def test_rejected_poll_releases_in_flight():
+    assert _run("hidden")["apiCalls"] == 1
+
+
+def test_sessionless_poller_uses_root_url_and_no_session_unread():
+    result = _run("sessionless")
+    options = result["shown"][0]["options"]
+    assert options["data"]["url"] == "https://example.test/app/"
+    assert options["tag"] == "hermes-cron-profile-a-job-1-42" and result["marks"] == []
+
+
+def test_request_permission_rejection_is_retryable_outcome():
+    result = _run("permission-reject")["result"]
+    assert result == {"delivered": False, "alreadyDisplayed": False, "retryable": True, "reason": "permission-request-failed"}
+
+
+def test_existing_caller_defaults_preserve_omitted_sid_and_renotify():
+    result = _run("owner-omitted")["result"]
+    assert result["tag"] == "hermes-sess-active" and result["renotify"] is True
+
+
+def test_omitted_sid_without_active_session_uses_current_location():
+    result = _run("owner-no-session")["result"]
+    assert result["data"]["url"] == "https://example.test/"
+
+
+def test_explicit_renotify_false_is_preserved():
+    assert _run("owner-false")["result"]["renotify"] is False

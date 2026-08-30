@@ -1,6 +1,9 @@
 """Regression coverage for notification clicks reusing an open WebUI tab (#4109)."""
 
 from pathlib import Path
+import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -9,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SW_SRC = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
 MESSAGES_SRC = (ROOT / "static" / "messages.js").read_text(encoding="utf-8")
 ROUTES_SRC = (ROOT / "api" / "routes.py").read_text(encoding="utf-8")
+NODE = shutil.which("node")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -66,7 +70,30 @@ def test_notification_click_open_window_remains_no_reusable_client_fallback():
 
 
 def test_test_notification_without_sid_still_targets_current_page_for_reuse():
-    assert "const url=sid?`${location.origin}${_sessionUrlForSid(sid)}`:location.href;" in MESSAGES_SRC
+    if NODE is None:
+        pytest.skip("node is required for notification option behavior")
+    start = MESSAGES_SRC.index("function _notificationOptions(")
+    brace = MESSAGES_SRC.index("{", MESSAGES_SRC.index(")", start))
+    depth = 0
+    for index in range(brace, len(MESSAGES_SRC)):
+        depth += MESSAGES_SRC[index] == "{"
+        depth -= MESSAGES_SRC[index] == "}"
+        if depth == 0:
+            function = MESSAGES_SRC[start : index + 1]
+            break
+    else:
+        raise AssertionError("_notificationOptions body did not terminate")
+    script = f"""
+const S={{session:null}};
+const location={{origin:'http://localhost:8080',href:'http://localhost:8080/#/s/current'}};
+const _sessionUrlForSid=sid=>'/session/'+sid;
+const _appRootPath=()=>'/app/';
+eval({json.dumps(function)});
+process.stdout.write(JSON.stringify({{url:_notificationOptions('body',{{}}).data.url,empty:_notificationOptions('body',{{sid:''}}).data.url}}));
+"""
+    result = subprocess.run([NODE, "-e", script], capture_output=True, text=True, check=True)
+    options = json.loads(result.stdout)
+    assert options == {"url": "http://localhost:8080/#/s/current", "empty": "http://localhost:8080/app/"}
     assert "sendBrowserNotification('Hermes test','Notifications are ready.',{force:true});" in (
         ROOT / "static" / "index.html"
     ).read_text(encoding="utf-8")
