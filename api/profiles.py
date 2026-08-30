@@ -693,8 +693,8 @@ def install_cron_scheduler_profile_isolation() -> None:
         live_gateway_handles = (
             kwargs.get("adapters") is not None or kwargs.get("loop") is not None
         )
-        execution_home = _home_for_scheduled_cron_job(job)
         try:
+            execution_home = _home_for_scheduled_cron_job(job)
             if live_gateway_handles:
                 if _cron_profile_context_depth() > 0:
                     active_context = _cron_context_stack.get()
