@@ -12969,8 +12969,11 @@ window.addEventListener('hermes:cron_created', () => {
 function startCronPolling(){
   if(_cronPollTimer) return;
   _cronPollTimer=setInterval(async()=>{
+    const backgroundNotificationUnavailable=()=>
+      (typeof _isBrowserNotificationReady==='function'&&!_isBrowserNotificationReady())||
+      typeof sendBrowserNotification!=='function';
     const backgrounded=typeof _isBackgroundedForBrowserNotification==='function'&&_isBackgroundedForBrowserNotification();
-    if(backgrounded&&((typeof _isBrowserNotificationReady==='function'&&!_isBrowserNotificationReady())||typeof sendBrowserNotification!=='function')) return;
+    if(backgrounded&&backgroundNotificationUnavailable()) return;
     if(startCronPolling._inFlight) return;
     startCronPolling._inFlight=true;
     let committedCompletion=false;
@@ -12980,7 +12983,7 @@ function startCronPolling(){
       const data=await api(`/api/crons/recent?since=${_cronPollSince}`);
       if(pollGeneration!==_cronPollGeneration) return;
       const completionBackgrounded=typeof _isBackgroundedForBrowserNotification==='function'&&_isBackgroundedForBrowserNotification();
-      if(completionBackgrounded&&((typeof _isBrowserNotificationReady==='function'&&!_isBrowserNotificationReady())||typeof sendBrowserNotification!=='function')) return;
+      if(completionBackgrounded&&backgroundNotificationUnavailable()) return;
       if(data.completions&&data.completions.length>0){
         const completions=[...data.completions].sort((a,b)=>{
           const timeDiff=Number(a.completed_at)-Number(b.completed_at);
@@ -12988,14 +12991,14 @@ function startCronPolling(){
         });
         for(const c of completions){
           if(c.toast_notifications !== false){
+            const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
             if(completionBackgrounded){
-              const completionStatus=t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed'));
               const tag=`hermes-cron-${pollProfile}-${c.job_id||'unknown'}-${c.completed_at}`;
               const outcome=await sendBrowserNotification(c.name||t('untitled'),completionStatus,{forceHidden:true,sid:c.session_id||'',tag,renotify:false,dedupe:true});
               if(pollGeneration!==_cronPollGeneration) return;
               if(!outcome||(outcome.delivered!==true&&outcome.alreadyDisplayed!==true)) return;
             }
-            else showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
+            else showToast(completionStatus,4000);
           }
           _cronPollSince=Math.max(_cronPollSince,c.completed_at);
           committedCompletion=true;

@@ -73,7 +73,7 @@ function _isBackgroundedForBrowserNotification(){
   return !!(typeof document!=='undefined'&&document.hidden)||_desktopBackgroundedForNotifications;
 }
 function _isBrowserNotificationReady(){
-  return typeof window!=='undefined'&&window._notificationsEnabled===true&&
+  return typeof window!=='undefined'&&!!window._notificationsEnabled&&
     'Notification' in window&&Notification.permission==='granted';
 }
 
@@ -9158,7 +9158,7 @@ function _notificationOptions(body,options={}){
   const tag=options&&Object.prototype.hasOwnProperty.call(options,'tag')?options.tag:
     (hasSid&&!effectiveSid?'hermes-webui':defaults.tag);
   const renotify=options&&Object.prototype.hasOwnProperty.call(options,'renotify')?!!options.renotify:true;
-  return {...defaults,tag,renotify,data:{url}};
+  return {...defaults,tag,renotify};
 }
 function _showPwaNotification(title,body,options={}){
   const botName=assistantDisplayName();
