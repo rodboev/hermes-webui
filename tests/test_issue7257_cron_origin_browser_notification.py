@@ -107,7 +107,7 @@ const owner={json.dumps(OWNER)};
 const poller={json.dumps(POLLER)};
 const caseName={json.dumps(case)};
 const registry=new Map(),shown=[],toasts=[],marks=[];
-let badgeCalls=0,getNotificationCalls=0,ownerCalls=0;
+let badgeCalls=0,getNotificationCalls=0,ownerCalls=0,permissionRequests=0;
 let alertCount=0,failPresentation=caseName==='failure'||caseName==='ordered';
 const shouldFail=options=>failPresentation&&(caseName!=='ordered'||String(options&&options.tag).endsWith('-42'));
 function Notification(title,options) {{ if(shouldFail(options)) throw new Error('native seam failed'); shown.push({{title,options}}); alertCount++; }}
@@ -119,6 +119,7 @@ registration.showNotification=(title,options)=>{{
   if(shouldFail(options)) return Promise.reject(new Error('worker failed'));
   const existing=registry.get(options.tag); registry.set(options.tag,{{title,options}}); shown.push({{title,options}});
   if(caseName==='force-hidden-transition'&&shown.length===1) {{ document.hidden=false; window.__hermesSetBackgrounded(false); }}
+  if(caseName==='permission-transition'&&shown.length===1) Notification.permission='default';
   if(caseName==='stale-after-notification') context._cronPollGeneration++;
   if(caseName==='partial-failure') failPresentation=true;
   if(!existing || options.renotify) alertCount++; return Promise.resolve();
@@ -127,7 +128,7 @@ const document={{hidden:!['foreground','desktop','desktop-transition','desktop-u
 const window={{_notificationsEnabled:true,location:{{origin:'https://example.test',href:'https://example.test/'}},addEventListener:()=>{{}}}};
 const context={{window,document,Notification,navigator:{{serviceWorker:{{getRegistration:()=>Promise.resolve(registration)}}}},location:window.location,
   S:{{activeProfile:'profile-a',session:{{session_id:'sess-active'}}}},_sessionUrlForSid:sid=>'/session/'+sid,_appRootPath:()=>'/app/',assistantDisplayName:()=> 'Hermes',
-  t:(key,...args)=>key+':'+args.join('|'),showToast:msg=>toasts.push(msg),updateNotificationPermissionStatus:()=>{{}},requestNotificationPermission:()=>caseName==='permission-reject'?Promise.reject(new Error('permission request failed')):Promise.resolve('granted'),
+  t:(key,...args)=>key+':'+args.join('|'),showToast:msg=>toasts.push(msg),updateNotificationPermissionStatus:()=>{{}},requestNotificationPermission:()=>{{permissionRequests++;return caseName==='permission-reject'?Promise.reject(new Error('permission request failed')):Promise.resolve('granted');}},
   setTimeout,clearTimeout,Promise,console,globalThis:null}};
 context.globalThis=context; context.window.Notification=Notification; vm.createContext(context); vm.runInContext(owner,context);
 const realSendBrowserNotification=context.sendBrowserNotification;
@@ -154,7 +155,7 @@ async function main() {{
     return {{result,ownerCalls,getNotificationCalls,shown}};
   }}
   const all=[{{name:'Nightly',status:'success',completed_at:42,job_id:'job-1',session_id:caseName==='sessionless'?'':'sid-1',message_count:7,toast_notifications:caseName!=='muted'&&caseName!=='after-unavailable-muted'}},{{name:'Later',status:'success',completed_at:43,job_id:'job-1',session_id:'',message_count:0,toast_notifications:true}}];
-  const completions=caseName==='ordered'?all.slice().reverse():all.slice(0,(caseName==='later'||caseName==='partial-failure'||caseName==='force-hidden-transition')?2:1);
+  const completions=caseName==='ordered'?all.slice().reverse():all.slice(0,(caseName==='later'||caseName==='partial-failure'||caseName==='force-hidden-transition'||caseName==='permission-transition')?2:1);
   const p=setupPoller(completions); vm.runInContext('startCronPolling()',context);
   if(caseName==='desktop'||caseName==='desktop-unavailable') {{ document.hidden=false; window.__hermesSetBackgrounded(true); }} if(caseName==='unavailable'||caseName==='desktop-unavailable') window._notificationsEnabled=false;
   if(caseName==='unavailable'||caseName==='desktop-unavailable') {{ await p.timer.callback(); return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls,ownerCalls,getNotificationCalls}}; }}
@@ -163,7 +164,7 @@ async function main() {{
   else if(caseName==='overlap') {{ const first=p.timer.callback(); const second=p.timer.callback(); p.resolve(); await Promise.all([first,second]); }}
   else if(caseName==='badge-failure') {{ const first=p.timer.callback(); p.resolve(); await first; const second=p.timer.callback(); p.resolve(); await second; }}
   else {{ const pending=p.timer.callback(); await Promise.resolve(); if(caseName==='desktop-transition') window.__hermesSetBackgrounded(true); if(caseName==='after-unavailable'||caseName==='after-unavailable-muted') window._notificationsEnabled=false; if(caseName==='profile-transition') context.S.activeProfile='profile-b'; if(caseName==='stale') context._cronPollGeneration++; p.resolve(); await pending; if(caseName==='failure') {{firstTick={{since:context._cronPollSince,ids:[...context._cronNewJobIds],marks:marks.length}}; failPresentation=false;const retry=p.timer.callback();p.resolve();await retry; }} }}
-  return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls,ownerCalls,getNotificationCalls,firstTick}};
+  return {{apiCalls:p.apiCalls,shown,toasts,marks,since:context._cronPollSince,ids:[...context._cronNewJobIds],registry:[...registry.keys()],alerts:alertCount,badgeCalls,ownerCalls,getNotificationCalls,permissionRequests,firstTick}};
 }}
 main().then(v=>process.stdout.write(JSON.stringify(v))).catch(e=>{{console.error(e);process.exit(1)}});
 """
@@ -368,6 +369,11 @@ def test_profile_capture_survives_change_during_api_await():
 def test_force_hidden_keeps_multi_completion_delivery_after_return_to_foreground():
     result = _run("force-hidden-transition")
     assert result["since"] == 43 and len(result["shown"]) == 2
+
+
+def test_mid_batch_permission_loss_preserves_backlog_without_prompting():
+    result = _run("permission-transition")
+    assert result["since"] == 42 and len(result["shown"]) == 1 and result["permissionRequests"] == 0
 
 
 def test_badge_failure_does_not_stick_in_flight_guard():
